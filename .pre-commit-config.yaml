@@ -1,0 +1,45 @@
+# Hooks run from the repository root.
+# Each Python project (app/, harness/) has its own Poetry venv, so its tools run through `poetry -C <project> run ...`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: app-no-course-names
+        name: no course-specific names in app/src and app/tests
+        language: pygrep
+        entry: "(?i)istqb|ctfl|syllabus"
+        files: ^app/(src|tests)/
+      - id: app-ruff-format
+        name: ruff format (app)
+        entry: poetry -C app run ruff format
+        language: system
+        files: ^app/.*\.py$
+        pass_filenames: false
+      - id: app-ruff-check
+        name: ruff check (app)
+        entry: poetry -C app run ruff check
+        language: system
+        files: ^app/.*\.py$
+        pass_filenames: false
+      - id: app-mypy
+        name: mypy (app)
+        entry: poetry -C app run mypy
+        language: system
+        files: ^app/.*\.py$
+        pass_filenames: false

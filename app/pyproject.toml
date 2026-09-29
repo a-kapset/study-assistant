@@ -1,0 +1,74 @@
+[project]
+name = "study-assistant"
+version = "0.1.0"
+description = "Domain-independent study assistant: courses as data, RAG, exam engine, agents"
+authors = [{name = "Artsiom Kapset"}]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "fastapi (>=0.141.1,<0.142.0)",
+    "uvicorn (>=0.54.0,<0.55.0)"
+]
+
+
+[tool.poetry]
+# src layout: the package lives in src/, so tests can only import the installed package,
+# never a stray copy from the working directory.
+packages = [{include = "study_assistant", from = "src"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+
+[dependency-groups]
+test = [
+    "pytest (>=9.1.1,<10.0.0)",
+    # FastAPI's TestClient is built on httpx; the app itself does not need it at runtime.
+    "httpx2 (>=2.13.1,<2.14.0)",
+]
+lint = [
+    "ruff (>=0.16.9,<0.17.0)",
+    "mypy (>=2.3.1,<3.0.0)",
+    "pre-commit (>=4.6.2,<5.0.0)"
+]
+
+
+[tool.ruff]
+line-length = 120
+
+
+[tool.ruff.lint]
+# An explicit select replaces ruff's default rule set (much larger since 0.16), so the
+# rules stay exactly these. ANN401 is the key one: it stops a bare `Any` from being an
+# easy way to silence the type checker.
+select = ["E", "F", "I", "UP", "ANN", "B", "SIM"]
+
+
+[tool.mypy]
+python_version = "3.14"
+files = ["src", "tests"]
+
+# --- Baseline: every function must be annotated, and bodies are checked ---
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+
+# --- The flags that make the annotations mean something ---
+# Without these, mypy accepts `-> Any` and bare `dict` and reports success.
+warn_return_any = true          # catches Any leaking out through a declared type
+disallow_any_generics = true    # bare `dict` / `Callable` are implicitly Any-parameterised
+warn_unused_ignores = true      # a `# type: ignore` that suppresses nothing is an error
+warn_redundant_casts = true
+no_implicit_optional = true
+strict_equality = true
+warn_unreachable = true
+
+
+[tool.pytest]
+minversion = "9.0"
+testpaths = ["tests"]
+# importlib mode: test files need no __init__.py and are not put on sys.path.
+addopts = ["--import-mode=importlib", "--strict-markers"]

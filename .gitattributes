@@ -1,0 +1,2 @@
+# LF in the repository and in every working tree, regardless of core.autocrlf.
+* text=auto eol=lf
