@@ -3,6 +3,9 @@
 A study assistant that answers questions from course materials, runs practice exams and tracks
 progress — together with an evaluation harness that tests and measures it from the outside.
 
+> **Status: work in progress.** Both the app and the evaluation harness are under active development;
+> the READMEs of each part describe what already works.
+
 The repository holds two independent projects and the course definitions they work with:
 
 | Part | What it is |
