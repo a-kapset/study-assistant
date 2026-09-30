@@ -1,5 +1,5 @@
 # Hooks run from the repository root.
-# Each Python project (app/, harness/) has its own Poetry venv, so its tools run through `poetry -C <project> run ...`.
+# Each Python project (app/, evaluation-harness/) has its own Poetry venv, so its tools run through `poetry -C <project> run ...`.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

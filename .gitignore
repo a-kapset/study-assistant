@@ -5,7 +5,7 @@ __pycache__/
 build/
 dist/
 
-# Poetry in-project virtual environments (app/.venv, harness/.venv)
+# Poetry in-project virtual environments (app/.venv, evaluation-harness/.venv)
 .venv/
 
 # Tool caches
