@@ -1,0 +1,74 @@
+[project]
+name = "evaluation-harness"
+version = "0.1.0"
+description = "Portable evaluation harness: tests an LLM application only over HTTP, configuration and an LLM proxy"
+authors = [{name = "Artsiom Kapset"}]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "httpx2 (>=2.13.1,<2.14.0)",
+    "pydantic (>=2.13.5,<3.0.0)",
+    "pydantic-settings (>=2.15.0,<3.0.0)",
+    "structlog (>=26.1.0,<27.0.0)"
+]
+
+
+[tool.poetry]
+# src layout: tests import the installed package, never a stray copy from the working directory.
+packages = [{include = "evalharness", from = "src"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+
+[dependency-groups]
+test = [
+    "pytest (>=9.1.1,<10.0.0)",
+    "pytest-asyncio (>=1.4.0,<2.0.0)"
+]
+lint = [
+    "ruff (>=0.16.9,<0.17.0)",
+    "mypy (>=2.3.1,<3.0.0)"
+]
+
+
+[tool.ruff]
+line-length = 120
+
+
+[tool.ruff.lint]
+# An explicit select replaces ruff's default rule set (much larger since 0.16), so the
+# rules stay exactly these. ANN401 stops a bare `Any` from silencing the type checker.
+select = ["E", "F", "I", "UP", "ANN", "B", "SIM"]
+
+
+[tool.mypy]
+python_version = "3.14"
+files = ["src", "tests"]
+
+# --- Baseline: every function must be annotated, and bodies are checked ---
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+
+# --- The flags that make the annotations mean something ---
+warn_return_any = true
+disallow_any_generics = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+strict_equality = true
+warn_unreachable = true
+
+
+[tool.pytest]
+minversion = "9.0"
+testpaths = ["tests"]
+# importlib mode: test files need no __init__.py and are not put on sys.path.
+addopts = ["--import-mode=importlib", "--strict-markers"]
+# Every async test runs on asyncio without a per-test marker; each test gets a fresh event loop.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
