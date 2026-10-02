@@ -68,7 +68,9 @@ warn_unreachable = true
 minversion = "9.0"
 testpaths = ["tests"]
 # importlib mode: test files need no __init__.py and are not put on sys.path.
-addopts = ["--import-mode=importlib", "--strict-markers"]
+# Tests that need a running system under test are left out unless asked for with `-m api`.
+addopts = ["--import-mode=importlib", "--strict-markers", "-m", "not api"]
+markers = ["api: needs a running system under test; run with -m api"]
 # Every async test runs on asyncio without a per-test marker; each test gets a fresh event loop.
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
