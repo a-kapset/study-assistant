@@ -1,7 +1,7 @@
 [project]
 name = "evaluation-harness"
 version = "0.1.0"
-description = "Portable evaluation harness: tests an LLM application only over HTTP, configuration and an LLM proxy"
+description = "Evaluation harness for an LLM application: tests it from the outside over HTTP, configuration and an LLM proxy"
 authors = [{name = "Artsiom Kapset"}]
 license = "MIT"
 readme = "README.md"

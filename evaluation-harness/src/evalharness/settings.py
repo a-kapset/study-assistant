@@ -1,4 +1,4 @@
-"""Harness confuguration, read from environment variables with the EVAL_ prefix."""
+"""Harness configuration, read from environment variables with the EVAL_ prefix."""
 
 from pydantic import Field, HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -7,8 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class HarnessSettings(BaseSettings):
     """Where the system under test is and how long to wait for it.
 
-    Nothing creates as instance at import time: tests and entry points build it explicitly,
-    so each run can piont the harness at a different system
+    Nothing creates an instance at import time: tests and entry points build it explicitly,
+    so each run can point the harness at a different system.
     """
 
     model_config = SettingsConfigDict(env_prefix="EVAL_", extra="forbid", frozen=True)

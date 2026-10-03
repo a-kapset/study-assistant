@@ -1,5 +1,7 @@
 # Hooks run from the repository root.
 # Each Python project (app/, evaluation-harness/) has its own Poetry venv, so its tools run through `poetry -C <project> run ...`.
+# Run them from a terminal with no activated virtual environment: Poetry prefers an active one over the project's own.
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -42,4 +44,22 @@ repos:
         entry: poetry -C app run mypy
         language: system
         files: ^app/.*\.py$
+        pass_filenames: false
+      - id: harness-ruff-format
+        name: ruff format (evaluation-harness)
+        entry: poetry -C evaluation-harness run ruff format
+        language: system
+        files: ^evaluation-harness/.*\.py$
+        pass_filenames: false
+      - id: harness-ruff-check
+        name: ruff check (evaluation-harness)
+        entry: poetry -C evaluation-harness run ruff check
+        language: system
+        files: ^evaluation-harness/.*\.py$
+        pass_filenames: false
+      - id: harness-mypy
+        name: mypy (evaluation-harness)
+        entry: poetry -C evaluation-harness run mypy
+        language: system
+        files: ^evaluation-harness/.*\.py$
         pass_filenames: false

@@ -2,6 +2,8 @@
 
 A domain-independent study assistant served as a FastAPI web service. Package: `study_assistant`.
 
+How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
+
 ## Stack
 
 - Python 3.14, [FastAPI](https://fastapi.tiangolo.com/), [Uvicorn](https://uvicorn.dev/)
