@@ -1,10 +1,32 @@
 # Testing strategy
 
 Every check lives at the level where it is most useful: the cheapest place to run it, the closest to
-where the property actually lives, and the most precise about what broke. This file lists the levels,
-how a level is chosen, and every check that exists today with the reason for its level.
+where the property actually lives, and the most precise about what broke. This file lists the
+principles behind the checks, the levels, how a level is chosen, and every check that exists today
+with the reason for its level.
+
+## Principles
+
+These rules come from three practitioner books on evaluating AI systems (see Sources at the end) and
+shape every check below. "Not yet" means the part of the harness that applies the rule does not exist
+yet.
+
+| Principle | What it means here | Today |
+|---|---|---|
+| A check feeds a decision | Every evaluation run ends in a decision (pass, block or invalid) against gate rules written down before the run. A metric that changes no decision is labelled diagnostic. | Not yet |
+| One run proves nothing | Quality is estimated from repeated runs and reported with a confidence interval; a gate uses the lower bound, and a difference too small to tell apart from noise is reported as underpowered. Replayed runs in CI catch regressions; they are not evidence of quality. | Not yet |
+| Cheapest reliable check first | Exact and schema checks run first, then reference metrics, then a model as a judge. A judge is never used where an exact check can decide. | Only exact checks exist |
+| Expected behaviour, not expected text | Open-ended answers are checked against what they must and must not contain. Exact matching is kept for things that really are exact, such as an exam answer key. | Not yet |
+| Every result carries its versions | A run records the app commit, configuration, models, prompts, corpus, datasets and checks it used. Two runs are compared only when these match; otherwise the difference is shown. | Not yet |
+| A run is checked before it is read | Infrastructure failures (timeouts, rate limits, empty responses, budget stops) are classified before any quality check. A run that did not exercise the system as declared is marked invalid and never feeds a gate. | Transport failures are recorded as data, never raised |
+| Failed requests still count | Infrastructure failures stay out of quality statistics, but every gate also reads the reliability numbers, so good answers on the requests that succeeded cannot hide the ones that failed. | Not yet |
+| Averages hide failures | Cases carry slice tags (course, section, question type, language) and a risk level. Reports show each slice with its size; critical slices have their own gates. Hard blockers, such as a leaked secret, fail a gate whatever the average. | Not yet |
+| Datasets are governed | Each dataset has a version, a hash, a split (development or hold-out) and an origin (written, synthetic or public). The hold-out is never used for tuning, and public material is marked because a model may have seen it during training. | Not yet |
+| The suite remembers | A failure found once becomes a permanent case, recorded in the dataset's changelog. | Not yet |
+| Checks are tested too | Defects are injected on purpose to measure which checks catch them. A model used as a judge is compared with human labels before its scores count. | Not yet |
 
 ## Levels
+
 
 | Level | Where | What belongs here | Why here |
 |---|---|---|---|
@@ -52,3 +74,10 @@ table below then says what each one adds.
 | Format, lint and strict types in both projects | Gate (pre-commit) | `.pre-commit-config.yaml` (ruff, mypy) | Seconds per run, with the exact file and line |
 
 How to run each project's tests: [app/README.md](app/README.md), [evaluation-harness/README.md](evaluation-harness/README.md).
+
+
+## Sources
+
+- A. Mohanna, I. Kar, Z. Ralte. *Practical LLM Evaluation for Production Systems*. Packt, 2026.
+- L. Nassery. *AI Model Evaluation*. Manning, 2026.
+- J. Arbon. *Testing AI: Engineering Confidence in Non-Deterministic Systems*. Online draft, 2026.
