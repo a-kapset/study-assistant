@@ -48,6 +48,9 @@ select = ["E", "F", "I", "UP", "ANN", "B", "SIM"]
 [tool.mypy]
 python_version = "3.14"
 files = ["src", "tests"]
+# Resolve the package from its sources, not from the installed copy, so an editor checking a
+# single test file sees the same types as a full run.
+mypy_path = "src"
 
 # --- Baseline: every function must be annotated, and bodies are checked ---
 disallow_untyped_defs = true

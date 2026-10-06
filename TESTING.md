@@ -66,6 +66,11 @@ table below then says what each one adds.
 |---|---|---|---|
 | `/health` returns 200 `{"status": "ok"}` | App unit | `app/tests/unit/test_health.py` | In-process, no server: catches a broken route or response model on every commit |
 | `/health` returns 200 `{"status": "ok"}` from the running app | Harness API | `evaluation-harness/tests/api/test_health.py` | Adds what the unit test cannot see: the app starts and serves over the network; every later harness check relies on it |
+| `APP_*` variables configure the app | App unit | `app/tests/unit/test_settings.py` | A renamed setting or prefix would otherwise fall back to its default without any error |
+| An unknown `APP_*` variable stops startup and is named; names inside setting groups are recognised | App unit | `app/tests/unit/test_settings.py` | Pure name logic: the test passes any environment as a dictionary, no process start needed |
+| Settings named like keys, tokens, passwords or DSNs are typed as secrets | App unit | `app/tests/unit/test_settings.py` | A rule over the settings model: a plain-text secret is caught when it is declared, before any endpoint can show it |
+| `/v1/config` shows the settings the app was built with and its version, and never a secret | App unit | `app/tests/unit/test_config.py` | Only in-process can the app be built with a stand-in secret; a unique canary value is searched for in the whole response |
+| `/v1/config` keeps its contract in the running app | Harness API | `evaluation-harness/tests/api/test_config.py` | Adds the server's own startup path (environment, settings, app) and pins the shape that evaluation runs will record |
 | `EVAL_*` variables configure the harness | Harness unit | `evaluation-harness/tests/unit/test_settings.py` | A renamed setting would otherwise fall back to its default without any error |
 | An observation is either a response or a transport error, never both or neither | Harness unit | `evaluation-harness/tests/unit/test_observation.py` | A contradictory record would mislead every verdict built on it; checking the model is instant |
 | The transport returns failures as data, classifies them, sends its own request id and keeps a base-URL path | Harness unit | `evaluation-harness/tests/unit/test_transport.py` | Simulated HTTP makes every failure kind reproducible without a network |

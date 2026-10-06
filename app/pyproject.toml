@@ -8,7 +8,10 @@ readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi (>=0.141.1,<0.142.0)",
-    "uvicorn (>=0.54.0,<0.55.0)"
+    "uvicorn (>=0.54.0,<0.55.0)",
+    "pydantic (>=2.13.5,<3.0.0)",
+    "pydantic-settings (>=2.15.0,<3.0.0)",
+    "structlog (>=26.1.0,<27.0.0)"
 ]
 
 
@@ -26,7 +29,7 @@ build-backend = "poetry.core.masonry.api"
 [dependency-groups]
 test = [
     "pytest (>=9.1.1,<10.0.0)",
-    # FastAPI's TestClient is built on httpx; the app itself does not need it at runtime.
+    # FastAPI's TestClient is built on httpx2; the app itself does not need it at runtime.
     "httpx2 (>=2.13.1,<2.14.0)",
 ]
 lint = [
@@ -50,6 +53,9 @@ select = ["E", "F", "I", "UP", "ANN", "B", "SIM"]
 [tool.mypy]
 python_version = "3.14"
 files = ["src", "tests"]
+# Resolve the package from its sources, not from the installed copy, so an editor checking a
+# single test file sees the same types as a full run.
+mypy_path = "src"
 
 # --- Baseline: every function must be annotated, and bodies are checked ---
 disallow_untyped_defs = true
