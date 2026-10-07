@@ -24,7 +24,9 @@ app/
 │   ├── composition.py      # build_app(settings): the one place where parts are built and wired
 │   ├── settings.py         # typed settings; unknown APP_* variables stop startup
 │   ├── logging_setup.py    # structlog, one JSON object per line on stdout
-│   └── api/                # one router factory per group of endpoints
+│   ├── errors.py           # the error envelope and the handlers that use it
+│   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
+│       ├── middleware.py   # request id on every request; unhandled exceptions become a 500 envelope
 │       ├── health.py
 │       └── config.py
 └── tests/
@@ -65,7 +67,8 @@ $env:APP_LOG_LEVEL = "DEBUG"
 poetry run uvicorn study_assistant.main:create_app --factory
 ```
 
-Logs are JSON lines on stdout; uvicorn's own startup lines stay plain text.
+Logs are JSON lines on stdout, each with the request id while a request is handled; uvicorn's own
+startup and access lines stay plain text.
 
 ## API
 
@@ -73,6 +76,29 @@ Logs are JSON lines on stdout; uvicorn's own startup lines stay plain text.
 |---|---|---|
 | `GET` | `/health` | Liveness: `{"status": "ok"}` while the process is serving HTTP |
 | `GET` | `/v1/config` | Effective configuration: app version and settings, every secret masked |
+
+## Errors and request ids
+
+Every response carries an `X-Request-ID` header. A client may send its own id (letters, digits,
+`.`, `_`, `-`, up to 128 characters) and gets it back; otherwise the app generates a UUID. The same
+id is in every log line written while the request is handled, so a response can be matched with its
+logs.
+
+Every error has the status code that fits it and one body format:
+
+```json
+{"status": "error", "error": {"code": "not_found", "message": "Not Found"}, "request_id": "..."}
+```
+
+`code` is stable for programs to read: `not_found`, `method_not_allowed`, `internal_server_error` and
+so on. A 422 also lists `details` with the location and reason of each invalid field; the values that
+were sent are not echoed. A 500 never shows the exception; it is written to the log with the
+traceback and the request id.
+
+```powershell
+curl.exe -i http://127.0.0.1:8000/nope
+curl.exe -i -H "X-Request-ID: my-test-1" http://127.0.0.1:8000/health
+```
 
 ## Development checks
 

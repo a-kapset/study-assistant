@@ -59,6 +59,9 @@ Start the app first for `-m api` (see [app/README.md](../app/README.md)). If the
 the api tests fail with the transport error in the message; they are never skipped, so a run with no
 app cannot look green.
 
+Every request carries the harness's own `X-Request-ID`, and the app echoes it and writes it into its
+log lines, so a failing observation can be found in the app's logs by its `request_id`.
+
 ## Development checks
 
 ```powershell

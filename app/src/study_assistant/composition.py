@@ -7,6 +7,8 @@ from fastapi import FastAPI
 
 from study_assistant.api.config import config_router
 from study_assistant.api.health import health_router
+from study_assistant.api.middleware import RequestIdMiddleware
+from study_assistant.errors import install_error_handlers
 from study_assistant.logging_setup import configure_logging
 from study_assistant.settings import Settings
 
@@ -19,6 +21,9 @@ def build_app(settings: Settings) -> FastAPI:
     app_version = version(DISTRIBUTION_NAME)
 
     app = FastAPI(title="Study Assistant", version=app_version)
+    # Every request gets an id and every error one envelope, including errors raised before any route runs.
+    app.add_middleware(RequestIdMiddleware)
+    install_error_handlers(app)
     app.include_router(health_router())
     app.include_router(config_router(settings=settings, app_version=app_version))
 
