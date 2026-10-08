@@ -55,8 +55,9 @@ poetry run pytest           # offline tests only; api tests are deselected
 poetry run pytest -m api    # api tests against the running app
 ```
 
-Start the app first for `-m api` (see [app/README.md](../app/README.md)). If the app is unreachable,
-the api tests fail with the transport error in the message; they are never skipped, so a run with no
+Start the system first for `-m api`: from the repository root, `docker compose up -d --build --wait`
+(see [app/README.md](../app/README.md)).
+If the app is unreachable, the api tests fail with the transport error in the message; they are never skipped, so a run with no
 app cannot look green.
 
 Every request carries the harness's own `X-Request-ID`, and the app echoes it and writes it into its

@@ -11,7 +11,9 @@ dependencies = [
     "uvicorn (>=0.54.0,<0.55.0)",
     "pydantic (>=2.13.5,<3.0.0)",
     "pydantic-settings (>=2.15.0,<3.0.0)",
-    "structlog (>=26.1.0,<27.0.0)"
+    "structlog (>=26.1.0,<27.0.0)",
+    "psycopg[binary] (>=3.3.6,<3.4.0)",
+    "psycopg-pool (>=3.3.3,<3.4.0)"
 ]
 
 
@@ -56,6 +58,9 @@ files = ["src", "tests"]
 # Resolve the package from its sources, not from the installed copy, so an editor checking a
 # single test file sees the same types as a full run.
 mypy_path = "src"
+# The pydantic plugin knows that settings fields are filled from the environment, so `Settings()`
+# without arguments is valid, and it type-checks the arguments of every model's constructor.
+plugins = ["pydantic.mypy"]
 
 # --- Baseline: every function must be annotated, and bodies are checked ---
 disallow_untyped_defs = true
@@ -71,6 +76,12 @@ warn_redundant_casts = true
 no_implicit_optional = true
 strict_equality = true
 warn_unreachable = true
+
+
+[tool.pydantic-mypy]
+init_forbid_extra = true        # an unknown or misspelt constructor argument is an error
+init_typed = true               # constructor arguments are checked against the field types
+warn_required_dynamic_aliases = true
 
 
 [tool.pytest]

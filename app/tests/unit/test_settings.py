@@ -1,7 +1,7 @@
 from typing import get_args
 
 import pytest
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from study_assistant.settings import Settings, UnknownSettingsError, find_unknown_env_vars, load_settings
@@ -10,14 +10,27 @@ SECRET_WORDS = {"key", "token", "password", "secret", "dsn"}
 
 
 def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guards the variable names: a renamed field or prefix would silently fall back to its default."""
+    """Guards the variable names: a renamed field, prefix or group delimiter would fall back to a default or fail."""
     monkeypatch.setenv("APP_LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("APP_GIT_COMMIT", "abc123")
+    monkeypatch.setenv("APP_DB__HOST", "db.example")
+    monkeypatch.setenv("APP_DB__PASSWORD", "from-env")
 
     settings = load_settings()
 
     assert settings.log_level == "DEBUG"
     assert settings.git_commit == "abc123"
+    assert settings.db.host == "db.example"
+    assert settings.db.password.get_secret_value() == "from-env"
+
+
+def test_missing_database_password_stops_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guards the password having no default: with one, a forgotten password would only show up as a failed login."""
+    monkeypatch.setenv("APP_DB__HOST", "db.example")
+    monkeypatch.delenv("APP_DB__PASSWORD", raising=False)
+
+    with pytest.raises(ValidationError, match=r"db\.password"):
+        load_settings()
 
 
 def test_unknown_app_variable_fails_with_its_name(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,13 +8,28 @@ import os
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "APP_"
 NESTED_DELIMITER = "__"
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+
+
+class DbSettings(BaseModel):
+    """Where and how the app connects to PostgreSQL; set as APP_DB__<FIELD>."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    host: str = "localhost"
+    port: int = Field(default=5432, ge=1, le=65535)
+    name: str = "study_assistant"
+    user: str = "study_assistant"
+    # No default: a missing password should stop the app at startup, not show up later as a failed login.
+    password: SecretStr
+    # Seconds to wait for a connection, both when opening one and when taking one from the pool.
+    connect_timeout_s: int = Field(default=3, ge=1)
 
 
 class Settings(BaseSettings):
@@ -33,6 +48,9 @@ class Settings(BaseSettings):
 
     # APP_GIT_COMMIT: the commit the running code was built from; set by the build, "unknown" otherwise.
     git_commit: str = "unknown"
+
+    # APP_DB__*: the PostgreSQL connection.
+    db: DbSettings
 
 
 class UnknownSettingsError(ValueError):

@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class ErrorDetail(BaseModel):
-    """One invalid part of a request: where it is and what is wrong with it."""
+    """One thing that went wrong: where it is (a request field, or a readiness check) and what is wrong with it."""
 
     model_config = ConfigDict(extra="forbid")
     loc: list[str | int]
@@ -25,7 +25,7 @@ class ErrorBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str
     message: str
-    # Only validation errors list the invalid parts; other errors leave the field out.
+    # Validation errors list the invalid parts and readiness errors the failing checks; others leave it out.
     details: list[ErrorDetail] | None = None
 
 

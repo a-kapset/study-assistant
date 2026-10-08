@@ -2,15 +2,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from study_assistant.composition import build_app
+from study_assistant.db import Database
 from study_assistant.settings import Settings
 
 # Unique text that must never reach a response body: stands in for user input and for exception details.
 CANARY = "canary-not-for-clients"
 
 
-def _app_with_failing_routes() -> FastAPI:
+def _app_with_failing_routes(settings: Settings, database: Database) -> FastAPI:
     """Build the real app and add two routes that fail on purpose: one validates its input, one raises."""
-    app = build_app(Settings())
+    app = build_app(settings, database)
 
     @app.get("/test/items/{number}")
     async def item(number: int) -> dict[str, int]:
@@ -25,9 +26,9 @@ def _app_with_failing_routes() -> FastAPI:
     return app
 
 
-def test_unknown_path_answers_404_in_the_envelope() -> None:
+def test_unknown_path_answers_404_in_the_envelope(settings: Settings, fake_db: Database) -> None:
     """Guards the HTTP-error handler: without it, or with a wrong code, an unknown path loses the envelope."""
-    with TestClient(build_app(Settings())) as client:
+    with TestClient(build_app(settings, fake_db)) as client:
         response = client.get("/no-such-path")
 
     assert response.status_code == 404
@@ -38,9 +39,9 @@ def test_unknown_path_answers_404_in_the_envelope() -> None:
     }
 
 
-def test_wrong_method_answers_405_and_keeps_allow() -> None:
+def test_wrong_method_answers_405_and_keeps_allow(settings: Settings, fake_db: Database) -> None:
     """Guards passing the exception's headers on: dropping them would lose the Allow header a 405 must carry."""
-    with TestClient(build_app(Settings())) as client:
+    with TestClient(build_app(settings, fake_db)) as client:
         response = client.post("/health")
 
     assert response.status_code == 405
@@ -48,9 +49,9 @@ def test_wrong_method_answers_405_and_keeps_allow() -> None:
     assert response.json()["error"]["code"] == "method_not_allowed"
 
 
-def test_invalid_request_lists_the_invalid_part_but_not_its_value() -> None:
+def test_invalid_request_lists_the_invalid_part_but_not_its_value(settings: Settings, fake_db: Database) -> None:
     """Guards the validation handler: 422 with where the input is wrong, never the value that was sent back."""
-    with TestClient(_app_with_failing_routes()) as client:
+    with TestClient(_app_with_failing_routes(settings, fake_db)) as client:
         response = client.get(f"/test/items/{CANARY}")
 
     assert response.status_code == 422
@@ -61,9 +62,9 @@ def test_invalid_request_lists_the_invalid_part_but_not_its_value() -> None:
     assert CANARY not in response.text
 
 
-def test_unhandled_exception_answers_500_without_its_details() -> None:
+def test_unhandled_exception_answers_500_without_its_details(settings: Settings, fake_db: Database) -> None:
     """Guards the middleware's catch-all: removing it or echoing the exception text would break this."""
-    with TestClient(_app_with_failing_routes(), raise_server_exceptions=False) as client:
+    with TestClient(_app_with_failing_routes(settings, fake_db), raise_server_exceptions=False) as client:
         response = client.get("/test/crash")
 
     assert response.status_code == 500

@@ -4,16 +4,17 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from study_assistant.composition import build_app
+from study_assistant.db import Database
 from study_assistant.settings import Settings
 
 CANARY = "canary-not-a-real-secret"
 
 
-def test_config_reports_version_and_effective_settings() -> None:
+def test_config_reports_version_and_effective_settings(settings: Settings, fake_db: Database) -> None:
     """Guards the wiring: the endpoint must show the settings the app was built with and the real version."""
-    settings = Settings(log_level="DEBUG", git_commit="abc123")
+    configured = Settings(log_level="DEBUG", git_commit="abc123", db=settings.db)
 
-    with TestClient(build_app(settings)) as client:
+    with TestClient(build_app(configured, fake_db)) as client:
         response = client.get("/v1/config")
 
     assert response.status_code == 200
@@ -30,9 +31,9 @@ class _SettingsWithSecret(Settings):
     api_key: SecretStr = SecretStr(CANARY)
 
 
-def test_config_never_shows_a_secret() -> None:
+def test_config_never_shows_a_secret(settings: Settings, fake_db: Database) -> None:
     """Guards the masking: dumping settings in Python mode or unwrapping a secret would leak it here."""
-    with TestClient(build_app(_SettingsWithSecret())) as client:
+    with TestClient(build_app(_SettingsWithSecret(db=settings.db), fake_db)) as client:
         response = client.get("/v1/config")
 
     assert response.status_code == 200

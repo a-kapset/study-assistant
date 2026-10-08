@@ -1,0 +1,48 @@
+# Local stack: the app next to PostgreSQL with pgvector.
+# Values in ${...} come from the .env file next to this one (see .env.example) or from the shell.
+name: study-assistant
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg18-trixie
+    environment:
+      POSTGRES_DB: study_assistant
+      POSTGRES_USER: study_assistant
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env, see .env.example}
+    volumes:
+      # PostgreSQL 18 images keep their data under this directory.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U study_assistant -d study_assistant"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    # No published port: only the app reaches the database, over the Compose network.
+
+  app:
+    build:
+      context: ./app
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    environment:
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      APP_DB__HOST: db
+      APP_DB__NAME: study_assistant
+      APP_DB__USER: study_assistant
+      APP_DB__PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env, see .env.example}
+    ports:
+      # Reachable from this machine only.
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # The image has no curl; Python's standard library is enough. Healthy means ready, not only alive.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+volumes:
+  db-data:
