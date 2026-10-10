@@ -1,0 +1,24 @@
+# Synthetic course used by tests and local runs. The game and its rules are invented, so a model
+# cannot answer questions about them from what it already knows: a correct answer has to come from
+# the course text. The structure is deliberately unlike a real exam syllabus, so the generic course
+# code is exercised on a different shape.
+id: demo
+title: "Demo: The Rules of Vardolin"
+description: >-
+  The rules of Vardolin, an invented board game: setting up the board, taking a turn,
+  trading resources and scoring.
+language: en
+
+# Regular expressions, applied to the source text line by line.
+structure:
+  # "Unit 2. Taking a turn" -> section 2.
+  section_heading: '^Unit (\d+)\. (.+)$'
+  # "OBJ-02-03" -> the third objective of unit 2.
+  objective_id: 'OBJ-\d{2}-\d{2}'
+  # No knowledge levels: this course does not grade its objectives.
+
+# Paths are relative to the course's source directory.
+sources:
+  - file: vardolin_rules.md
+    role: material
+    authority: primary

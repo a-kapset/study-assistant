@@ -30,6 +30,12 @@ services:
       APP_DB__NAME: study_assistant
       APP_DB__USER: study_assistant
       APP_DB__PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env, see .env.example}
+      APP_COURSES__MANIFEST_DIR: /courses
+      # Comma-separated course ids; the synthetic demo course unless .env says otherwise.
+      APP_COURSES__ENABLED: ${APP_COURSES__ENABLED:-demo}
+    volumes:
+      # Course manifests are data, not part of the image; the app only reads them.
+      - ./courses:/courses:ro
     ports:
       # Reachable from this machine only.
       - "127.0.0.1:8000:8000"

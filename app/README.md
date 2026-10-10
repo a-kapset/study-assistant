@@ -8,7 +8,7 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
 
 - Python 3.14, [FastAPI](https://fastapi.tiangolo.com/), [Uvicorn](https://uvicorn.dev/),
   [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) for configuration,
-  [structlog](https://www.structlog.org/) for JSON logs
+  [structlog](https://www.structlog.org/) for JSON logs, [PyYAML](https://pyyaml.org/) for course manifests
 - PostgreSQL 18 with [pgvector](https://github.com/pgvector/pgvector), reached through
   [psycopg 3](https://www.psycopg.org/psycopg3/) and its connection pool
 - Docker Compose for running the app next to its database
@@ -31,9 +31,13 @@ app/
 │   ├── logging_setup.py    # structlog, one JSON object per line on stdout
 │   ├── errors.py           # the error envelope and the handlers that use it
 │   ├── db.py               # Database protocol and the PostgreSQL pool, opened at startup, closed at shutdown
+│   ├── courses/            # courses as data: nothing course-specific lives in the code
+│   │   ├── models.py       # the course manifest: metadata, structure rules, source files
+│   │   └── registry.py     # loads the enabled courses' manifests at startup; a bad one stops the app
 │   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
 │       ├── middleware.py   # request id on every request; unhandled exceptions become a 500 envelope
 │       ├── health.py
+│       ├── courses.py
 │       └── config.py
 └── tests/
     └── unit/               # in-process tests with FastAPI's TestClient
@@ -57,6 +61,11 @@ curl.exe -i http://127.0.0.1:8000/ready
 deletes it, which is needed after changing `DB_PASSWORD`, because PostgreSQL sets the password only
 when the volume is first created. The database port is not published; use
 `docker compose exec db psql -U study_assistant` to reach it.
+
+Compose mounts the repository's `courses/` folder read-only and enables the `demo` course; set
+`APP_COURSES__ENABLED` in the root `.env` to choose others, then check with
+`curl.exe http://127.0.0.1:8000/v1/courses`.
+
 
 ### Without Docker
 
@@ -90,6 +99,9 @@ never falls back to a default silently.
 | `APP_DB__USER` | `study_assistant` | Database user |
 | `APP_DB__PASSWORD` | none, required | Database password; the app does not start without it, and `/v1/config` masks it |
 | `APP_DB__CONNECT_TIMEOUT_S` | `3` | Seconds to wait for a connection; also how long `/ready` waits before answering 503 |
+| `APP_COURSES__MANIFEST_DIR` | `../courses` | Folder with one subfolder per course, each holding a `course.yaml`; a relative path starts from the working directory (`/courses` inside Compose) |
+| `APP_COURSES__ENABLED` | none | Course ids to load, separated by commas, e.g. `demo,istqb_ctfl`; a course that cannot be loaded stops startup. The manifest format: [courses/README.md](../courses/README.md) |
+
 
 Under Docker Compose these variables are set by `compose.yaml` from the root `.env`; `app/.env.example` is for running without Docker.
 
@@ -110,6 +122,8 @@ startup and access lines stay plain text.
 | `GET` | `/health` | Liveness: `{"status": "ok"}` while the process is serving HTTP |
 | `GET` | `/v1/config` | Effective configuration: app version and settings, every secret masked |
 | `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok"}}` when the database answers, otherwise 503 in the error envelope |
+| `GET` | `/v1/courses` | The enabled courses in the configured order: `id`, `title`, `description`, `language` |
+
 
 ## Errors and request ids
 
