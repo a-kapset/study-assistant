@@ -19,6 +19,8 @@ structure:
 
 # Paths are relative to the course's source directory.
 sources:
-  - file: vardolin_rules.md
+  # Built from vardolin_rules.md by tools/build_pdf.py; the Markdown file is the known text that tests
+  # compare the parsed PDF with, so it is not listed as a source.
+  - file: vardolin_rules.pdf
     role: material
     authority: primary

@@ -14,7 +14,8 @@ dependencies = [
     "structlog (>=26.1.0,<27.0.0)",
     "psycopg[binary] (>=3.3.6,<3.4.0)",
     "psycopg-pool (>=3.3.3,<3.4.0)",
-    "pyyaml (>=6.0.3,<7.0.0)"
+    "pyyaml (>=6.0.3,<7.0.0)",
+    "pypdfium2 (>=5.14.0,<6.0.0)"
 ]
 
 
@@ -34,6 +35,7 @@ test = [
     "pytest (>=9.1.1,<10.0.0)",
     # FastAPI's TestClient is built on httpx2; the app itself does not need it at runtime.
     "httpx2 (>=2.13.1,<2.14.0)",
+    "hypothesis (>=6.169.0,<7.0.0)",
 ]
 lint = [
     "ruff (>=0.16.9,<0.17.0)",
@@ -41,6 +43,14 @@ lint = [
     "pre-commit (>=4.6.2,<5.0.0)",
     "types-pyyaml (>=6.0.12.20260906,<7.0.0.0)"
 ]
+tools = [
+    "fpdf2 (>=2.8.9,<3.0.0)"
+]
+
+[tool.poetry.group.tools]
+# Course tooling (building the demo course PDF). Not needed to run or test the app,
+# so a plain `poetry install` and the Docker image leave it out.
+optional = true
 
 
 [tool.ruff]
@@ -78,6 +88,12 @@ warn_redundant_casts = true
 no_implicit_optional = true
 strict_equality = true
 warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# pypdfium2 ships no type information. It is used only inside the PDF parser module,
+# behind functions with explicit types, so untyped values do not spread through the app.
+module = ["pypdfium2.*"]
+ignore_missing_imports = true
 
 
 [tool.pydantic-mypy]

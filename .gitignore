@@ -14,6 +14,8 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
+.hypothesis/
+
 
 # Local configuration and secrets: only the example file is committed
 .env
