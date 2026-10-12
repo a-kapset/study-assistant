@@ -22,3 +22,10 @@ sources:
   - file: ctfl_syllabus_v4.0.1.pdf
     role: material
     authority: primary
+    # The four-line running header of every page ("Certified Tester" / "Foundation Level" /
+    # "v4.0.1 Page 12 of 78 2024-09-15" / "© International Software Testing Qualifications Board").
+    noise_lines:
+      - 'Certified Tester'
+      - 'Foundation Level'
+      - 'v4\.0\.1 Page \d+ of \d+ \d{4}-\d{2}-\d{2}'
+      - '© International Software Testing Qualifications Board'

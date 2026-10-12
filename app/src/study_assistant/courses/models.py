@@ -47,6 +47,9 @@ class CourseSource(ManifestModel):
     file: str = Field(min_length=1)
     role: SourceRole
     authority: SourceAuthority
+    # Whole lines the page layout repeats (running header, footer, page number); text normalization drops a
+    # line only when one of these matches all of it. Each file has its own layout, so the rules are per source.
+    noise_lines: tuple[re.Pattern[str], ...] = ()
 
 
 class CourseManifest(ManifestModel):

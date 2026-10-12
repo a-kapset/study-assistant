@@ -17,10 +17,34 @@ materials themselves (syllabi, books, exams) never are and stay on the local mac
 | `title`, `description` | Shown to users; the description says what the course covers. |
 | `language` | Two-letter code of the course material, e.g. `en`. |
 | `structure` | Regular expressions that find `section_heading`, `objective_id` and, optionally, `knowledge_level` in the source text. |
-| `sources` | At least one entry: `file` (path relative to the course's source directory), `role` (`material`, `glossary` or `question_bank`) and `authority` (`primary` sources define what is correct; `supplementary` ones add background and never override them). |
+| `sources` | At least one entry: `file` (path relative to the course's source directory), `role` (`material`, `glossary` or `question_bank`), `authority` (`primary` sources define what is correct; `supplementary` ones add background and never override them) and, optionally, `noise_lines`. |
+| `sources[].noise_lines` | Regular expressions for the lines a file's layout repeats on every page (running header, footer, page number). A line is dropped from the extracted text only when a pattern matches all of it, so a sentence that merely starts like a header stays. Each file has its own list, because each has its own layout. |
 
 Unknown keys, invalid regular expressions and missing fields are errors: the app refuses to start and
 names the course, the file and the problem.
+
+## The demo course files
+
+The `demo` course is the only one whose material is committed, because its text is invented.
+
+| File | Role |
+|---|---|
+| `demo/vardolin_rules.md` | The known text of the course. Tests compare the parsed and cleaned PDF with it word for word; it is not a course source itself. |
+| `demo/vardolin_rules.pdf` | The course source the app reads, built from the Markdown with a running header and footer, words split at line ends and a figure-only page, like a real book. |
+| `demo/tools/build_pdf.py` | Builds the PDF from the Markdown. The output is the same byte for byte on every run. |
+
+The Markdown uses a small subset: `#` for the title, `##` for unit headings, paragraphs separated by
+blank lines, `&shy;` where a word may be split at a line end, and `<!-- figure page -->` for a page
+with a drawing and no text. Only ASCII text, because the PDF uses a built-in font.
+
+After editing the Markdown, rebuild the PDF and commit both files. From the repository root
+(Poetry runs the command inside `app/`):
+
+```powershell
+poetry -C app install --with tools
+poetry -C app run python ../courses/demo/tools/build_pdf.py
+poetry -C app run pytest -q
+```
 
 ## Adding and enabling a course
 
@@ -43,6 +67,6 @@ description, structure rules, list of sources) lives in `courses/<course_id>/cou
   its structure is unlike ISTQB's, so tests exercise the generic code rather than code tuned
   to one course.
 - **Course materials stay out of the repository.** Only the manifest is committed; source
-  documents stay on the local machine.
+  documents stay on the local machine. The invented `demo` text is the one exception.
 - **A broken manifest stops startup.** Manifests are validated when the app starts, and the
   error names the course and the file, instead of showing up later as wrong answers.

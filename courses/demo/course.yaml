@@ -24,3 +24,7 @@ sources:
   - file: vardolin_rules.pdf
     role: material
     authority: primary
+    # Lines the PDF repeats on every page; a sentence that only starts like them is kept.
+    noise_lines:
+      - 'The Rules of Vardolin, edition 1'
+      - 'Page \d+ of \d+'

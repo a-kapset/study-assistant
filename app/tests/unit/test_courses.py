@@ -97,8 +97,17 @@ def test_manifest_id_must_equal_its_folder(tmp_path: Path) -> None:
             "section_heading",
         ),
         (yaml.safe_dump(_manifest("alpha", sources=[])), "sources"),
+        (
+            yaml.safe_dump(
+                _manifest(
+                    "alpha",
+                    sources=[{"file": "a.pdf", "role": "material", "authority": "primary", "noise_lines": ["Page ("]}],
+                )
+            ),
+            "noise_lines",
+        ),
     ],
-    ids=["missing", "broken-yaml", "unknown-key", "broken-regex", "no-sources"],
+    ids=["missing", "broken-yaml", "unknown-key", "broken-regex", "no-sources", "broken-noise-line"],
 )
 def test_bad_manifest_error_names_the_course_the_file_and_the_reason(
     tmp_path: Path, content: str | None, reason: str
