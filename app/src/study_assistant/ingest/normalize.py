@@ -9,8 +9,8 @@ question would use.
 Normalization removes that noise and nothing more. Letter case, stop words and word forms are kept: the text
 is embedded by a model trained on ordinary text, shown to learners as a quotation and read by a language
 model, and all three need the original words. Each rule is a separate pure function, so it can be tested on
-plain strings, and applying the whole normalization twice gives the same result as applying it once, so
-re-ingesting a source never changes its text.
+plain strings, and the output is clean by these same rules: cleaning it again changes nothing. If it did,
+one rule would be leaving behind something another rule removes.
 
 The rules that depend on a particular course (which lines are its running header and footer) come from the
 course manifest as regular expressions; this module holds no course-specific text.

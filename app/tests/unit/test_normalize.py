@@ -105,7 +105,8 @@ _DIRTY_TEXT = st.lists(st.one_of(st.text(max_size=5), _DIRTY_PIECES), max_size=3
 # A stray mark between a letter and a combining accent: deleting it would let the accent compose on a second pass.
 @example("e" + MARK + "\u0301")
 def test_normalizing_twice_changes_nothing(text: str) -> None:
-    """Guards re-ingestion: if a second pass changed the text, the same source would give a different corpus."""
+    """Guards the output's cleanliness by the module's own rules: if cleaning it again changes it, one rule left
+    behind something another rule removes, so the rules are incomplete or in the wrong order."""
     vocabulary = build_vocabulary([text, "word turn-order"])
 
     once = normalize_text(text, FOOTER, vocabulary)
