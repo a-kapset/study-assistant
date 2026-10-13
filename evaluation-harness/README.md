@@ -5,6 +5,9 @@ exchange as an observation, so a failed request is data for a test, never an exc
 
 How checks are split between the app's own tests and the harness: [TESTING.md](../TESTING.md).
 
+> **Status: work in progress.** Both the app and the evaluation harness are under active development;
+> the READMEs of each part describe what already works.
+
 ## Stack
 
 - Python 3.14, [httpx2](https://github.com/pydantic/httpx2) (async HTTP client),

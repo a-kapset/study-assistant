@@ -4,6 +4,9 @@ A domain-independent study assistant served as a FastAPI web service. Package: `
 
 How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
 
+> **Status: work in progress.** Both the app and the evaluation harness are under active development;
+> the READMEs of each part describe what already works.
+
 ## Stack
 
 - Python 3.14, [FastAPI](https://fastapi.tiangolo.com/), [Uvicorn](https://uvicorn.dev/),

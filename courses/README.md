@@ -4,6 +4,9 @@ One folder per course, each with a `course.yaml` manifest: the course's metadata
 describe its structure, and the list of its source files. The manifests are committed; the course
 materials themselves (syllabi, books, exams) never are and stay on the local machine.
 
+> **Status: work in progress.** Both the app and the evaluation harness are under active development;
+> the READMEs of each part describe what already works.
+
 | Course | What it is |
 |---|---|
 | [`demo`](demo/course.yaml) | Synthetic course: the rules of an invented board game. Used by tests and local runs. |

@@ -5,6 +5,9 @@ where the property actually lives, and the most precise about what broke. This f
 principles behind the checks, the levels, how a level is chosen, and every check that exists today
 with the reason for its level.
 
+> **Status: work in progress.** Both the app and the evaluation harness are under active development;
+> the READMEs of each part describe what already works.
+
 ## Principles
 
 These rules come from three practitioner books on evaluating AI systems (see Sources at the end) and
