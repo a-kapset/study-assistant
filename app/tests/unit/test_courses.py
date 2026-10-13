@@ -21,7 +21,7 @@ def _manifest(course_id: str, **changes: object) -> dict[str, object]:
         "title": f"Course {course_id}",
         "description": "A course used only by this test.",
         "language": "en",
-        "structure": {"section_heading": r"^Part (\d+)", "objective_id": r"OBJ-\d+"},
+        "structure": {"section_heading": r"^Part (?P<id>\d+) (?P<title>.+)$", "objective_id": r"OBJ-\d+"},
         "sources": [{"file": "text.md", "role": "material", "authority": "primary"}],
     }
     manifest.update(changes)
@@ -88,7 +88,11 @@ def test_manifest_id_must_equal_its_folder(tmp_path: Path) -> None:
 
 def test_course_without_learning_objectives_is_loaded(tmp_path: Path) -> None:
     """Guards courses built from ordinary books: only section headings may be required, objectives are optional."""
-    _write(tmp_path, "alpha", yaml.safe_dump(_manifest("alpha", structure={"section_heading": r"^Chapter (\d+)"})))
+    _write(
+        tmp_path,
+        "alpha",
+        yaml.safe_dump(_manifest("alpha", structure={"section_heading": r"^Chapter (?P<id>\d+) (?P<title>.+)$"})),
+    )
 
     course = load_course(tmp_path, "alpha")
 
@@ -115,8 +119,47 @@ def test_course_without_learning_objectives_is_loaded(tmp_path: Path) -> None:
             ),
             "noise_lines",
         ),
+        (
+            yaml.safe_dump(_manifest("alpha", structure={"section_heading": r"^Part (\d+) (.+)$"})),
+            "section_heading needs the named group(s) id, title",
+        ),
+        (
+            yaml.safe_dump(
+                _manifest(
+                    "alpha",
+                    structure={
+                        "section_heading": r"^Part (?P<id>\d+) (?P<title>.+)$",
+                        "objective_id": r"OBJ-\d+",
+                        "knowledge_level": r"\(K\d\)",
+                    },
+                )
+            ),
+            "knowledge_level needs the named group(s) level",
+        ),
+        (
+            yaml.safe_dump(
+                _manifest(
+                    "alpha",
+                    structure={
+                        "section_heading": r"^Part (?P<id>\d+) (?P<title>.+)$",
+                        "knowledge_level": r"(?P<level>K\d)",
+                    },
+                )
+            ),
+            "no objective_id",
+        ),
     ],
-    ids=["missing", "broken-yaml", "unknown-key", "broken-regex", "no-sources", "broken-noise-line"],
+    ids=[
+        "missing",
+        "broken-yaml",
+        "unknown-key",
+        "broken-regex",
+        "no-sources",
+        "broken-noise-line",
+        "heading-without-named-groups",
+        "level-without-named-group",
+        "level-without-objectives",
+    ],
 )
 def test_bad_manifest_error_names_the_course_the_file_and_the_reason(
     tmp_path: Path, content: str | None, reason: str

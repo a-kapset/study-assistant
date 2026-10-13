@@ -36,9 +36,10 @@ app/
 │   ├── courses/            # courses as data: nothing course-specific lives in the code
 │   │   ├── models.py       # the course manifest: metadata, structure rules, source files
 │   │   └── registry.py     # loads the enabled courses' manifests at startup; a bad one stops the app
-│   ├── ingest/             # course sources to clean page text
+│   ├── ingest/             # course sources to clean page text and the course structure
 │   │   ├── parser.py       # PDF text layer page by page, with the parser and PDF engine versions
-│   │   └── normalize.py    # header and footer lines, words split at line ends, spacing, Unicode form; page status
+│   │   ├── normalize.py    # header and footer lines, words split at line ends, spacing, Unicode form; page status
+│   │   └── structure.py    # sections and learning objectives found by the course's structure rules
 │   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
 │       ├── middleware.py   # request id on every request; unhandled exceptions become a 500 envelope
 │       ├── health.py

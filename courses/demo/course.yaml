@@ -11,9 +11,9 @@ language: en
 
 # Regular expressions, applied to the source text line by line.
 structure:
-  # "Unit 2. Taking a turn" -> section 2.
-  section_heading: '^Unit (\d+)\. (.+)$'
-  # "OBJ-02-03" -> the third objective of unit 2.
+  # "Unit 2. Taking a turn" -> section "2", titled "Taking a turn".
+  section_heading: '^Unit (?P<id>\d+)\. (?P<title>.+)$'
+  # "OBJ-02-03" -> the third objective of unit 2; it is listed inside its unit, so no "section" group.
   objective_id: 'OBJ-\d{2}-\d{2}'
   # No knowledge levels: this course does not grade its objectives.
 

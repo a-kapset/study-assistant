@@ -17,6 +17,9 @@ materials themselves (syllabi, books, exams) never are and stay on the local mac
 | `title`, `description` | Shown to users; the description says what the course covers. |
 | `language` | Two-letter code of the course material, e.g. `en`. |
 | `structure` | Regular expressions that find `section_heading` and, optionally, `objective_id` and `knowledge_level` in the source text. A course without learning objectives (for example, a set of books) gives only `section_heading`. |
+| `structure.section_heading` | Matched against a whole line. Named groups `id` and `title`, e.g. `'^Unit (?P<id>\d+)\. (?P<title>.+)$'`. When ids are numbers (`2`, `4.2.1`), only headings whose numbers keep increasing count, so a numbered list in the text does not open a section. |
+| `structure.objective_id` | A line that starts with a match defines a learning objective. By default it belongs to the section it is printed in; a named group `section` says which section it belongs to instead, for a course that lists all objectives at the start of a chapter. |
+| `structure.knowledge_level` | Searched in the objective's line; named group `level`. Needs `objective_id`. |
 | `sources` | At least one entry: `file` (path relative to the course's source directory), `role` (`material`, `glossary` or `question_bank`), `authority` (`primary` sources define what is correct; `supplementary` ones add background and never override them) and, optionally, `noise_lines`. |
 | `sources[].noise_lines` | Regular expressions for the lines a file's layout repeats on every page (running header, footer, page number). A line is dropped from the extracted text only when a pattern matches all of it, so a sentence that merely starts like a header stays. Each file has its own list, because each has its own layout. |
 
@@ -88,6 +91,8 @@ For example, with the `demo` course:
 2. The parser, the same for every course, extracts the text of each page.
 3. Text cleaning drops lines such as `Page 3 of 7`, because the manifest lists that pattern for
    this file.
+4. The structure rules find `Unit 2. Taking a turn` as section `2` and `OBJ-02-03` as an objective
+   of that section.
 
 The ISTQB course goes through the same code; only its manifest differs.
 

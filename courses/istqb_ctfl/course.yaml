@@ -10,12 +10,15 @@ language: en
 
 # Regular expressions, applied to the source text line by line.
 structure:
-  # "1. Fundamentals of Testing", "1.2. Why is Testing Necessary?", "4.2.1. Equivalence Partitioning"
-  section_heading: '^(\d+(?:\.\d+){0,2})\.\s+(\S.*)$'
-  # "FL-1.2.3" -> learning objective 3 of section 1.2.
-  objective_id: 'FL-\d+\.\d+\.\d+'
-  # "(K2)" -> the knowledge level of the objective on the same line.
-  knowledge_level: '\((K[1-3])\)'
+  # "1.2. Why is Testing Necessary?", "4.2.1. Equivalence Partitioning". A chapter heading ends with its
+  # teaching time ("1. Fundamentals of Testing – 180 minutes"), which is left out of the title. Table of
+  # contents lines (a title followed by a row of dots) are not headings.
+  section_heading: '^(?P<id>\d+(?:\.\d+){0,2})\.\s+(?!.*\.{4})(?P<title>\S.*?)(?:\s+–\s+\d+\s+minutes)?$'
+  # "FL-1.2.3" -> learning objective 3 of section 1.2. Objectives are listed at the start of each chapter,
+  # not inside their sections, so the section comes from the id.
+  objective_id: 'FL-(?P<section>\d+\.\d+)\.\d+'
+  # "(K2)" -> the knowledge level, on the same line as the objective id.
+  knowledge_level: '\((?P<level>K[1-3])\)'
 
 # Paths are relative to the course's source directory.
 sources:
