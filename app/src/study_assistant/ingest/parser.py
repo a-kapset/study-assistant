@@ -5,6 +5,7 @@ any text at all is left to normalization, which knows the course's rules. Every 
 parser and PDF engine produced it, so a change in the extracted text can be traced to a change of version.
 """
 
+import hashlib
 import threading
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -44,6 +45,8 @@ class ParsedDocument:
     """All pages of one source file, in order, with the parser version that read them."""
 
     path: Path
+    # SHA-256 of the exact bytes that were parsed: identifies this edition of the file, whatever its name.
+    sha256: str
     parser: ParserVersion
     pages: tuple[RawPage, ...]
 
@@ -61,11 +64,13 @@ def parse_pdf(path: Path) -> ParsedDocument:
     """Extract the text layer of every page of a PDF file.
 
     A page without a text layer (a scan, a picture) comes back with empty text rather than being skipped,
-    so page numbers stay aligned with the file.
+    so page numbers stay aligned with the file. The file is read once, so the hash and the text come from the
+    same bytes even if the file is replaced while it is being parsed.
     """
+    data = path.read_bytes()
     with _PDFIUM_LOCK:
         try:
-            pdf = pypdfium2.PdfDocument(path)
+            pdf = pypdfium2.PdfDocument(data)
         except pypdfium2.PdfiumError as exc:
             raise SourceParseError(f"{path} cannot be read as a PDF: {exc}") from exc
         try:
@@ -74,7 +79,7 @@ def parse_pdf(path: Path) -> ParsedDocument:
             raise SourceParseError(f"{path}: a page cannot be read: {exc}") from exc
         finally:
             pdf.close()
-    return ParsedDocument(path=path, parser=parser_version(), pages=pages)
+    return ParsedDocument(path=path, sha256=hashlib.sha256(data).hexdigest(), parser=parser_version(), pages=pages)
 
 
 def _read_page(pdf: pypdfium2.PdfDocument, index: int) -> RawPage:

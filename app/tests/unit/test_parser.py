@@ -1,3 +1,4 @@
+import hashlib
 import io
 from importlib.metadata import version
 from pathlib import Path
@@ -56,3 +57,10 @@ def test_parsed_document_records_the_parser_and_engine_versions() -> None:
     assert parser.name == "pypdfium2"
     assert parser.version == version("pypdfium2")
     assert parser.engine_version
+
+
+def test_parsed_document_records_the_hash_of_the_bytes_it_read() -> None:
+    """Guards source identity: chunk ids and corpus versions rest on this hash, so it must be of the file's bytes."""
+    document = parse_pdf(DEMO_PDF)
+
+    assert document.sha256 == hashlib.sha256(DEMO_PDF.read_bytes()).hexdigest()

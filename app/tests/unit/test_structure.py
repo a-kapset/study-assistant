@@ -43,6 +43,7 @@ def _document(*pages: str) -> NormalizedDocument:
     """Build a cleaned document from page texts; an empty text is a page without a text layer."""
     return NormalizedDocument(
         path=Path("source.pdf"),
+        sha256="0" * 64,
         parser=PARSER,
         pages=tuple(
             CleanPage(number=number, text=text, status="ok" if text else "no_text_layer")
@@ -64,6 +65,7 @@ def test_demo_course_structure_is_found_in_its_pdf() -> None:
 
     structure = extract_structure(document, course.structure)
 
+    assert structure.sha256 == document.sha256
     assert _outline(structure) == [
         (None, "", None),
         ("1", "Setting up the board", None),

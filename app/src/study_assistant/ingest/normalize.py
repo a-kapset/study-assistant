@@ -60,6 +60,7 @@ class NormalizedDocument:
     """All pages of one source file after normalization, with the parser version that read them."""
 
     path: Path
+    sha256: str
     parser: ParserVersion
     pages: tuple[CleanPage, ...]
 
@@ -76,7 +77,7 @@ def normalize_document(document: ParsedDocument, noise_lines: Sequence[re.Patter
         _clean_page(page.number, text, noise_lines, vocabulary)
         for page, text in zip(document.pages, texts, strict=True)
     )
-    return NormalizedDocument(path=document.path, parser=document.parser, pages=pages)
+    return NormalizedDocument(path=document.path, sha256=document.sha256, parser=document.parser, pages=pages)
 
 
 def normalize_text(text: str, noise_lines: Sequence[re.Pattern[str]], vocabulary: frozenset[str]) -> str:

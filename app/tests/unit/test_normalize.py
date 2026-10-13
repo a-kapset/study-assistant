@@ -47,7 +47,7 @@ def test_demo_pdf_normalizes_to_its_known_text() -> None:
         (3, "ok"),
         (4, "ok"),
     ]
-    assert document.parser == parsed.parser
+    assert (document.parser, document.sha256) == (parsed.parser, parsed.sha256)
     text = " ".join(" ".join(page.text for page in document.pages).split())
     assert text == _reference_text((DEMO_DIR / "vardolin_rules.md").read_text(encoding="utf-8"))
 

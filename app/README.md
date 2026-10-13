@@ -9,7 +9,9 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
 - Python 3.14, [FastAPI](https://fastapi.tiangolo.com/), [Uvicorn](https://uvicorn.dev/),
   [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) for configuration,
   [structlog](https://www.structlog.org/) for JSON logs, [PyYAML](https://pyyaml.org/) for course manifests,
-  [pypdfium2](https://pypdfium2.readthedocs.io/) for the text layer of PDF sources
+  [pypdfium2](https://pypdfium2.readthedocs.io/) for the text layer of PDF sources,
+  [LangChain text splitters](https://docs.langchain.com/oss/python/integrations/splitters) for cutting sections
+  into chunks
 - PostgreSQL 18 with [pgvector](https://github.com/pgvector/pgvector), reached through
   [psycopg 3](https://www.psycopg.org/psycopg3/) and its connection pool
 - Docker Compose for running the app next to its database
@@ -36,10 +38,11 @@ app/
 │   ├── courses/            # courses as data: nothing course-specific lives in the code
 │   │   ├── models.py       # the course manifest: metadata, structure rules, source files
 │   │   └── registry.py     # loads the enabled courses' manifests at startup; a bad one stops the app
-│   ├── ingest/             # course sources to clean page text and the course structure
+│   ├── ingest/             # course sources to clean page text, the course structure and chunks
 │   │   ├── parser.py       # PDF text layer page by page, with the parser and PDF engine versions
 │   │   ├── normalize.py    # header and footer lines, words split at line ends, spacing, Unicode form; page status
-│   │   └── structure.py    # sections and learning objectives found by the course's structure rules
+│   │   ├── structure.py    # sections and learning objectives found by the course's structure rules
+│   │   └── chunker.py      # chunks within sections: size cap, pages, objectives, content-derived ids, rules version
 │   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
 │       ├── middleware.py   # request id on every request; unhandled exceptions become a 500 envelope
 │       ├── health.py

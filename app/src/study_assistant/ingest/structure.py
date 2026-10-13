@@ -61,6 +61,8 @@ class DocumentStructure:
     """The sections of one source in reading order, and the objectives it defines."""
 
     path: Path
+    # SHA-256 of the source file the structure was found in.
+    sha256: str
     sections: tuple[Section, ...]
     objectives: tuple[Objective, ...]
 
@@ -78,7 +80,7 @@ def extract_structure(document: NormalizedDocument, rules: StructureRules) -> Do
     ]
     sections = split_into_sections(lines, rules.section_heading)
     objectives = find_objectives(sections, rules, document.path)
-    return DocumentStructure(path=document.path, sections=sections, objectives=objectives)
+    return DocumentStructure(path=document.path, sha256=document.sha256, sections=sections, objectives=objectives)
 
 
 def split_into_sections(lines: Sequence[SourceLine], heading: re.Pattern[str]) -> tuple[Section, ...]:
