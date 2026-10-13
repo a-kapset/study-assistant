@@ -86,6 +86,15 @@ def test_manifest_id_must_equal_its_folder(tmp_path: Path) -> None:
         load_course(tmp_path, "beta")
 
 
+def test_course_without_learning_objectives_is_loaded(tmp_path: Path) -> None:
+    """Guards courses built from ordinary books: only section headings may be required, objectives are optional."""
+    _write(tmp_path, "alpha", yaml.safe_dump(_manifest("alpha", structure={"section_heading": r"^Chapter (\d+)"})))
+
+    course = load_course(tmp_path, "alpha")
+
+    assert course.structure.objective_id is None
+
+
 @pytest.mark.parametrize(
     ("content", "reason"),
     [

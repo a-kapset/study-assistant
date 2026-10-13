@@ -16,7 +16,7 @@ materials themselves (syllabi, books, exams) never are and stay on the local mac
 | `id` | Lowercase letters, digits and `_`; must equal the folder name. |
 | `title`, `description` | Shown to users; the description says what the course covers. |
 | `language` | Two-letter code of the course material, e.g. `en`. |
-| `structure` | Regular expressions that find `section_heading`, `objective_id` and, optionally, `knowledge_level` in the source text. |
+| `structure` | Regular expressions that find `section_heading` and, optionally, `objective_id` and `knowledge_level` in the source text. A course without learning objectives (for example, a set of books) gives only `section_heading`. |
 | `sources` | At least one entry: `file` (path relative to the course's source directory), `role` (`material`, `glossary` or `question_bank`), `authority` (`primary` sources define what is correct; `supplementary` ones add background and never override them) and, optionally, `noise_lines`. |
 | `sources[].noise_lines` | Regular expressions for the lines a file's layout repeats on every page (running header, footer, page number). A line is dropped from the extracted text only when a pattern matches all of it, so a sentence that merely starts like a header stays. Each file has its own list, because each has its own layout. |
 
@@ -70,3 +70,25 @@ description, structure rules, list of sources) lives in `courses/<course_id>/cou
   documents stay on the local machine. The invented `demo` text is the one exception.
 - **A broken manifest stops startup.** Manifests are validated when the app starts, and the
   error names the course and the file, instead of showing up later as wrong answers.
+
+## How the app uses a manifest
+
+The app code knows the general course model, but no particular course:
+
+| The app code knows | Each manifest says |
+|---|---|
+| What a course, source, section, learning objective, knowledge level and question bank are | The course's id, title, description and language |
+| How to read a PDF, clean its text, split it into chunks, search them and run an exam | Which files belong to the course, and each file's role and authority |
+| | What section headings and, if the course has them, objective ids and knowledge levels look like in its text (regular expressions) |
+| | Which repeated lines (header, footer, page number) to drop from each file |
+
+For example, with the `demo` course:
+
+1. The app reads `demo/course.yaml` and finds one primary source, `vardolin_rules.pdf`.
+2. The parser, the same for every course, extracts the text of each page.
+3. Text cleaning drops lines such as `Page 3 of 7`, because the manifest lists that pattern for
+   this file.
+
+The ISTQB course goes through the same code; only its manifest differs.
+
+Courses are set up by the operator of an installation. Learners do not write manifests.

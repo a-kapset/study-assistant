@@ -35,7 +35,8 @@ class StructureRules(ManifestModel):
     """
 
     section_heading: re.Pattern[str]
-    objective_id: re.Pattern[str]
+    # A course built from ordinary books may have no learning objectives; then only its sections are found.
+    objective_id: re.Pattern[str] | None = None
     # Not every course grades its objectives by knowledge level.
     knowledge_level: re.Pattern[str] | None = None
 
