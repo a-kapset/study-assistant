@@ -55,9 +55,8 @@ poetry -C app run pytest -q
 ## Adding and enabling a course
 
 1. Create `courses/<course_id>/course.yaml`; the app code does not change.
-2. Enable it with `APP_COURSES__ENABLED`, a comma-separated list of course ids, e.g.
-   `APP_COURSES__ENABLED=demo,istqb_ctfl`. No course is enabled by default; Docker Compose enables
-   `demo` unless the root `.env` says otherwise.
+2. Enable it with `APP_COURSES__ENABLED` in the root `.env`, a comma-separated list of course ids, e.g.
+   `APP_COURSES__ENABLED=demo,istqb_ctfl`; `.env.example` enables only `demo`.
 
 ## Why courses are data
 

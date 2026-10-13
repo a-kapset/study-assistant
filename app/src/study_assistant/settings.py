@@ -16,6 +16,9 @@ from study_assistant.courses.models import COURSE_ID_PATTERN
 
 ENV_PREFIX = "APP_"
 NESTED_DELIMITER = "__"
+# A role name goes into CREATE ROLE and GRANT statements; lower-case letters, digits and "_" keep it a plain
+# name that psql and connection settings accept without quoting.
+ROLE_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 type CourseId = Annotated[str, Field(pattern=COURSE_ID_PATTERN)]
@@ -63,6 +66,44 @@ class CoursesSettings(BaseModel):
         if len(set(value)) != len(value):
             raise ValueError("a course is listed more than once")
         return value
+
+
+class ServerRoleSettings(BaseModel):
+    """The database role the app server connects as; set as APP_SERVER_ROLE__<FIELD> for the migration run.
+
+    The migration run creates the role (or updates its password) and lets it read and write rows only,
+    so the server cannot change the schema or do anything else the database owner can.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(default="app_rw", pattern=ROLE_NAME_PATTERN)
+    # No default: the role must get the password the app server is given, not one invented here.
+    password: SecretStr
+
+
+class MigrationSettings(BaseSettings):
+    """What the one-shot migration run is configured with: the owner's connection and the app server's role.
+
+    Kept apart from ``Settings``: the app server needs neither the owner's password nor the role setup,
+    and stops at startup if either reaches its environment.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix=ENV_PREFIX, env_nested_delimiter=NESTED_DELIMITER, extra="forbid", frozen=True
+    )
+
+    # APP_LOG_LEVEL: the lowest level written to the log.
+    log_level: LogLevel = "INFO"
+
+    # APP_GIT_COMMIT: the commit the image was built from; the image sets it for every process it runs.
+    git_commit: str = "unknown"
+
+    # APP_DB__*: the owner's connection; the owner can create extensions, tables and roles.
+    db: DbSettings
+
+    # APP_SERVER_ROLE__*: the role the app server will connect as.
+    server_role: ServerRoleSettings
 
 
 class Settings(BaseSettings):
@@ -117,14 +158,25 @@ def _expected_env_names(model: type[BaseModel], prefix: str) -> set[str]:
 
 
 def load_settings() -> Settings:
-    """Build the settings from the process environment and refuse prefixed variables that no setting reads.
+    """Build the app server's settings from the process environment; unknown prefixed variables stop it."""
+    _reject_unknown_env_vars(Settings)
+    return Settings()
+
+
+def load_migration_settings() -> MigrationSettings:
+    """Build the migration run's settings from the process environment; unknown prefixed variables stop it."""
+    _reject_unknown_env_vars(MigrationSettings)
+    return MigrationSettings()
+
+
+def _reject_unknown_env_vars(settings_cls: type[BaseSettings]) -> None:
+    """Raise ``UnknownSettingsError`` naming every prefixed variable that ``settings_cls`` does not read.
 
     pydantic-settings silently ignores such variables, so a misspelt name would leave the default in place.
     """
-    unknown = find_unknown_env_vars(os.environ, Settings)
+    unknown = find_unknown_env_vars(os.environ, settings_cls)
     if unknown:
         names = ", ".join(unknown)
         raise UnknownSettingsError(
             f"Unknown {ENV_PREFIX}* environment variables: {names}. Check them against .env.example."
         )
-    return Settings()

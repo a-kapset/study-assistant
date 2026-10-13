@@ -28,7 +28,6 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
 app/
 ├── pyproject.toml          # project metadata, dependencies, ruff / mypy / pytest config
 ├── poetry.lock
-├── .env.example            # every APP_* variable with its default
 ├── Dockerfile              # two-stage image: Poetry installs runtime dependencies, a non-root user runs the app
 ├── .dockerignore
 ├── src/study_assistant/
@@ -38,6 +37,8 @@ app/
 │   ├── logging_setup.py    # structlog, one JSON object per line on stdout
 │   ├── errors.py           # the error envelope and the handlers that use it
 │   ├── db.py               # Database protocol and the PostgreSQL pool, opened at startup, closed at shutdown
+│   ├── migrate.py          # one-shot migration run: applies new SQL files, prepares the app's database role
+│   ├── migrations/         # numbered SQL files (001_vector.sql, 002_corpus.sql, ...), applied in order
 │   ├── courses/            # courses as data: nothing course-specific lives in the code
 │   │   ├── models.py       # the course manifest: metadata, structure rules, source files
 │   │   └── registry.py     # loads the enabled courses' manifests at startup; a bad one stops the app
@@ -62,21 +63,26 @@ app/
 From the repository root, with Docker running:
 
 ```powershell
-Copy-Item .env.example .env                   # then set DB_PASSWORD in .env
+Copy-Item .env.example .env                   # then set DB_PASSWORD and DB_APP_PASSWORD in .env
 $env:GIT_COMMIT = git rev-parse --short HEAD  # optional: shown by /v1/config
 docker compose up -d --build --wait
+docker compose logs migrate --no-log-prefix   # which migration files were applied
 curl.exe -i http://127.0.0.1:8000/ready
 ```
 
-`--wait` returns once both services are healthy; the app counts as healthy when `/ready` answers 200.
-`docker compose down` stops the stack and keeps the database volume; `docker compose down -v` also
-deletes it, which is needed after changing `DB_PASSWORD`, because PostgreSQL sets the password only
-when the volume is first created. The database port is not published; use
-`docker compose exec db psql -U study_assistant` to reach it.
+The stack starts in order: the database, then `migrate`, a one-shot run of the same image that applies new
+migration files as the database owner and prepares the app's role, then the app, only after `migrate` has
+exited without an error. `--wait` returns once the database and the app are healthy (the app counts as
+healthy when `/ready` answers 200); `docker compose ps -a` shows `migrate` as exited with code 0.
 
-Compose mounts the repository's `courses/` folder read-only and enables the `demo` course; set
-`APP_COURSES__ENABLED` in the root `.env` to choose others, then check with
-`curl.exe http://127.0.0.1:8000/v1/courses`.
+`docker compose down` stops the stack and keeps the database volume; `docker compose down -v` also
+deletes it, which is needed after changing `DB_OWNER` or `DB_PASSWORD`, because PostgreSQL sets the owner
+only when the volume is first created. The database port is not published; use
+`docker compose exec db psql -U study_assistant -d study_assistant` (the `DB_OWNER` and `DB_NAME` from `.env`)
+to reach it.
+
+Compose mounts the repository's `courses/` folder read-only and enables the courses in
+`APP_COURSES__ENABLED` (`demo` in `.env.example`); check with `curl.exe http://127.0.0.1:8000/v1/courses`.
 
 
 ### Without Docker
@@ -96,26 +102,21 @@ Docker.
 
 ## Configuration
 
-All settings come from environment variables with the `APP_` prefix; `.env.example` lists them with
-their defaults. The app reads the process environment only and does not load a `.env` file itself.
-An `APP_*` variable that matches no setting stops startup with the unknown names listed, so a typo
-never falls back to a default silently.
+Everything the local stack is configured with is in one file: the repository root's
+[`.env.example`](../.env.example), copied to `.env`. It lists every value with what it means and which app
+setting (`APP_*`) it becomes. `compose.yaml` takes each value from `.env` (a missing one stops Compose with
+its name) and gives each service only the values it needs: the app gets the app role's password, never the
+database owner's.
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `APP_LOG_LEVEL` | `INFO` | Lowest log level written: `DEBUG`, `INFO`, `WARNING` or `ERROR` |
-| `APP_GIT_COMMIT` | `unknown` | Commit the running code was built from; set by the build |
-| `APP_DB__HOST` | `localhost` | PostgreSQL host (`db` inside Compose) |
-| `APP_DB__PORT` | `5432` | PostgreSQL port |
-| `APP_DB__NAME` | `study_assistant` | Database name |
-| `APP_DB__USER` | `study_assistant` | Database user |
-| `APP_DB__PASSWORD` | none, required | Database password; the app does not start without it, and `/v1/config` masks it |
-| `APP_DB__CONNECT_TIMEOUT_S` | `3` | Seconds to wait for a connection; also how long `/ready` waits before answering 503 |
-| `APP_COURSES__MANIFEST_DIR` | `../courses` | Folder with one subfolder per course, each holding a `course.yaml`; a relative path starts from the working directory (`/courses` inside Compose) |
-| `APP_COURSES__ENABLED` | none | Course ids to load, separated by commas, e.g. `demo,istqb_ctfl`; a course that cannot be loaded stops startup. The manifest format: [courses/README.md](../courses/README.md) |
+The app reads its settings from the process environment only, as `APP_*` variables (nested groups as
+`APP_GROUP__FIELD`, e.g. `APP_DB__HOST`), and does not load a `.env` file itself. An `APP_*` variable that
+matches no setting stops startup with the unknown names listed, so a typo never falls back to a default
+silently. Defaults in the code matter only for unit tests and runs without Compose; `APP_DB__PASSWORD` has
+none. `GET /v1/config` shows the effective values with every secret masked.
 
-
-Under Docker Compose these variables are set by `compose.yaml` from the root `.env`; `app/.env.example` is for running without Docker.
+The migration run (`python -m study_assistant.migrate`) reads the same database variables with the owner's
+user and password, plus `APP_SERVER_ROLE__NAME` and `APP_SERVER_ROLE__PASSWORD` for the app's role; the app
+server refuses these two.
 
 In PowerShell, set a variable for the current window before starting the server:
 
@@ -126,6 +127,22 @@ poetry run uvicorn study_assistant.main:create_app --factory
 
 Logs are JSON lines on stdout, each with the request id while a request is handled; uvicorn's own
 startup and access lines stay plain text.
+
+## Database
+
+The schema is created by numbered SQL files in `src/study_assistant/migrations/`. The migration run applies
+the files the database has not seen yet, in number order, each in its own transaction together with its row
+in the `schema_migrations` journal, so a failing file leaves nothing behind. The journal keeps each file's
+SHA-256: an applied file must never be edited (the run stops and names it); a change goes into a new file
+with the next number.
+
+After the files, the run creates the app's role (`DB_APP_USER`) or resets its password, and lets it select,
+insert, update and delete rows of every table and only read the journal. The app connects as that role, so it
+cannot create, alter or drop anything; only the migration run uses the owner.
+
+Tables: `courses`, `documents` (one per source file, with its SHA-256 and the chunking rules that produced its
+rows), `sections`, `learning_objectives` and `chunks`. Every row carries its course id; a document's
+sections, objectives and chunks are deleted with it.
 
 ## API
 

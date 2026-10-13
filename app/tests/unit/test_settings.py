@@ -4,7 +4,15 @@ import pytest
 from pydantic import BaseModel, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from study_assistant.settings import Settings, UnknownSettingsError, find_unknown_env_vars, load_settings
+from study_assistant.settings import (
+    MigrationSettings,
+    ServerRoleSettings,
+    Settings,
+    UnknownSettingsError,
+    find_unknown_env_vars,
+    load_migration_settings,
+    load_settings,
+)
 
 SECRET_WORDS = {"key", "token", "password", "secret", "dsn"}
 
@@ -79,13 +87,65 @@ def _fields(model: type[BaseModel], path: str = "") -> list[tuple[str, object]]:
     return found
 
 
-def test_secret_like_settings_are_secret_str() -> None:
-    """Guards future fields: a key, token, password or DSN typed as plain str would be shown by /v1/config."""
+@pytest.mark.parametrize("settings_cls", [Settings, MigrationSettings])
+def test_secret_like_settings_are_secret_str(settings_cls: type[BaseSettings]) -> None:
+    """Guards future fields: a key, token, password or DSN typed as plain str would be shown by /v1/config or a log."""
     plain = [
         path
-        for path, annotation in _fields(Settings)
+        for path, annotation in _fields(settings_cls)
         if SECRET_WORDS & set(path.rsplit(".", 1)[-1].split("_"))
         and SecretStr not in (annotation, *get_args(annotation))
     ]
 
     assert plain == []
+
+
+def test_app_server_refuses_role_setup_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guards the split: if the role setup moved into the server's settings, the server would accept it."""
+    monkeypatch.setenv("APP_DB__PASSWORD", "app-password")
+    monkeypatch.setenv("APP_SERVER_ROLE__PASSWORD", "app-password")
+
+    with pytest.raises(UnknownSettingsError, match="APP_SERVER_ROLE__PASSWORD"):
+        load_settings()
+
+
+def test_migration_settings_read_owner_role_and_image_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guards the migration run's variable names, including the commit every process of the image is given."""
+    monkeypatch.setenv("APP_GIT_COMMIT", "abc123")
+    monkeypatch.setenv("APP_DB__USER", "owner_user")
+    monkeypatch.setenv("APP_DB__PASSWORD", "owner-password")
+    monkeypatch.setenv("APP_SERVER_ROLE__PASSWORD", "app-password")
+
+    settings = load_migration_settings()
+
+    assert settings.git_commit == "abc123"
+    assert settings.db.user == "owner_user"
+    assert settings.server_role.name == "app_rw"
+    assert settings.server_role.password.get_secret_value() == "app-password"
+
+
+def test_missing_role_password_stops_the_migration_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guards the role password having no default: an invented one would show up later as the app's failed login."""
+    monkeypatch.setenv("APP_DB__PASSWORD", "owner-password")
+    monkeypatch.setenv("APP_SERVER_ROLE__NAME", "app_rw")
+    monkeypatch.delenv("APP_SERVER_ROLE__PASSWORD", raising=False)
+
+    with pytest.raises(ValidationError, match=r"server_role\.password"):
+        load_migration_settings()
+
+
+def test_misspelt_migration_variable_fails_with_its_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guards the migration run's startup check: a misspelt role name would silently prepare the default role."""
+    monkeypatch.setenv("APP_DB__PASSWORD", "owner-password")
+    monkeypatch.setenv("APP_SERVER_ROLE__PASSWORD", "app-password")
+    monkeypatch.setenv("APP_SERVER_ROLE__NAM", "learner_rw")
+
+    with pytest.raises(UnknownSettingsError, match="APP_SERVER_ROLE__NAM"):
+        load_migration_settings()
+
+
+@pytest.mark.parametrize("name", ["App_rw", "app-rw", "1app", "app rw", ""])
+def test_role_name_must_be_a_plain_lower_case_name(name: str) -> None:
+    """Guards the name rule: a name that needs quoting would be case-sensitive and not found by psql or the app."""
+    with pytest.raises(ValidationError):
+        ServerRoleSettings(name=name, password=SecretStr("app-password"))

@@ -1,47 +1,80 @@
-# Local stack: the app next to PostgreSQL with pgvector.
-# Values in ${...} come from the .env file next to this one (see .env.example) or from the shell.
+# Local stack: PostgreSQL with pgvector, a one-shot migration run, then the app.
+# Every value comes from the .env file next to this one (see .env.example); a missing one stops Compose
+# with its name. Each service gets only the values it needs.
 name: study-assistant
+
+# The migration run and the app use the same image; both services build it from the same place.
+x-app-build: &app-build
+  context: ./app
+  args:
+    GIT_COMMIT: ${GIT_COMMIT:?set GIT_COMMIT in .env, see .env.example}
 
 services:
   db:
     image: pgvector/pgvector:0.8.7-pg18-trixie
     environment:
-      POSTGRES_DB: study_assistant
-      POSTGRES_USER: study_assistant
+      POSTGRES_DB: ${DB_NAME:?set DB_NAME in .env, see .env.example}
+      # The database owner: a superuser that only the migration run connects as.
+      POSTGRES_USER: ${DB_OWNER:?set DB_OWNER in .env, see .env.example}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env, see .env.example}
+    networks:
+      default:
+        # The app and the migration run reach the database by this name.
+        aliases: ["${DB_HOST:?set DB_HOST in .env, see .env.example}"]
     volumes:
       # PostgreSQL 18 images keep their data under this directory.
       - db-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U study_assistant -d study_assistant"]
+      # $$ passes the variable to the container's shell instead of Compose.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 2s
       timeout: 3s
       retries: 15
-    # No published port: only the app reaches the database, over the Compose network.
+    # No published port: only the app and the migration run reach the database, over the Compose network.
+
+  migrate:
+    build: *app-build
+    # Applies new migration files as the owner, prepares the app's role, then exits; the app waits for it.
+    command: ["python", "-m", "study_assistant.migrate"]
+    environment:
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:?set APP_LOG_LEVEL in .env, see .env.example}
+      APP_DB__HOST: ${DB_HOST}
+      APP_DB__PORT: ${DB_PORT:?set DB_PORT in .env, see .env.example}
+      APP_DB__NAME: ${DB_NAME}
+      APP_DB__CONNECT_TIMEOUT_S: ${DB_CONNECT_TIMEOUT_S:?set DB_CONNECT_TIMEOUT_S in .env, see .env.example}
+      APP_DB__USER: ${DB_OWNER}
+      APP_DB__PASSWORD: ${DB_PASSWORD}
+      APP_SERVER_ROLE__NAME: ${DB_APP_USER:?set DB_APP_USER in .env, see .env.example}
+      APP_SERVER_ROLE__PASSWORD: ${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env, see .env.example}
+    depends_on:
+      db:
+        condition: service_healthy
 
   app:
-    build:
-      context: ./app
-      args:
-        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    build: *app-build
     environment:
-      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
-      APP_DB__HOST: db
-      APP_DB__NAME: study_assistant
-      APP_DB__USER: study_assistant
-      APP_DB__PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env, see .env.example}
-      APP_COURSES__MANIFEST_DIR: /courses
-      # Comma-separated course ids; the synthetic demo course unless .env says otherwise.
-      APP_COURSES__ENABLED: ${APP_COURSES__ENABLED:-demo}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_DB__HOST: ${DB_HOST}
+      APP_DB__PORT: ${DB_PORT}
+      APP_DB__NAME: ${DB_NAME}
+      APP_DB__CONNECT_TIMEOUT_S: ${DB_CONNECT_TIMEOUT_S}
+      # Row access only: the app cannot change the schema and never gets the owner's password.
+      APP_DB__USER: ${DB_APP_USER}
+      APP_DB__PASSWORD: ${DB_APP_PASSWORD}
+      APP_COURSES__MANIFEST_DIR: ${COURSES_DIR:?set COURSES_DIR in .env, see .env.example}
+      APP_COURSES__ENABLED: ${APP_COURSES__ENABLED:?set APP_COURSES__ENABLED in .env, see .env.example}
     volumes:
       # Course manifests are data, not part of the image; the app only reads them.
-      - ./courses:/courses:ro
+      - ./courses:${COURSES_DIR}:ro
     ports:
       # Reachable from this machine only.
       - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
+      # Starts only after the migration run has finished without an error.
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       # The image has no curl; Python's standard library is enough. Healthy means ready, not only alive.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
