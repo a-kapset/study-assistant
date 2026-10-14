@@ -11,7 +11,8 @@ How checks are split between the app's own tests and the harness: [TESTING.md](.
 ## Stack
 
 - Python 3.14, [httpx2](https://github.com/pydantic/httpx2) (async HTTP client),
-  [pydantic](https://docs.pydantic.dev/) and pydantic-settings, [structlog](https://www.structlog.org/) (JSON logs)
+  [pydantic](https://docs.pydantic.dev/) and pydantic-settings, [structlog](https://www.structlog.org/) (JSON logs),
+  [psycopg 3](https://www.psycopg.org/psycopg3/) for reading the app's database directly
 - [Poetry 2](https://python-poetry.org/) for dependencies and the virtual environment
 - Development: pytest with pytest-asyncio, ruff (format and lint), mypy (strict), pre-commit
 
@@ -22,7 +23,13 @@ evaluation-harness/
 ├── pyproject.toml          # project metadata, dependencies, ruff / mypy / pytest config
 ├── poetry.lock
 ├── src/evalharness/
-│   ├── settings.py         # HarnessSettings: where the system under test is (EVAL_* variables)
+│   ├── settings.py         # where the system under test is (EVAL_*), and the values shared with the stack's .env
+│   ├── corpus_db.py        # direct reads of the app's stored corpus, as the read-only database role
+│   ├── testdata/           # test data written into the app's stores: created and removed in one place
+│   │   ├── __init__.py     # the name prefix every piece of test data carries
+│   │   ├── corpus.py       # extra courses and documents, documents made to look old; removal by prefix
+│   │   ├── cleanup.py      # removes all test data from every store and lists what is left
+│   │   └── __main__.py     # the clean / check command
 │   ├── transport.py        # SutTransport: async HTTP client that never raises on HTTP or network errors
 │   └── observation.py      # Observation: one request/response record, or the transport error instead
 └── tests/
@@ -46,6 +53,38 @@ Settings are read from environment variables when a run starts.
 |---|---|---|
 | `EVAL_SUT_BASE_URL` | `http://127.0.0.1:8000` | Root URL of the system under test; request paths are joined to it |
 | `EVAL_REQUEST_TIMEOUT_S` | `10.0` | Per-request timeout in seconds (must be greater than 0) |
+| `EVAL_STACK_ENV_FILE` | `../.env` | The `.env` file the stack under test runs with |
+| `EVAL_DB_HOST` | `127.0.0.1` | Host on which the stack publishes its database port |
+
+Values the harness shares with the stack are read from the stack's own `.env` (the repository root's, see
+[`.env.example`](../.env.example)), so they are set in one place: `DB_NAME`, `DB_PUBLISHED_PORT`, the read-only
+role `DB_READER_USER` / `DB_READER_PASSWORD`, the app's role `DB_APP_USER` / `DB_APP_PASSWORD` and
+`ADMIN_API_KEY`. A variable of the same name in the environment wins over the file.
+
+Every read of the database goes through the read-only role, so a check cannot change what it checks. The
+app's role is used only to write rows a test needs and to delete them again.
+
+## Test data
+
+Some checks need data the app cannot create through its API, for example a second course next to the demo
+course. Such data is created through `evalharness.testdata` (in tests, through the `test_data` fixture), not
+by single test files, and every name it writes starts with `evalharness_`. Removal deletes everything with
+that prefix, so no course or file in `courses/` may use it (a unit test checks this).
+
+A test may create data at any point, before its first request or between two of them, by calling the
+fixture's methods. The fixture deletes leftovers of an earlier run before the test and all test data after
+it, whenever the data was made and also when the test fails, then fails the test if anything is left.
+
+Run the api tests against one stack at a time. Two runs at once on the same stack would change the same demo
+course and remove each other's test data; for parallel runs, start a separate stack for each run
+(`docker compose -p <name> up -d`) and point each run at its own one.
+
+After a run that was stopped before its cleanup, remove the data by hand:
+
+```powershell
+poetry run python -m evalharness.testdata check   # list test data still in the app's stores (exit code 1 if any)
+poetry run python -m evalharness.testdata clean   # delete it all, then check again
+```
 
 ```powershell
 $env:EVAL_SUT_BASE_URL = "http://127.0.0.1:8001"   # only if the app is not on the default address
