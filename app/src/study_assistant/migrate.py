@@ -1,8 +1,8 @@
 """Database migrations: numbered SQL files applied in order by a one-shot run before the app server starts.
 
 Run as ``python -m study_assistant.migrate`` with the database owner's connection. The run applies every file
-the database has not seen yet, then prepares the role the app server connects as. The app server itself
-never changes the schema and never knows the owner's password.
+the database has not seen yet, then prepares the role the app server connects as and a read-only role.
+The app server itself never changes the schema and never knows the owner's password.
 """
 
 import hashlib
@@ -19,7 +19,13 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from study_assistant.logging_setup import configure_logging
-from study_assistant.settings import DbSettings, ServerRoleSettings, load_migration_settings
+from study_assistant.settings import (
+    DbSettings,
+    ReaderRoleSettings,
+    RoleSettings,
+    ServerRoleSettings,
+    load_migration_settings,
+)
 
 # "002_corpus.sql": a three-digit number, then a lower-case name.
 _FILE_NAME = re.compile(r"(?P<version>\d{3})_[a-z0-9_]+\.sql")
@@ -116,20 +122,38 @@ def prepare_server_role(conn: psycopg.Connection, role: ServerRoleSettings, owne
     The role may select, insert, update and delete rows of every table, and only read the journal; it cannot
     create, alter or drop anything. Run after the migrations, so tables they added are covered too.
     """
-    if role.name == owner:
-        raise MigrationError(f"the app server's role must not be the database owner {owner!r}")
-    name = sql.Identifier(role.name)
     with conn.transaction():
-        exists = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role.name,)).fetchone() is not None
-        command = sql.SQL("ALTER ROLE" if exists else "CREATE ROLE")
-        password = sql.Literal(role.password.get_secret_value())
-        conn.execute(sql.SQL("{} {} LOGIN PASSWORD {}").format(command, name, password))
+        name = _login_role(conn, role, owner)
         conn.execute(sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}").format(name))
         conn.execute(sql.SQL("REVOKE INSERT, UPDATE, DELETE ON schema_migrations FROM {}").format(name))
 
 
+def prepare_reader_role(conn: psycopg.Connection, role: ReaderRoleSettings, owner: str) -> None:
+    """Create the read-only role, or set its password if it exists, and let it read rows of every table only."""
+    with conn.transaction():
+        name = _login_role(conn, role, owner)
+        conn.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA public TO {}").format(name))
+
+
+def _login_role(conn: psycopg.Connection, role: RoleSettings, owner: str) -> sql.Identifier:
+    """Create the login role or reset its password, and take back every table right it was given before.
+
+    Starting from no rights means a role ends up with exactly what the caller grants next, even when it was
+    given more under an earlier configuration. Must run inside the caller's transaction.
+    """
+    if role.name == owner:
+        raise MigrationError(f"the role {role.name!r} must not be the database owner")
+    name = sql.Identifier(role.name)
+    exists = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role.name,)).fetchone() is not None
+    command = sql.SQL("ALTER ROLE" if exists else "CREATE ROLE")
+    password = sql.Literal(role.password.get_secret_value())
+    conn.execute(sql.SQL("{} {} LOGIN PASSWORD {}").format(command, name, password))
+    conn.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {}").format(name))
+    return name
+
+
 def main() -> int:
-    """Apply the migrations and prepare the app server's role; return the process exit code."""
+    """Apply the migrations and prepare the app server's role and the read-only role; return the exit code."""
     settings = load_migration_settings()
     configure_logging(settings.log_level)
     log = structlog.get_logger().bind(git_commit=settings.git_commit)
@@ -139,10 +163,17 @@ def main() -> int:
         with psycopg.connect(_conninfo(settings.db), autocommit=True) as conn:
             applied = apply_migrations(conn, migrations)
             prepare_server_role(conn, settings.server_role, owner=settings.db.user)
+            prepare_reader_role(conn, settings.reader_role, owner=settings.db.user)
     except (MigrationError, psycopg.Error) as exc:
         log.error("migration_failed", error=str(exc))
         return 1
-    log.info("migration_done", applied=applied, known=len(migrations), server_role=settings.server_role.name)
+    log.info(
+        "migration_done",
+        applied=applied,
+        known=len(migrations),
+        server_role=settings.server_role.name,
+        reader_role=settings.reader_role.name,
+    )
     return 0
 
 

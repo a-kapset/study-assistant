@@ -12,7 +12,7 @@ CANARY = "canary-not-a-real-secret"
 
 def test_config_reports_version_and_effective_settings(settings: Settings, fake_db: Database) -> None:
     """Guards the wiring: the endpoint must show the settings the app was built with and the real version."""
-    configured = Settings(log_level="DEBUG", git_commit="abc123", db=settings.db)
+    configured = Settings(log_level="DEBUG", git_commit="abc123", db=settings.db, admin=settings.admin)
 
     with TestClient(build_app(configured, fake_db)) as client:
         response = client.get("/v1/config")
@@ -33,7 +33,7 @@ class _SettingsWithSecret(Settings):
 
 def test_config_never_shows_a_secret(settings: Settings, fake_db: Database) -> None:
     """Guards the masking: dumping settings in Python mode or unwrapping a secret would leak it here."""
-    with TestClient(build_app(_SettingsWithSecret(db=settings.db), fake_db)) as client:
+    with TestClient(build_app(_SettingsWithSecret(db=settings.db, admin=settings.admin), fake_db)) as client:
         response = client.get("/v1/config")
 
     assert response.status_code == 200

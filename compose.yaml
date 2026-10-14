@@ -30,7 +30,9 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
-    # No published port: only the app and the migration run reach the database, over the Compose network.
+    ports:
+      # Reachable from this machine only, for checks that read the stored data with the read-only role.
+      - "127.0.0.1:${DB_PUBLISHED_PORT:?set DB_PUBLISHED_PORT in .env, see .env.example}:5432"
 
   migrate:
     build: *app-build
@@ -46,6 +48,8 @@ services:
       APP_DB__PASSWORD: ${DB_PASSWORD}
       APP_SERVER_ROLE__NAME: ${DB_APP_USER:?set DB_APP_USER in .env, see .env.example}
       APP_SERVER_ROLE__PASSWORD: ${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env, see .env.example}
+      APP_READER_ROLE__NAME: ${DB_READER_USER:?set DB_READER_USER in .env, see .env.example}
+      APP_READER_ROLE__PASSWORD: ${DB_READER_PASSWORD:?set DB_READER_PASSWORD in .env, see .env.example}
     depends_on:
       db:
         condition: service_healthy
@@ -63,9 +67,17 @@ services:
       APP_DB__PASSWORD: ${DB_APP_PASSWORD}
       APP_COURSES__MANIFEST_DIR: ${COURSES_DIR:?set COURSES_DIR in .env, see .env.example}
       APP_COURSES__ENABLED: ${APP_COURSES__ENABLED:?set APP_COURSES__ENABLED in .env, see .env.example}
+      APP_COURSES__SOURCE_DIR: ${SOURCES_DIR:?set SOURCES_DIR in .env, see .env.example}
+      APP_INGEST__CHUNK_SIZE: ${APP_INGEST__CHUNK_SIZE:?set APP_INGEST__CHUNK_SIZE in .env, see .env.example}
+      APP_INGEST__CHUNK_OVERLAP: ${APP_INGEST__CHUNK_OVERLAP:?set APP_INGEST__CHUNK_OVERLAP in .env, see .env.example}
+      APP_ADMIN__API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env, see .env.example}
     volumes:
       # Course manifests are data, not part of the image; the app only reads them.
       - ./courses:${COURSES_DIR}:ro
+      # Course sources: the committed ones (the demo course) are in courses/, next to their manifests ...
+      - ./courses:${SOURCES_DIR}:ro
+      # ... and one course whose material stays outside the repository, in its own folder on this machine.
+      - ${LOCAL_COURSE_SOURCES:?set LOCAL_COURSE_SOURCES in .env, see .env.example}:${SOURCES_DIR}/${LOCAL_COURSE_ID:?set LOCAL_COURSE_ID in .env, see .env.example}:ro
     ports:
       # Reachable from this machine only.
       - "127.0.0.1:8000:8000"

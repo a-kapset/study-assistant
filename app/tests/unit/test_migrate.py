@@ -1,5 +1,5 @@
 import hashlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from importlib.resources import files
 from pathlib import Path
@@ -7,10 +7,18 @@ from typing import cast
 
 import psycopg
 import pytest
+from psycopg import sql
 from pydantic import SecretStr
 
-from study_assistant.migrate import Migration, MigrationError, apply_migrations, load_migrations, prepare_server_role
-from study_assistant.settings import ServerRoleSettings
+from study_assistant.migrate import (
+    Migration,
+    MigrationError,
+    apply_migrations,
+    load_migrations,
+    prepare_reader_role,
+    prepare_server_role,
+)
+from study_assistant.settings import ReaderRoleSettings, RoleSettings, ServerRoleSettings
 
 
 def _write(directory: Path, files_and_text: dict[str, str]) -> None:
@@ -57,8 +65,13 @@ class _FakeConnection:
         """Run the block; the fake keeps no state that a rollback would have to undo."""
         yield
 
-    def execute(self, query: str, params: tuple[object, ...] | None = None) -> _Result:
-        """Answer the journal query, record journal inserts and run (record) everything else."""
+    def execute(self, query: str | sql.Composable, params: tuple[object, ...] | None = None) -> _Result:
+        """Answer the journal query, record journal inserts and run (record) everything else.
+
+        A statement composed from parts is recorded as the text it would send. No role exists yet.
+        """
+        if isinstance(query, sql.Composable):
+            query = query.as_string(None)
         if query == self.failing_sql:
             raise psycopg.errors.UndefinedObject("type does not exist")
         if query.startswith("SELECT version, sha256 FROM schema_migrations"):
@@ -181,4 +194,45 @@ def test_app_role_named_like_the_owner_is_refused() -> None:
 
     with pytest.raises(MigrationError, match="must not be the database owner"):
         prepare_server_role(cast(psycopg.Connection, conn), role, owner="owner_user")
+    assert conn.executed == []
+
+
+def _role_statements(prepare: object, role: RoleSettings) -> list[str]:
+    """Run a role preparation against a fresh fake connection and return the statements it sent."""
+    conn = _FakeConnection(journal={})
+    cast(Callable[..., None], prepare)(cast(psycopg.Connection, conn), role, owner="owner_user")
+    return [statement for statement in conn.executed if not statement.startswith("SELECT 1 FROM pg_roles")]
+
+
+def test_reader_role_may_only_read_rows() -> None:
+    """Guards the reader's grants: any write right would let a checking tool change the data it checks."""
+    role = ReaderRoleSettings(password=SecretStr("reader-password"))
+
+    statements = _role_statements(prepare_reader_role, role)
+
+    assert statements == [
+        "CREATE ROLE \"app_ro\" LOGIN PASSWORD 'reader-password'",
+        'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM "app_ro"',
+        'GRANT SELECT ON ALL TABLES IN SCHEMA public TO "app_ro"',
+    ]
+
+
+def test_server_role_starts_from_no_rights_before_its_grants() -> None:
+    """Guards the reset: without it, a role that had more rights under an earlier name or setup would keep them."""
+    role = ServerRoleSettings(password=SecretStr("app-password"))
+
+    statements = _role_statements(prepare_server_role, role)
+
+    revoke_all = statements.index('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM "app_rw"')
+    grant = statements.index('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "app_rw"')
+    assert revoke_all < grant
+
+
+def test_reader_role_named_like_the_owner_is_refused() -> None:
+    """Guards the owner check for the reader: it would reset the owner's password and strip its rights."""
+    conn = _FakeConnection(journal={})
+    role = ReaderRoleSettings(name="owner_user", password=SecretStr("reader-password"))
+
+    with pytest.raises(MigrationError, match="must not be the database owner"):
+        prepare_reader_role(cast(psycopg.Connection, conn), role, owner="owner_user")
     assert conn.executed == []

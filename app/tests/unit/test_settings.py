@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import get_args
 
 import pytest
@@ -5,7 +6,10 @@ from pydantic import BaseModel, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from study_assistant.settings import (
+    AdminSettings,
+    DbSettings,
     MigrationSettings,
+    ReaderRoleSettings,
     ServerRoleSettings,
     Settings,
     UnknownSettingsError,
@@ -23,6 +27,10 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("APP_GIT_COMMIT", "abc123")
     monkeypatch.setenv("APP_DB__HOST", "db.example")
     monkeypatch.setenv("APP_DB__PASSWORD", "from-env")
+    monkeypatch.setenv("APP_ADMIN__API_KEY", "admin-key-from-env")
+    monkeypatch.setenv("APP_COURSES__SOURCE_DIR", "/sources")
+    monkeypatch.setenv("APP_INGEST__CHUNK_SIZE", "800")
+    monkeypatch.setenv("APP_INGEST__CHUNK_OVERLAP", "80")
 
     settings = load_settings()
 
@@ -30,6 +38,24 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     assert settings.git_commit == "abc123"
     assert settings.db.host == "db.example"
     assert settings.db.password.get_secret_value() == "from-env"
+    assert settings.admin.api_key.get_secret_value() == "admin-key-from-env"
+    assert settings.courses.source_dir == Path("/sources")
+    assert (settings.ingest.chunk_size, settings.ingest.chunk_overlap) == (800, 80)
+
+
+def test_missing_admin_key_stops_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guards the key having no default: with one, the admin endpoints would be open with a key anyone can read."""
+    monkeypatch.setenv("APP_DB__PASSWORD", "from-env")
+    monkeypatch.delenv("APP_ADMIN__API_KEY", raising=False)
+
+    with pytest.raises(ValidationError, match=r"(?m)^admin$"):
+        load_settings()
+
+
+def test_short_admin_key_is_refused() -> None:
+    """Guards the minimum length: a short key can be guessed by trying, since every guess gets an answer."""
+    with pytest.raises(ValidationError, match="at least 16"):
+        AdminSettings(api_key=SecretStr("x" * 15))
 
 
 def test_missing_database_password_stops_startup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -115,6 +141,7 @@ def test_migration_settings_read_owner_role_and_image_commit(monkeypatch: pytest
     monkeypatch.setenv("APP_DB__USER", "owner_user")
     monkeypatch.setenv("APP_DB__PASSWORD", "owner-password")
     monkeypatch.setenv("APP_SERVER_ROLE__PASSWORD", "app-password")
+    monkeypatch.setenv("APP_READER_ROLE__PASSWORD", "reader-password")
 
     settings = load_migration_settings()
 
@@ -122,6 +149,18 @@ def test_migration_settings_read_owner_role_and_image_commit(monkeypatch: pytest
     assert settings.db.user == "owner_user"
     assert settings.server_role.name == "app_rw"
     assert settings.server_role.password.get_secret_value() == "app-password"
+    assert settings.reader_role.name == "app_ro"
+    assert settings.reader_role.password.get_secret_value() == "reader-password"
+
+
+def test_one_name_for_both_roles_is_refused() -> None:
+    """Guards the distinct names: one role given both sets of grants would end up with whichever ran last."""
+    with pytest.raises(ValidationError, match="same name 'shared'"):
+        MigrationSettings(
+            db=DbSettings(password=SecretStr("owner-password")),
+            server_role=ServerRoleSettings(name="shared", password=SecretStr("app-password")),
+            reader_role=ReaderRoleSettings(name="shared", password=SecretStr("reader-password")),
+        )
 
 
 def test_missing_role_password_stops_the_migration_run(monkeypatch: pytest.MonkeyPatch) -> None:

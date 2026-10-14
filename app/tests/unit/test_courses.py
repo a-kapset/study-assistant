@@ -8,7 +8,7 @@ from pydantic import SecretStr, ValidationError
 from study_assistant.composition import build_app
 from study_assistant.courses.registry import CourseConfigError, load_course, load_courses
 from study_assistant.db import Database
-from study_assistant.settings import CoursesSettings, DbSettings, Settings
+from study_assistant.settings import AdminSettings, CoursesSettings, DbSettings, Settings
 
 # The repository's own course folder: app/tests/unit/<this file> -> repository root.
 REPO_COURSES = Path(__file__).resolve().parents[3] / "courses"
@@ -66,7 +66,10 @@ def test_enabled_courses_are_read_as_a_comma_list(monkeypatch: pytest.MonkeyPatc
     """Guards the variable format: without the raw-string handling the value would have to be a JSON list."""
     monkeypatch.setenv("APP_COURSES__ENABLED", " alpha, beta ,")
 
-    settings = Settings(db=DbSettings(password=SecretStr("unit-test-password")))
+    settings = Settings(
+        db=DbSettings(password=SecretStr("unit-test-password")),
+        admin=AdminSettings(api_key=SecretStr("unit-test-admin-key")),
+    )
 
     assert settings.courses.enabled == ("alpha", "beta")
 

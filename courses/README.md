@@ -23,7 +23,7 @@ materials themselves (syllabi, books, exams) never are and stay on the local mac
 | `structure.section_heading` | Matched against a whole line. Named groups `id` and `title`, e.g. `'^Unit (?P<id>\d+)\. (?P<title>.+)$'`. When ids are numbers (`2`, `4.2.1`), only headings whose numbers keep increasing count, so a numbered list in the text does not open a section. |
 | `structure.objective_id` | A line that starts with a match defines a learning objective. By default it belongs to the section it is printed in; a named group `section` says which section it belongs to instead, for a course that lists all objectives at the start of a chapter. |
 | `structure.knowledge_level` | Searched in the objective's line; named group `level`. Needs `objective_id`. |
-| `sources` | At least one entry: `file` (path relative to the course's source directory), `role` (`material`, `glossary` or `question_bank`), `authority` (`primary` sources define what is correct; `supplementary` ones add background and never override them) and, optionally, `noise_lines`. |
+| `sources` | At least one entry: `file` (path relative to the course's source directory, see below), `role` (`material`, `glossary` or `question_bank`), `authority` (`primary` sources define what is correct; `supplementary` ones add background and never override them) and, optionally, `noise_lines`. |
 | `sources[].noise_lines` | Regular expressions for the lines a file's layout repeats on every page (running header, footer, page number). A line is dropped from the extracted text only when a pattern matches all of it, so a sentence that merely starts like a header stays. Each file has its own list, because each has its own layout. |
 
 Unknown keys, invalid regular expressions and missing fields are errors: the app refuses to start and
@@ -57,6 +57,13 @@ poetry -C app run pytest -q
 1. Create `courses/<course_id>/course.yaml`; the app code does not change.
 2. Enable it with `APP_COURSES__ENABLED` in the root `.env`, a comma-separated list of course ids, e.g.
    `APP_COURSES__ENABLED=demo,istqb_ctfl`; `.env.example` enables only `demo`.
+3. Put its source files where the app finds them. The app reads `<source directory>/<course_id>/<file>`
+   (`APP_COURSES__SOURCE_DIR`). In Docker, Compose mounts this folder (`courses/`, for the committed demo
+   files) and one folder of a course whose material stays on this machine: set `LOCAL_COURSE_ID` to the
+   course id and `LOCAL_COURSE_SOURCES` to the folder holding the files its manifest lists, e.g.
+   `LOCAL_COURSE_SOURCES=C:/materials/istqb`. The files are not copied or renamed.
+4. Ingest it: `POST /v1/admin/courses/<course_id>/ingest` with the admin key (see the app's README), then
+   `GET /v1/courses/<course_id>` shows the stored counts.
 
 ## Why courses are data
 
@@ -95,6 +102,9 @@ For example, with the `demo` course:
    this file.
 4. The structure rules find `Unit 2. Taking a turn` as section `2` and `OBJ-02-03` as an objective
    of that section.
+5. The sections are cut into chunks, and ingestion stores the document, its sections, objectives and chunks
+   under the course id. Editing any of the manifest values used in steps 1 to 4 rebuilds the document on the
+   next ingestion; a new title or description does not.
 
 The ISTQB course goes through the same code; only its manifest differs.
 

@@ -1,10 +1,12 @@
 """PostgreSQL access: a connection pool that opens when the app starts and closes when it stops."""
 
 import asyncio
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol
 
 import psycopg
 from psycopg.conninfo import make_conninfo
+from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 
 from study_assistant.settings import DbSettings
@@ -18,8 +20,11 @@ class DatabaseUnavailableError(Exception):
     """The database could not be reached, or did not answer in time."""
 
 
+type Connection = psycopg.AsyncConnection[TupleRow]
+
+
 class Database(Protocol):
-    """What the rest of the app needs from its database: open, close and a readiness ping.
+    """What the rest of the app needs from its database: open, close, a readiness ping and connections.
 
     Code that uses the database (the readiness endpoint, the app's startup and shutdown) depends on
     this protocol, not on ``PostgresDatabase``. The running app passes ``PostgresDatabase``; unit tests
@@ -39,6 +44,10 @@ class Database(Protocol):
         """Run a trivial query; raise ``DatabaseUnavailableError`` when the database does not answer."""
         ...
 
+    def connection(self) -> AbstractAsyncContextManager[Connection]:
+        """Lend a connection for the duration of a ``with`` block; it goes back to the pool afterwards."""
+        ...
+
 
 class PostgresDatabase:
     """The real database: a psycopg connection pool built from the settings."""
@@ -46,7 +55,7 @@ class PostgresDatabase:
     def __init__(self, settings: DbSettings) -> None:
         """Keep the settings; nothing connects until ``open``."""
         self._settings = settings
-        self._pool: AsyncConnectionPool | None = None
+        self._pool: AsyncConnectionPool[Connection] | None = None
 
     async def open(self) -> None:
         """Create the pool and fill it in the background, so the app starts even while the database is down."""
@@ -86,3 +95,9 @@ class PostgresDatabase:
         except (psycopg.Error, TimeoutError) as exc:
             # Only the error type: database messages can carry connection details that do not belong in a response.
             raise DatabaseUnavailableError(type(exc).__name__) from exc
+
+    def connection(self) -> AbstractAsyncContextManager[Connection]:
+        """Lend a pooled connection; a block that ends with an error rolls back what it did not commit."""
+        if self._pool is None:
+            raise DatabaseUnavailableError("the connection pool is not open")
+        return self._pool.connection()

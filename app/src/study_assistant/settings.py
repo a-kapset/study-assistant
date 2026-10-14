@@ -7,9 +7,9 @@ and tests build ``Settings`` themselves, so every caller decides which configura
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from study_assistant.courses.models import COURSE_ID_PATTERN
@@ -47,6 +47,9 @@ class CoursesSettings(BaseModel):
     # Directory with one folder per course, each holding a course.yaml; relative paths start from the
     # working directory, and the default fits a run from app/.
     manifest_dir: Path = Path("../courses")
+    # Directory with one folder per course holding its source files, as <source_dir>/<course_id>/<file>.
+    # Kept apart from the manifests because real course material is never stored with them.
+    source_dir: Path = Path("../courses")
     # Course ids separated by commas, e.g. "demo,other_course"; none by default, so courses are enabled
     # only on purpose. NoDecode keeps the raw string, which would otherwise have to be a JSON list.
     enabled: Annotated[tuple[CourseId, ...], NoDecode] = ()
@@ -68,18 +71,57 @@ class CoursesSettings(BaseModel):
         return value
 
 
-class ServerRoleSettings(BaseModel):
-    """The database role the app server connects as; set as APP_SERVER_ROLE__<FIELD> for the migration run.
+class RoleSettings(BaseModel):
+    """A database login role that the migration run creates, or whose password it resets."""
 
-    The migration run creates the role (or updates its password) and lets it read and write rows only,
-    so the server cannot change the schema or do anything else the database owner can.
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=ROLE_NAME_PATTERN)
+    # No default: the role must get the password its users are given, not one invented here.
+    password: SecretStr
+
+
+class ServerRoleSettings(RoleSettings):
+    """The role the app server connects as; set as APP_SERVER_ROLE__<FIELD> for the migration run.
+
+    It may read and write rows only, so the server cannot change the schema or do anything else the owner can.
+    """
+
+    name: str = Field(default="app_rw", pattern=ROLE_NAME_PATTERN)
+
+
+class ReaderRoleSettings(RoleSettings):
+    """A role that can only read rows; set as APP_READER_ROLE__<FIELD> for the migration run.
+
+    For checks and inspection from outside the app: whatever such a client does, it cannot change the data.
+    """
+
+    name: str = Field(default="app_ro", pattern=ROLE_NAME_PATTERN)
+
+
+class IngestSettings(BaseModel):
+    """How course sources are cut into chunks; set as APP_INGEST__<FIELD>.
+
+    Both values are part of the chunker version stored with every document, so changing them re-chunks
+    every source on the next ingestion.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: str = Field(default="app_rw", pattern=ROLE_NAME_PATTERN)
-    # No default: the role must get the password the app server is given, not one invented here.
-    password: SecretStr
+    # Longest chunk, in characters.
+    chunk_size: int = Field(default=1000, ge=1)
+    # Characters that consecutive chunks of a section share; must be below chunk_size.
+    chunk_overlap: int = Field(default=100, ge=0)
+
+
+class AdminSettings(BaseModel):
+    """Access to the admin endpoints; set as APP_ADMIN__<FIELD>."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # No default: without a key the app does not start, so the admin endpoints are never open by accident.
+    # Sent by clients in the X-Admin-Key header.
+    api_key: SecretStr = Field(min_length=16)
 
 
 class MigrationSettings(BaseSettings):
@@ -105,6 +147,16 @@ class MigrationSettings(BaseSettings):
     # APP_SERVER_ROLE__*: the role the app server will connect as.
     server_role: ServerRoleSettings
 
+    # APP_READER_ROLE__*: the read-only role.
+    reader_role: ReaderRoleSettings
+
+    @model_validator(mode="after")
+    def _distinct_roles(self) -> Self:
+        """Refuse one name for both roles: the second grant would quietly change the first role's rights."""
+        if self.server_role.name == self.reader_role.name:
+            raise ValueError(f"the server role and the reader role have the same name {self.server_role.name!r}")
+        return self
+
 
 class Settings(BaseSettings):
     """Everything the app can be configured with.
@@ -128,6 +180,12 @@ class Settings(BaseSettings):
 
     # APP_COURSES__*: which courses are loaded.
     courses: CoursesSettings = Field(default_factory=CoursesSettings)
+
+    # APP_INGEST__*: how sources are chunked.
+    ingest: IngestSettings = Field(default_factory=IngestSettings)
+
+    # APP_ADMIN__*: access to the admin endpoints.
+    admin: AdminSettings
 
 
 class UnknownSettingsError(ValueError):
