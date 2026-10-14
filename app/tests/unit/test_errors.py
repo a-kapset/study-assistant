@@ -1,3 +1,4 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -26,6 +27,7 @@ def _app_with_failing_routes(settings: Settings, database: Database) -> FastAPI:
     return app
 
 
+@pytest.mark.covers("US-002", "AC-2")
 def test_unknown_path_answers_404_in_the_envelope(settings: Settings, fake_db: Database) -> None:
     """Guards the HTTP-error handler: without it, or with a wrong code, an unknown path loses the envelope."""
     with TestClient(build_app(settings, fake_db)) as client:
@@ -39,6 +41,7 @@ def test_unknown_path_answers_404_in_the_envelope(settings: Settings, fake_db: D
     }
 
 
+@pytest.mark.covers("US-002", "AC-3")
 def test_wrong_method_answers_405_and_keeps_allow(settings: Settings, fake_db: Database) -> None:
     """Guards passing the exception's headers on: dropping them would lose the Allow header a 405 must carry."""
     with TestClient(build_app(settings, fake_db)) as client:
@@ -49,6 +52,7 @@ def test_wrong_method_answers_405_and_keeps_allow(settings: Settings, fake_db: D
     assert response.json()["error"]["code"] == "method_not_allowed"
 
 
+@pytest.mark.covers("US-002", "AC-4")
 def test_invalid_request_lists_the_invalid_part_but_not_its_value(settings: Settings, fake_db: Database) -> None:
     """Guards the validation handler: 422 with where the input is wrong, never the value that was sent back."""
     with TestClient(_app_with_failing_routes(settings, fake_db)) as client:
@@ -62,6 +66,7 @@ def test_invalid_request_lists_the_invalid_part_but_not_its_value(settings: Sett
     assert CANARY not in response.text
 
 
+@pytest.mark.covers("US-002", "AC-5")
 def test_unhandled_exception_answers_500_without_its_details(settings: Settings, fake_db: Database) -> None:
     """Guards the middleware's catch-all: removing it or echoing the exception text would break this."""
     with TestClient(_app_with_failing_routes(settings, fake_db), raise_server_exceptions=False) as client:

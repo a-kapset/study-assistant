@@ -36,6 +36,7 @@ def _write(root: Path, folder: str, content: str) -> Path:
     return path
 
 
+@pytest.mark.covers("US-003", "AC-2")
 def test_enabled_courses_are_served_in_settings_order(settings: Settings, fake_db: Database, tmp_path: Path) -> None:
     """Guards the wiring and the contract: courses in the order enabled, only the summary fields, no internals."""
     for course_id in ("alpha", "beta", "unused"):
@@ -53,6 +54,7 @@ def test_enabled_courses_are_served_in_settings_order(settings: Settings, fake_d
     assert set(courses[0]) == {"id", "title", "description", "language"}
 
 
+@pytest.mark.covers("US-003", "AC-4")
 def test_bad_manifest_stops_the_app_from_being_built(settings: Settings, fake_db: Database, tmp_path: Path) -> None:
     """Guards startup: a course that fails to load must stop the app, not be skipped with a log line."""
     _write(tmp_path, "alpha", "id: [")
@@ -62,6 +64,7 @@ def test_bad_manifest_stops_the_app_from_being_built(settings: Settings, fake_db
         build_app(configured, fake_db)
 
 
+@pytest.mark.covers("US-003", "AC-2")
 def test_enabled_courses_are_read_as_a_comma_list(monkeypatch: pytest.MonkeyPatch) -> None:
     """Guards the variable format: without the raw-string handling the value would have to be a JSON list."""
     monkeypatch.setenv("APP_COURSES__ENABLED", " alpha, beta ,")
@@ -81,6 +84,7 @@ def test_unsafe_or_repeated_course_ids_are_refused(value: str) -> None:
         CoursesSettings.model_validate({"enabled": value})
 
 
+@pytest.mark.covers("US-003", "AC-4")
 def test_manifest_id_must_equal_its_folder(tmp_path: Path) -> None:
     """Guards a copied folder whose manifest still carries the old id, so two courses would share one id."""
     _write(tmp_path, "beta", yaml.safe_dump(_manifest("alpha")))
@@ -89,6 +93,7 @@ def test_manifest_id_must_equal_its_folder(tmp_path: Path) -> None:
         load_course(tmp_path, "beta")
 
 
+@pytest.mark.covers("US-003", "AC-1")
 def test_course_without_learning_objectives_is_loaded(tmp_path: Path) -> None:
     """Guards courses built from ordinary books: only section headings may be required, objectives are optional."""
     _write(
@@ -102,6 +107,7 @@ def test_course_without_learning_objectives_is_loaded(tmp_path: Path) -> None:
     assert course.structure.objective_id is None
 
 
+@pytest.mark.covers("US-003", "AC-4")
 @pytest.mark.parametrize(
     ("content", "reason"),
     [

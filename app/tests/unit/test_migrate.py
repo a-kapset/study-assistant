@@ -89,6 +89,7 @@ def _apply(conn: _FakeConnection, migrations: list[Migration]) -> list[str]:
     return apply_migrations(cast(psycopg.Connection, conn), migrations)
 
 
+@pytest.mark.covers("US-001", "AC-7")
 def test_files_load_in_number_order_with_name_and_hash(tmp_path: Path) -> None:
     """Guards ordering by number (not by directory listing), the stored name and the hash of the exact bytes."""
     _write(tmp_path, {"002_second.sql": "SELECT 2;", "001_first.sql": "SELECT 1;", "notes.txt": "not a migration"})
@@ -102,6 +103,7 @@ def test_files_load_in_number_order_with_name_and_hash(tmp_path: Path) -> None:
     assert migrations[0].sha256 == hashlib.sha256(b"SELECT 1;").hexdigest()
 
 
+@pytest.mark.covers("US-001", "AC-8")
 @pytest.mark.parametrize("name", ["1_short.sql", "003-dash.sql", "003_Upper.sql", "003_.sql", "v003_prefix.sql"])
 def test_misnamed_sql_file_stops_the_run(tmp_path: Path, name: str) -> None:
     """Guards the name rule: a misnamed file must stop the run instead of being skipped or applied out of order."""
@@ -111,6 +113,7 @@ def test_misnamed_sql_file_stops_the_run(tmp_path: Path, name: str) -> None:
         load_migrations(tmp_path)
 
 
+@pytest.mark.covers("US-001", "AC-8")
 @pytest.mark.parametrize(
     "names",
     [
@@ -134,6 +137,7 @@ def test_packaged_migrations_are_found_and_numbered() -> None:
     assert [m.name for m in migrations][:2] == ["001_vector", "002_corpus"]
 
 
+@pytest.mark.covers("US-001", "AC-7")
 def test_only_files_missing_from_the_journal_are_applied_in_order() -> None:
     """Guards re-running: applied files must be skipped and new ones applied in order and written to the journal."""
     first, second, third = (_migration(n, f"00{n}_m", f"CREATE TABLE t{n} ();") for n in (1, 2, 3))
@@ -146,6 +150,7 @@ def test_only_files_missing_from_the_journal_are_applied_in_order() -> None:
     assert conn.journal == {1: first.sha256, 2: second.sha256, 3: third.sha256}
 
 
+@pytest.mark.covers("US-001", "AC-7")
 def test_nothing_is_applied_when_the_journal_is_complete() -> None:
     """Guards idempotence: a second run over the same files must change nothing."""
     first = _migration(1, "001_m", "CREATE TABLE t ();")
@@ -155,6 +160,7 @@ def test_nothing_is_applied_when_the_journal_is_complete() -> None:
     assert first.sql not in conn.executed
 
 
+@pytest.mark.covers("US-001", "AC-8")
 def test_changed_applied_file_stops_the_run() -> None:
     """Guards the hash check: an edited applied file would leave old and new databases with different schemas."""
     edited = _migration(1, "001_m", "CREATE TABLE t (); -- edited")
@@ -166,6 +172,7 @@ def test_changed_applied_file_stops_the_run() -> None:
     assert newer.sql not in conn.executed
 
 
+@pytest.mark.covers("US-001", "AC-8")
 def test_database_ahead_of_the_code_stops_the_run() -> None:
     """Guards running older code on a newer schema: a journal entry with no file must stop the run."""
     first = _migration(1, "001_m", "CREATE TABLE t ();")
@@ -175,6 +182,7 @@ def test_database_ahead_of_the_code_stops_the_run() -> None:
         _apply(conn, [first])
 
 
+@pytest.mark.covers("US-001", "AC-7")
 def test_failing_file_is_named_and_later_files_are_not_applied() -> None:
     """Guards the error path: the failing file must be named, left out of the journal, and stop the files after it."""
     broken = _migration(1, "001_broken", "CREATE TABLE t (a nosuchtype);")
@@ -187,6 +195,7 @@ def test_failing_file_is_named_and_later_files_are_not_applied() -> None:
     assert later.sql not in conn.executed
 
 
+@pytest.mark.covers("US-001", "AC-9")
 def test_app_role_named_like_the_owner_is_refused() -> None:
     """Guards the owner check: the same name would give the owner the app's password and the app a superuser."""
     conn = _FakeConnection(journal={})
@@ -217,6 +226,7 @@ def test_reader_role_may_only_read_rows() -> None:
     ]
 
 
+@pytest.mark.covers("US-001", "AC-9")
 def test_server_role_starts_from_no_rights_before_its_grants() -> None:
     """Guards the reset: without it, a role that had more rights under an earlier name or setup would keep them."""
     role = ServerRoleSettings(password=SecretStr("app-password"))

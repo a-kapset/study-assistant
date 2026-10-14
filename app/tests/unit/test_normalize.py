@@ -30,6 +30,7 @@ def _reference_text(markdown: str) -> str:
     return " ".join(text.split())
 
 
+@pytest.mark.covers("US-004", "AC-9", "AC-10")
 def test_demo_pdf_normalizes_to_its_known_text() -> None:
     """Guards the whole cleaning path on real engine output against the source it was built from.
 
@@ -52,6 +53,7 @@ def test_demo_pdf_normalizes_to_its_known_text() -> None:
     assert text == _reference_text((DEMO_DIR / "vardolin_rules.md").read_text(encoding="utf-8"))
 
 
+@pytest.mark.covers("US-004", "AC-10")
 @pytest.mark.parametrize(
     ("broken", "vocabulary", "expected"),
     [
@@ -69,11 +71,13 @@ def test_broken_word_is_repaired_from_document_evidence(broken: str, vocabulary:
     assert join_broken_words(f"a {broken} b", frozenset(vocabulary)) == f"a {expected} b"
 
 
+@pytest.mark.covers("US-004", "AC-10")
 def test_broken_word_is_not_evidence_for_itself() -> None:
     """Guards the vocabulary: counting the halves of a broken word as words would always keep a false hyphen."""
     assert build_vocabulary(["score" + MARK + "sheet", "the rules"]) == frozenset({"the", "rules"})
 
 
+@pytest.mark.covers("US-004", "AC-10")
 def test_noise_patterns_remove_whole_lines_only() -> None:
     """Guards against prefix matching: a sentence that only starts like a footer must stay in the text."""
     text = "Page 2 of 4 barges stay on the board.\nPage 2 of 4"
@@ -81,6 +85,7 @@ def test_noise_patterns_remove_whole_lines_only() -> None:
     assert clean_layout(text, FOOTER) == "Page 2 of 4 barges stay on the board."
 
 
+@pytest.mark.covers("US-004", "AC-10")
 def test_layout_noise_is_removed_and_paragraph_breaks_kept() -> None:
     """Guards the layout rules: line-end variants (a lone CR too), inner spacing, blank-line runs and blank edges."""
     text = "\r\n  First\tline  here \rthird\r\nsecond\u00a0line\r\r\n\n\nNext paragraph  \n\n"
@@ -88,6 +93,7 @@ def test_layout_noise_is_removed_and_paragraph_breaks_kept() -> None:
     assert clean_layout(text, []) == "First line here\nthird\nsecond line\n\nNext paragraph"
 
 
+@pytest.mark.covers("US-004", "AC-10")
 def test_letters_are_brought_to_one_unicode_form() -> None:
     """Guards against two identical-looking words staying different byte sequences."""
     assert normalize_text("cafe\u0301", [], frozenset()) == "caf\u00e9"
@@ -103,6 +109,7 @@ _DIRTY_TEXT = st.lists(st.one_of(st.text(max_size=5), _DIRTY_PIECES), max_size=3
 @settings(max_examples=300, derandomize=True, deadline=None)
 @given(_DIRTY_TEXT)
 # A stray mark between a letter and a combining accent: deleting it would let the accent compose on a second pass.
+@pytest.mark.covers("US-004", "AC-10")
 @example("e" + MARK + "\u0301")
 def test_normalizing_twice_changes_nothing(text: str) -> None:
     """Guards the output's cleanliness by the module's own rules: if cleaning it again changes it, one rule left

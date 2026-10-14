@@ -55,6 +55,7 @@ def _chunk(structure: DocumentStructure, size: ChunkSize = DEFAULT_SIZE) -> tupl
     return chunk_source(structure, course_id="alpha", language="en", authority="primary", size=size)
 
 
+@pytest.mark.covers("US-004", "AC-11")
 def test_demo_course_chunks_carry_their_section_objectives_and_pages() -> None:
     """Guards the whole chain on the real demo PDF: sections, objectives, pages, the size cap and provenance."""
     chunks = _demo_chunks(DEFAULT_SIZE)
@@ -74,6 +75,7 @@ def test_demo_course_chunks_carry_their_section_objectives_and_pages() -> None:
     } == {("demo", "en", "primary", source_hash, chunker_version(DEFAULT_SIZE))}
 
 
+@pytest.mark.covers("US-004", "AC-12")
 def test_demo_chunking_matches_its_recorded_fingerprint() -> None:
     """Guards the processing revision: changed chunks under an unchanged revision would look like the old corpus.
 
@@ -90,6 +92,7 @@ def test_demo_chunking_matches_its_recorded_fingerprint() -> None:
     )
 
 
+@pytest.mark.covers("US-004", "AC-11")
 def test_objectives_of_enclosing_sections_reach_nested_chunks() -> None:
     """Guards objective scope: a subsection inherits its parents' objectives, a sibling section does not."""
     structure = _structure(
@@ -116,6 +119,7 @@ def test_objectives_of_enclosing_sections_reach_nested_chunks() -> None:
     ]
 
 
+@pytest.mark.covers("US-004", "AC-11")
 def test_a_chunk_over_a_page_break_names_both_pages() -> None:
     """Guards citations: the first and the last page of a chunk come from the lines its text starts and ends on."""
     structure = _structure(_section("1", None, (1, "1 Basics"), (1, "end of page one"), (2, "start of page two")))
@@ -125,6 +129,7 @@ def test_a_chunk_over_a_page_break_names_both_pages() -> None:
     assert (chunk.page_start, chunk.page_end) == (1, 2)
 
 
+@pytest.mark.covers("US-004", "AC-12")
 def test_chunk_id_changes_with_every_field_and_fields_cannot_run_together() -> None:
     """Guards id uniqueness: each field must count, and "1" + "11" must not equal "11" + "1" once joined."""
     base = chunk_id("alpha", "a" * 64, "1", 11, "text")
@@ -198,6 +203,7 @@ _SIZES = st.integers(min_value=20, max_value=120).flatmap(
 )
 
 
+@pytest.mark.covers("US-004", "AC-11")
 @settings(max_examples=200, derandomize=True, deadline=None)
 @given(_generated(), _SIZES)
 def test_chunks_cover_each_section_in_order_within_the_cap_and_cite_true_pages(

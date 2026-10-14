@@ -57,6 +57,7 @@ def _outline(structure: DocumentStructure) -> list[tuple[str | None, str, str | 
     return [(section.id, section.title, section.parent_id) for section in structure.sections]
 
 
+@pytest.mark.covers("US-004", "AC-13", "AC-15", "AC-16")
 def test_demo_course_structure_is_found_in_its_pdf() -> None:
     """Guards the whole path on real engine output: four units with their titles and every objective in its unit."""
     course = load_course(REPO_COURSES, "demo")
@@ -78,6 +79,7 @@ def test_demo_course_structure_is_found_in_its_pdf() -> None:
     assert all(objective.knowledge_level is None for objective in structure.objectives)
 
 
+@pytest.mark.covers("US-004", "AC-16")
 def test_numbered_list_items_and_out_of_order_headings_stay_text() -> None:
     """Guards the false-heading rule: a numbered list or a heading repeated out of order must not open a section."""
     document = _document(
@@ -96,6 +98,7 @@ def test_numbered_list_items_and_out_of_order_headings_stay_text() -> None:
     ]
 
 
+@pytest.mark.covers("US-004", "AC-16")
 def test_every_line_is_in_exactly_one_section_with_its_page() -> None:
     """Guards against text lost or duplicated between sections, and against pages without text breaking numbering."""
     document = _document("Foreword\n1 One\nfirst", "", "second\n2 Two\nthird")
@@ -107,6 +110,7 @@ def test_every_line_is_in_exactly_one_section_with_its_page() -> None:
     assert structure.sections[0].id is None
 
 
+@pytest.mark.covers("US-004", "AC-16")
 def test_sections_know_their_nearest_enclosing_section() -> None:
     """Guards the parent links that objectives of a parent section are later inherited through."""
     document = _document("1 Basics\n1.1 Terms\n1.1.1 Words\n1.2 Errors\n2 Lifecycle\n2.1.1 Deep")
@@ -123,6 +127,7 @@ def test_sections_know_their_nearest_enclosing_section() -> None:
     ]
 
 
+@pytest.mark.covers("US-004", "AC-13")
 def test_objective_goes_to_the_section_its_id_names_with_its_level() -> None:
     """Guards objectives listed at a chapter's start: they belong to the section in their id, not where printed."""
     document = _document(
@@ -138,6 +143,7 @@ def test_objective_goes_to_the_section_its_id_names_with_its_level() -> None:
     ]
 
 
+@pytest.mark.covers("US-004", "AC-13")
 def test_objective_without_a_section_group_belongs_where_it_is_defined() -> None:
     """Guards courses that list objectives inside their sections: the defining section is the objective's own."""
     document = _document("Unit 1. Setup\nOBJ-01-01 Describe the board\nUnit 2. Turns\nOBJ-02-01 List the phases")
@@ -147,6 +153,7 @@ def test_objective_without_a_section_group_belongs_where_it_is_defined() -> None
     assert [(o.id, o.section_id) for o in structure.objectives] == [("OBJ-01-01", "1"), ("OBJ-02-01", "2")]
 
 
+@pytest.mark.covers("US-004", "AC-13")
 def test_objective_naming_a_missing_section_is_an_error() -> None:
     """Guards against an objective silently attached to nothing when the rules and the text disagree."""
     document = _document("1 Basics\nLO-1.3.1 [L1] Recall a term\n1.1 Terms")
@@ -155,6 +162,7 @@ def test_objective_naming_a_missing_section_is_an_error() -> None:
         extract_structure(document, DOTTED)
 
 
+@pytest.mark.covers("US-004", "AC-16")
 def test_ids_that_are_not_numbers_keep_their_first_heading() -> None:
     """Guards courses with lettered sections: no ordering applies, and a repeated id is text, not a new section."""
     rules = StructureRules.model_validate({"section_heading": r"^Appendix (?P<id>[A-Z])\. (?P<title>.+)$"})
@@ -165,6 +173,7 @@ def test_ids_that_are_not_numbers_keep_their_first_heading() -> None:
     assert [section.id for section in structure.sections] == ["B", "A"]
 
 
+@pytest.mark.covers("US-004", "AC-16")
 @pytest.mark.parametrize(
     ("ids", "expected"),
     [
@@ -258,6 +267,7 @@ def _book(draw: st.DrawFn) -> _Generated:
     return _Generated(draw(_paginate(lines)), tuple(sections), ())
 
 
+@pytest.mark.covers("US-004", "AC-13", "AC-15", "AC-16")
 @settings(max_examples=200, derandomize=True, deadline=None)
 @given(st.one_of(_unit_course().map(lambda g: (g, UNITS)), _book().map(lambda g: (g, BOOK))))
 def test_generated_courses_give_back_the_structure_they_were_built_from(
@@ -280,6 +290,7 @@ def test_generated_courses_give_back_the_structure_they_were_built_from(
     assert [(o.id, o.section_id) for o in structure.objectives] == list(generated.objectives)
 
 
+@pytest.mark.covers("US-004", "AC-16")
 def test_heading_pattern_is_matched_against_the_whole_line() -> None:
     """Guards against a heading found inside a sentence when a course's pattern is not anchored."""
     rules = StructureRules.model_validate({"section_heading": r"Part (?P<id>\d+) (?P<title>\w+)"})

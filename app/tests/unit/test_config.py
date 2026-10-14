@@ -1,5 +1,6 @@
 from importlib.metadata import version
 
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -10,6 +11,7 @@ from study_assistant.settings import Settings
 CANARY = "canary-not-a-real-secret"
 
 
+@pytest.mark.covers("US-001", "AC-4")
 def test_config_reports_version_and_effective_settings(settings: Settings, fake_db: Database) -> None:
     """Guards the wiring: the endpoint must show the settings the app was built with and the real version."""
     configured = Settings(log_level="DEBUG", git_commit="abc123", db=settings.db, admin=settings.admin)
@@ -31,6 +33,7 @@ class _SettingsWithSecret(Settings):
     api_key: SecretStr = SecretStr(CANARY)
 
 
+@pytest.mark.covers("US-001", "AC-4")
 def test_config_never_shows_a_secret(settings: Settings, fake_db: Database) -> None:
     """Guards the masking: dumping settings in Python mode or unwrapping a secret would leak it here."""
     with TestClient(build_app(_SettingsWithSecret(db=settings.db, admin=settings.admin), fake_db)) as client:

@@ -9,6 +9,7 @@ from study_assistant.db import Database
 from study_assistant.settings import Settings
 
 
+@pytest.mark.covers("US-002", "AC-1")
 def test_well_formed_incoming_id_is_kept_in_header_and_body(settings: Settings, fake_db: Database) -> None:
     """Guards accepting the client's id: ignoring it would break matching a client's request with the app's logs."""
     with TestClient(build_app(settings, fake_db)) as client:
@@ -18,6 +19,7 @@ def test_well_formed_incoming_id_is_kept_in_header_and_body(settings: Settings, 
     assert response.json()["request_id"] == "case-042.rep_3"
 
 
+@pytest.mark.covers("US-002", "AC-1")
 @pytest.mark.parametrize("incoming", ["bad id", "a;b", "x" * 129, ""])
 def test_malformed_incoming_id_is_replaced_by_a_new_uuid4(incoming: str, settings: Settings, fake_db: Database) -> None:
     """Guards the id format check: a looser pattern or no length limit would let these through unchanged."""
@@ -29,6 +31,7 @@ def test_malformed_incoming_id_is_replaced_by_a_new_uuid4(incoming: str, setting
     assert uuid.UUID(returned).version == 4
 
 
+@pytest.mark.covers("US-002", "AC-1")
 def test_each_request_without_an_id_gets_its_own(settings: Settings, fake_db: Database) -> None:
     """Guards generating the id per request: one id made once and reused would merge requests in the logs."""
     with TestClient(build_app(settings, fake_db)) as client:
@@ -39,6 +42,8 @@ def test_each_request_without_an_id_gets_its_own(settings: Settings, fake_db: Da
     assert uuid.UUID(first).version == 4
 
 
+@pytest.mark.covers("US-001", "AC-5")
+@pytest.mark.covers("US-002", "AC-6")
 def test_unhandled_exception_is_logged_once_as_json_with_the_request_id(
     capsys: pytest.CaptureFixture[str], settings: Settings, fake_db: Database
 ) -> None:

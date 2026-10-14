@@ -28,6 +28,7 @@ def _key(settings: Settings) -> dict[str, str]:
     return {"X-Admin-Key": settings.admin.api_key.get_secret_value()}
 
 
+@pytest.mark.covers("US-004", "AC-1")
 @pytest.mark.parametrize("headers", [{}, {"X-Admin-Key": "not-the-admin-key"}, {"X-Admin-Key": ""}])
 def test_ingest_without_the_right_key_is_refused_and_writes_nothing(
     settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore, headers: dict[str, str]
@@ -41,6 +42,7 @@ def test_ingest_without_the_right_key_is_refused_and_writes_nothing(
     assert fake_store.writers_opened == 0
 
 
+@pytest.mark.covers("US-004", "AC-1")
 def test_key_is_checked_before_the_course_is_looked_up(
     settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore
 ) -> None:
@@ -63,6 +65,7 @@ def test_ingest_of_a_course_not_served_answers_404(
     assert fake_store.writers_opened == 0
 
 
+@pytest.mark.covers("US-004", "AC-2")
 def test_ingest_answers_with_the_report(settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore) -> None:
     """Guards the contract: per-file outcomes, removed files and the stored counts, nothing else."""
     with _client(settings, fake_db, fake_store) as client:
@@ -77,6 +80,7 @@ def test_ingest_answers_with_the_report(settings: Settings, fake_db: FakeDatabas
     }
 
 
+@pytest.mark.covers("US-004", "AC-8")
 def test_source_that_cannot_be_read_answers_422_naming_the_file(
     settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore, tmp_path: Path
 ) -> None:
@@ -90,6 +94,7 @@ def test_source_that_cannot_be_read_answers_422_naming_the_file(
     assert "vardolin_rules.pdf" in error["message"]
 
 
+@pytest.mark.covers("US-004", "AC-2")
 def test_course_detail_shows_the_stored_counts(
     settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore
 ) -> None:
@@ -105,6 +110,7 @@ def test_course_detail_shows_the_stored_counts(
     assert after.json()["corpus"] == {"documents": 1, "sections": 4, "learning_objectives": 11, "chunks": 12}
 
 
+@pytest.mark.covers("US-003", "AC-3")
 def test_course_detail_of_a_course_not_served_answers_404(
     settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore
 ) -> None:

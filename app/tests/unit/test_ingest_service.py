@@ -50,6 +50,7 @@ def _ingestor(store: FakeCorpusStore, source_dir: Path = REPO_COURSES) -> Course
     return CourseIngestor(store, source_dir, SIZE)
 
 
+@pytest.mark.covers("US-004", "AC-2")
 async def test_first_ingestion_adds_the_document_and_reports_the_stored_counts(fake_store: FakeCorpusStore) -> None:
     """Guards the add path and the report: a new document must be written whole and counted from the store."""
     report = await _ingestor(fake_store).ingest(_demo())
@@ -60,6 +61,7 @@ async def test_first_ingestion_adds_the_document_and_reports_the_stored_counts(f
     assert fake_store.courses["demo"] == ("Demo: The Rules of Vardolin", "en")
 
 
+@pytest.mark.covers("US-004", "AC-3")
 async def test_second_ingestion_of_the_same_files_writes_nothing(fake_store: FakeCorpusStore) -> None:
     """Guards idempotency: an unchanged document must be kept, not deleted and written again."""
     ingestor = _ingestor(fake_store)
@@ -75,6 +77,7 @@ async def test_second_ingestion_of_the_same_files_writes_nothing(fake_store: Fak
     assert report.corpus == DEMO_COUNTS
 
 
+@pytest.mark.covers("US-004", "AC-4")
 async def test_changed_document_is_deleted_before_it_is_written_again(fake_store: FakeCorpusStore) -> None:
     """Guards the replace path: writing without deleting first would keep the old edition's rows or fail on keys."""
     ingestor = _ingestor(fake_store)
@@ -92,6 +95,7 @@ async def test_changed_document_is_deleted_before_it_is_written_again(fake_store
     assert report.corpus == DEMO_COUNTS
 
 
+@pytest.mark.covers("US-004", "AC-6")
 async def test_document_no_longer_in_the_manifest_is_deleted(fake_store: FakeCorpusStore) -> None:
     """Guards removal: a source dropped from the manifest must not stay searchable."""
     ingestor = _ingestor(fake_store)
@@ -106,6 +110,7 @@ async def test_document_no_longer_in_the_manifest_is_deleted(fake_store: FakeCor
     assert report.corpus == DEMO_COUNTS
 
 
+@pytest.mark.covers("US-004", "AC-2")
 async def test_reported_counts_are_read_back_from_the_store(
     fake_store: FakeCorpusStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -118,6 +123,7 @@ async def test_reported_counts_are_read_back_from_the_store(
     assert report.corpus == stored
 
 
+@pytest.mark.covers("US-004", "AC-8")
 async def test_a_missing_later_source_stops_the_run_before_anything_is_written(
     fake_store: FakeCorpusStore, tmp_path: Path
 ) -> None:
@@ -132,6 +138,7 @@ async def test_a_missing_later_source_stops_the_run_before_anything_is_written(
     assert fake_store.writers_opened == 0
 
 
+@pytest.mark.covers("US-004", "AC-8")
 def test_source_that_is_not_a_pdf_is_refused(tmp_path: Path) -> None:
     """Guards the format check: another format would reach the PDF parser and fail with an obscure error."""
     (tmp_path / "notes.md").write_text("Unit 1. Notes", encoding="utf-8")
@@ -142,6 +149,7 @@ def test_source_that_is_not_a_pdf_is_refused(tmp_path: Path) -> None:
         prepare_document(demo, source, tmp_path, SIZE)
 
 
+@pytest.mark.covers("US-004", "AC-14")
 def test_question_bank_sources_are_not_chunked() -> None:
     """Guards the role filter: a question bank is not course text, and its answers must not become chunks."""
     demo = _demo()
@@ -152,6 +160,7 @@ def test_question_bank_sources_are_not_chunked() -> None:
     assert [document.source.file for document in prepared] == [DEMO_FILE]
 
 
+@pytest.mark.covers("US-004", "AC-3")
 def test_outcome_of_a_new_and_of_an_identical_document() -> None:
     """Guards the two simple cases: a new document is added, an identical one is kept."""
     edition = Edition("a", "b", "c", "d", "e", "f")
@@ -160,6 +169,7 @@ def test_outcome_of_a_new_and_of_an_identical_document() -> None:
     assert outcome(dataclasses.replace(edition), edition) == "unchanged"
 
 
+@pytest.mark.covers("US-004", "AC-4")
 @pytest.mark.parametrize("field", [field.name for field in dataclasses.fields(Edition)])
 def test_any_change_in_what_a_document_was_made_from_replaces_it(field: str) -> None:
     """Guards the comparison: checking only the file hash would keep rows made by an older parser or rules."""
@@ -191,6 +201,7 @@ def _changed_rules(manifest: CourseManifest, change: str) -> CourseManifest:
     return manifest.model_copy(update={"structure": rules})
 
 
+@pytest.mark.covers("US-004", "AC-4")
 @pytest.mark.parametrize(
     "change", ["language", "role", "authority", "noise_lines", "section_heading", "objective_id", "knowledge_level"]
 )
@@ -202,6 +213,7 @@ def test_every_rule_that_shapes_a_document_changes_its_rules_hash(change: str) -
     assert rules_hash(changed, changed.sources[0]) != rules_hash(demo, demo.sources[0])
 
 
+@pytest.mark.covers("US-004", "AC-5")
 def test_title_and_description_do_not_rebuild_documents() -> None:
     """Guards the hash's scope: wording shown to learners does not change any stored row, so it must not re-ingest."""
     demo = _demo()

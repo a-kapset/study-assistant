@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from conftest import FakeDatabase
 
 
+@pytest.mark.covers("US-001", "AC-2")
 def test_ready_answers_200_with_each_check_when_the_database_answers(settings: Settings, fake_db: FakeDatabase) -> None:
     """Guards the success body: a renamed field or a missing check would break every readiness probe."""
     with TestClient(build_app(settings, fake_db)) as client:
@@ -19,6 +20,7 @@ def test_ready_answers_200_with_each_check_when_the_database_answers(settings: S
     assert response.json() == {"status": "ok", "checks": {"db": "ok"}}
 
 
+@pytest.mark.covers("US-001", "AC-2")
 def test_ready_answers_503_in_the_envelope_naming_the_database(settings: Settings, fake_db: FakeDatabase) -> None:
     """Guards the failure path: a 200, another status or an envelope without the failed check would hide the cause."""
     fake_db.up = False
@@ -39,6 +41,7 @@ def test_ready_answers_503_in_the_envelope_naming_the_database(settings: Setting
     assert response.headers["X-Request-ID"] == "ready-1"
 
 
+@pytest.mark.covers("US-001", "AC-1")
 def test_health_stays_200_while_the_database_is_down(settings: Settings, fake_db: FakeDatabase) -> None:
     """Guards liveness: if /health checked the database, an orchestrator would restart a healthy process."""
     fake_db.up = False
@@ -49,6 +52,7 @@ def test_health_stays_200_while_the_database_is_down(settings: Settings, fake_db
     assert response.status_code == 200
 
 
+@pytest.mark.covers("US-001", "AC-2")
 def test_a_bug_in_the_check_is_a_500_not_a_503(
     settings: Settings, fake_db: FakeDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:

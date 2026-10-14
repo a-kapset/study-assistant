@@ -24,6 +24,7 @@ def _blank_pdf(path: Path, pages: int) -> Path:
     return path
 
 
+@pytest.mark.covers("US-004", "AC-9")
 def test_every_page_comes_back_in_order_numbered_from_one() -> None:
     """Guards page numbering: a skipped, reordered or zero-based page breaks every "page N" reference."""
     document = parse_pdf(DEMO_PDF)
@@ -32,6 +33,7 @@ def test_every_page_comes_back_in_order_numbered_from_one() -> None:
     assert document.pages[0].text.startswith("The Rules of Vardolin")
 
 
+@pytest.mark.covers("US-004", "AC-9")
 def test_pages_without_a_text_layer_are_kept_with_empty_text(tmp_path: Path) -> None:
     """Guards against dropping empty pages: a scan must stay visible so it can be reported, not vanish."""
     document = parse_pdf(_blank_pdf(tmp_path / "scan.pdf", pages=2))
@@ -39,6 +41,7 @@ def test_pages_without_a_text_layer_are_kept_with_empty_text(tmp_path: Path) -> 
     assert [(page.number, page.text) for page in document.pages] == [(1, ""), (2, "")]
 
 
+@pytest.mark.covers("US-004", "AC-8")
 def test_unreadable_file_raises_an_error_naming_it(tmp_path: Path) -> None:
     """Guards against a broken source being loaded as an empty document instead of failing with its name."""
     path = tmp_path / "broken.pdf"

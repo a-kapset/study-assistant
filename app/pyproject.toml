@@ -108,3 +108,6 @@ minversion = "9.0"
 testpaths = ["tests"]
 # importlib mode: test files need no __init__.py and are not put on sys.path.
 addopts = ["--import-mode=importlib", "--strict-markers"]
+markers = [
+    "covers(story, *criteria): the user story and the acceptance criteria this test proves, e.g. covers(\"US-001\", \"AC-2\")",
+]
