@@ -51,8 +51,12 @@ Ask in this order and stop at the first yes:
 4. Is it about quality, or does it need a dataset, repeated runs or a model as a judge? → harness evaluation.
 5. Is the question "would we notice if this broke"? → harness experiment.
 
-The same property may be checked at two levels when each catches something the other cannot; the
-table below then says what each one adds.
+The same property is checked at two levels only when each catches something the other cannot; the
+table below then says what each one adds. Levels reinforce each other: the lower level covers many
+cases cheaply and may rest on fakes, and the higher level checks exactly what those fakes assume,
+against the real dependency, in a few cases. Checks of one rule at different levels may look at
+different sides of it, but never expect conflicting behaviour. When a rule's behaviour changes, all
+its checks run, including the API checks against a stack rebuilt from the changed code.
 
 ## How the harness reaches the app
 
