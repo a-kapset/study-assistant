@@ -37,6 +37,7 @@ async def _ingest_demo(sut: SutTransport, headers: dict[str, str]) -> dict[str, 
     return observation.body_json
 
 
+@pytest.mark.covers("US-004", "AC-1")
 @pytest.mark.parametrize("headers", [{}, {"X-Admin-Key": "not-the-admin-key"}])
 async def test_ingest_without_the_admin_key_is_refused(sut: SutTransport, headers: dict[str, str]) -> None:
     """Without the admin key, or with a wrong one, ingest must answer 401.
@@ -53,6 +54,7 @@ async def test_ingest_without_the_admin_key_is_refused(sut: SutTransport, header
     assert error["code"] == "unauthorized"
 
 
+@pytest.mark.covers("US-004", "AC-3")
 async def test_repeated_ingest_keeps_the_same_chunks(
     sut: SutTransport, admin_headers: dict[str, str], corpus: CorpusReader
 ) -> None:
@@ -70,6 +72,7 @@ async def test_repeated_ingest_keeps_the_same_chunks(
     assert corpus.chunk_ids("demo") == chunks_before
 
 
+@pytest.mark.covers("US-004", "AC-2")
 async def test_reported_counts_are_the_stored_rows(
     sut: SutTransport, admin_headers: dict[str, str], corpus: CorpusReader
 ) -> None:
@@ -88,6 +91,7 @@ async def test_reported_counts_are_the_stored_rows(
     assert {name: stored[name] for name in DEMO_STRUCTURE} == DEMO_STRUCTURE
 
 
+@pytest.mark.covers("US-004", "AC-6")
 async def test_document_dropped_from_the_manifest_is_deleted(
     sut: SutTransport, admin_headers: dict[str, str], corpus: CorpusReader, test_data: CorpusTestData
 ) -> None:
@@ -106,6 +110,7 @@ async def test_document_dropped_from_the_manifest_is_deleted(
     assert set(corpus.documents("demo")) == {DEMO_FILE}
 
 
+@pytest.mark.covers("US-004", "AC-4")
 async def test_changed_document_is_replaced(
     sut: SutTransport, admin_headers: dict[str, str], corpus: CorpusReader, test_data: CorpusTestData
 ) -> None:
@@ -127,6 +132,7 @@ async def test_changed_document_is_replaced(
     assert corpus.chunk_ids("demo") == chunks_before
 
 
+@pytest.mark.covers("US-004", "AC-7")
 async def test_ingest_leaves_other_courses_untouched(
     sut: SutTransport, admin_headers: dict[str, str], corpus: CorpusReader, test_data: CorpusTestData
 ) -> None:

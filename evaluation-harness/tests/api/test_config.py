@@ -1,8 +1,11 @@
 """The effective-configuration endpoint of the running system under test."""
 
+import pytest
+
 from evalharness.transport import SutTransport
 
 
+@pytest.mark.covers("US-001", "AC-4")
 async def test_config_reports_version_and_settings(sut: SutTransport) -> None:
     """Guards the configuration contract a run will record: 200, the app version and its settings, nothing else."""
     observation = await sut.request("GET", "/v1/config")

@@ -1,8 +1,11 @@
 """The readiness endpoint of the running system under test, with its real database."""
 
+import pytest
+
 from evalharness.transport import SutTransport
 
 
+@pytest.mark.covers("US-001", "AC-2")
 async def test_ready_reports_the_database_ok(sut: SutTransport) -> None:
     """Guards the deployed wiring: a wrong host, password or missing driver turns readiness into a 503 here."""
     observation = await sut.request("GET", "/ready")
