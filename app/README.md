@@ -56,6 +56,7 @@ app/
 │       ├── admin.py        # endpoints behind the admin key: course ingestion
 │       └── config.py
 └── tests/
+    ├── integration/        # the real database driver without a server: startup and readiness while the database is down
     └── unit/               # in-process tests: the API through FastAPI's TestClient, parsing on the demo course PDF
 ```
 
