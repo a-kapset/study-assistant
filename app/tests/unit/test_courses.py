@@ -3,12 +3,12 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 
 from study_assistant.composition import build_app
 from study_assistant.courses.registry import CourseConfigError, load_course, load_courses
 from study_assistant.db import Database
-from study_assistant.settings import AdminSettings, CoursesSettings, DbSettings, Settings
+from study_assistant.settings import CoursesSettings, Settings
 
 # The repository's own course folder: app/tests/unit/<this file> -> repository root.
 REPO_COURSES = Path(__file__).resolve().parents[3] / "courses"
@@ -65,16 +65,13 @@ def test_bad_manifest_stops_the_app_from_being_built(settings: Settings, fake_db
 
 
 @pytest.mark.covers("US-003", "AC-2")
-def test_enabled_courses_are_read_as_a_comma_list(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enabled_courses_are_read_as_a_comma_list(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Guards the variable format: without the raw-string handling the value would have to be a JSON list."""
     monkeypatch.setenv("APP_COURSES__ENABLED", " alpha, beta ,")
 
-    settings = Settings(
-        db=DbSettings(password=SecretStr("unit-test-password")),
-        admin=AdminSettings(api_key=SecretStr("unit-test-admin-key")),
-    )
+    from_env = Settings(db=settings.db, embedding=settings.embedding, admin=settings.admin)
 
-    assert settings.courses.enabled == ("alpha", "beta")
+    assert from_env.courses.enabled == ("alpha", "beta")
 
 
 @pytest.mark.parametrize("value", ["../alpha", "Alpha", "alpha,alpha"])

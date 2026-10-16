@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from study_assistant.composition import build_app
-from study_assistant.settings import AdminSettings, DbSettings, Settings
+from study_assistant.settings import AdminSettings, DbSettings, EmbeddingSettings, Settings
 
 
 def _closed_port() -> int:
@@ -44,6 +44,14 @@ def client() -> Iterator[TestClient]:
             port=_closed_port(),
             password=SecretStr("integration-test-password"),
             connect_timeout_s=1,
+        ),
+        embedding=EmbeddingSettings(
+            model="intfloat/multilingual-e5-small",
+            revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
+            weights_file="onnx/model.onnx",
+            dimension=384,
+            passage_prefix="passage: ",
+            query_prefix="query: ",
         ),
         admin=AdminSettings(api_key=SecretStr("integration-test-admin-key")),
     )

@@ -9,9 +9,18 @@ from pydantic import SecretStr
 
 from study_assistant.db import Connection, DatabaseUnavailableError
 from study_assistant.ingest.service import CorpusCounts, Edition, PreparedDocument
-from study_assistant.settings import AdminSettings, DbSettings, Settings
+from study_assistant.settings import AdminSettings, DbSettings, EmbeddingSettings, Settings
 
 ADMIN_KEY = "unit-test-admin-key"
+# A valid embedding model choice; unit tests never download or load it.
+EMBEDDING = EmbeddingSettings(
+    model="intfloat/multilingual-e5-small",
+    revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    weights_file="onnx/model.onnx",
+    dimension=384,
+    passage_prefix="passage: ",
+    query_prefix="query: ",
+)
 
 
 class FakeDatabase:
@@ -117,6 +126,7 @@ def settings() -> Settings:
     """Valid settings with a placeholder password; explicit values win over any APP_* variables in the shell."""
     return Settings(
         db=DbSettings(password=SecretStr("unit-test-password")),
+        embedding=EMBEDDING,
         admin=AdminSettings(api_key=SecretStr(ADMIN_KEY)),
     )
 

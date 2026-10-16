@@ -50,6 +50,13 @@ services:
       APP_SERVER_ROLE__PASSWORD: ${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env, see .env.example}
       APP_READER_ROLE__NAME: ${DB_READER_USER:?set DB_READER_USER in .env, see .env.example}
       APP_READER_ROLE__PASSWORD: ${DB_READER_PASSWORD:?set DB_READER_PASSWORD in .env, see .env.example}
+      # The embedding space whose vector table this run prepares.
+      APP_EMBEDDING__MODEL: ${APP_EMBEDDING__MODEL:?set APP_EMBEDDING__MODEL in .env, see .env.example}
+      APP_EMBEDDING__REVISION: ${APP_EMBEDDING__REVISION:?set APP_EMBEDDING__REVISION in .env, see .env.example}
+      APP_EMBEDDING__WEIGHTS_FILE: ${APP_EMBEDDING__WEIGHTS_FILE:?set APP_EMBEDDING__WEIGHTS_FILE in .env, see .env.example}
+      APP_EMBEDDING__DIMENSION: ${APP_EMBEDDING__DIMENSION:?set APP_EMBEDDING__DIMENSION in .env, see .env.example}
+      APP_EMBEDDING__PASSAGE_PREFIX: ${APP_EMBEDDING__PASSAGE_PREFIX:?set APP_EMBEDDING__PASSAGE_PREFIX in .env, see .env.example}
+      APP_EMBEDDING__QUERY_PREFIX: ${APP_EMBEDDING__QUERY_PREFIX:?set APP_EMBEDDING__QUERY_PREFIX in .env, see .env.example}
     depends_on:
       db:
         condition: service_healthy
@@ -70,6 +77,14 @@ services:
       APP_COURSES__SOURCE_DIR: ${SOURCES_DIR:?set SOURCES_DIR in .env, see .env.example}
       APP_INGEST__CHUNK_SIZE: ${APP_INGEST__CHUNK_SIZE:?set APP_INGEST__CHUNK_SIZE in .env, see .env.example}
       APP_INGEST__CHUNK_OVERLAP: ${APP_INGEST__CHUNK_OVERLAP:?set APP_INGEST__CHUNK_OVERLAP in .env, see .env.example}
+      # The embedding model and the folder its downloaded files are read from.
+      APP_EMBEDDING__MODEL: ${APP_EMBEDDING__MODEL}
+      APP_EMBEDDING__REVISION: ${APP_EMBEDDING__REVISION}
+      APP_EMBEDDING__WEIGHTS_FILE: ${APP_EMBEDDING__WEIGHTS_FILE}
+      APP_EMBEDDING__DIMENSION: ${APP_EMBEDDING__DIMENSION}
+      APP_EMBEDDING__PASSAGE_PREFIX: ${APP_EMBEDDING__PASSAGE_PREFIX}
+      APP_EMBEDDING__QUERY_PREFIX: ${APP_EMBEDDING__QUERY_PREFIX}
+      APP_EMBEDDING__MODEL_DIR: ${MODELS_DIR:?set MODELS_DIR in .env, see .env.example}
       APP_ADMIN__API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env, see .env.example}
     volumes:
       # Course manifests are data, not part of the image; the app only reads them.

@@ -19,6 +19,15 @@ NESTED_DELIMITER = "__"
 # A role name goes into CREATE ROLE and GRANT statements; lower-case letters, digits and "_" keep it a plain
 # name that psql and connection settings accept without quoting.
 ROLE_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
+# A Hugging Face model id, "owner/name". It becomes part of a download address and of a folder name, so only
+# plain name characters are allowed.
+MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+# A full commit hash: a branch or tag can later point to other files, and their vectors would be stored as if
+# they came from the same model.
+MODEL_REVISION_PATTERN = r"^[0-9a-f]{40}$"
+# A path inside the model's repository; every part starts with a letter or digit, so ".." cannot occur.
+MODEL_FILE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*\.onnx$"
+
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 type CourseId = Annotated[str, Field(pattern=COURSE_ID_PATTERN)]
@@ -114,6 +123,34 @@ class IngestSettings(BaseModel):
     chunk_overlap: int = Field(default=100, ge=0)
 
 
+class EmbeddingSettings(BaseModel):
+    """Which embedding model turns text into vectors, and how; set as APP_EMBEDDING__<FIELD>.
+
+    The model, its revision, the weights file and the two prefixes name the embedding space that the vectors
+    belong to: changing any of them starts a new space, and vectors of different spaces are never compared.
+    They have no defaults, so the model is always chosen on purpose.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Hugging Face model id, e.g. "intfloat/multilingual-e5-small".
+    model: str = Field(pattern=MODEL_ID_PATTERN)
+    # Commit of the model's repository that the files are taken from.
+    revision: str = Field(pattern=MODEL_REVISION_PATTERN)
+    # The ONNX file with the network, as a path inside the repository, e.g. "onnx/model.onnx".
+    weights_file: str = Field(pattern=MODEL_FILE_PATTERN)
+    # Length of every vector. The vector table is created with it before any model is loaded, and loading
+    # the model checks that the model really gives vectors of this length. The vector index accepts at
+    # most 2,000 dimensions.
+    dimension: int = Field(ge=1, le=2000)
+    # Text put before every passage and every query, as the model was trained; "" for a model without one.
+    # A trailing space is part of the prefix, so .env keeps these values in double quotes.
+    passage_prefix: str = Field(max_length=64)
+    query_prefix: str = Field(max_length=64)
+    # Folder with the downloaded model files; the app only reads it. The default fits a run from app/.
+    model_dir: Path = Path("../models")
+
+
 class AdminSettings(BaseModel):
     """Access to the admin endpoints; set as APP_ADMIN__<FIELD>."""
 
@@ -131,8 +168,14 @@ class MigrationSettings(BaseSettings):
     and stops at startup if either reaches its environment.
     """
 
+    # hide_input_in_errors: a wrong value is never printed in the startup error, so a secret given by mistake
+    # does not end up in the log; the field name and the rule it broke say what to fix.
     model_config = SettingsConfigDict(
-        env_prefix=ENV_PREFIX, env_nested_delimiter=NESTED_DELIMITER, extra="forbid", frozen=True
+        env_prefix=ENV_PREFIX,
+        env_nested_delimiter=NESTED_DELIMITER,
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
     )
 
     # APP_LOG_LEVEL: the lowest level written to the log.
@@ -150,6 +193,9 @@ class MigrationSettings(BaseSettings):
     # APP_READER_ROLE__*: the read-only role.
     reader_role: ReaderRoleSettings
 
+    # APP_EMBEDDING__*: the embedding model, whose space gets its vector table here.
+    embedding: EmbeddingSettings
+
     @model_validator(mode="after")
     def _distinct_roles(self) -> Self:
         """Refuse one name for both roles: the second grant would quietly change the first role's rights."""
@@ -165,8 +211,14 @@ class Settings(BaseSettings):
     Secrets are typed ``SecretStr`` so that they are masked wherever settings are shown.
     """
 
+    # hide_input_in_errors: a wrong value is never printed in the startup error, so a secret given by mistake
+    # does not end up in the log; the field name and the rule it broke say what to fix.
     model_config = SettingsConfigDict(
-        env_prefix=ENV_PREFIX, env_nested_delimiter=NESTED_DELIMITER, extra="forbid", frozen=True
+        env_prefix=ENV_PREFIX,
+        env_nested_delimiter=NESTED_DELIMITER,
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
     )
 
     # APP_LOG_LEVEL: the lowest level written to the log.
@@ -183,6 +235,9 @@ class Settings(BaseSettings):
 
     # APP_INGEST__*: how sources are chunked.
     ingest: IngestSettings = Field(default_factory=IngestSettings)
+
+    # APP_EMBEDDING__*: the embedding model.
+    embedding: EmbeddingSettings
 
     # APP_ADMIN__*: access to the admin endpoints.
     admin: AdminSettings

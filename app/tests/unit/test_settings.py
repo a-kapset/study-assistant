@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import get_args
 
@@ -8,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from study_assistant.settings import (
     AdminSettings,
     DbSettings,
+    EmbeddingSettings,
     MigrationSettings,
     ReaderRoleSettings,
     ServerRoleSettings,
@@ -19,6 +21,36 @@ from study_assistant.settings import (
 )
 
 SECRET_WORDS = {"key", "token", "password", "secret", "dsn"}
+REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+EMBEDDING_ENV = {
+    "APP_EMBEDDING__MODEL": "intfloat/multilingual-e5-small",
+    "APP_EMBEDDING__REVISION": REVISION,
+    "APP_EMBEDDING__WEIGHTS_FILE": "onnx/model.onnx",
+    "APP_EMBEDDING__DIMENSION": "384",
+    "APP_EMBEDDING__PASSAGE_PREFIX": "passage: ",
+    "APP_EMBEDDING__QUERY_PREFIX": "query: ",
+}
+# A value that must never appear in an error message.
+CANARY = "canary-value-7f3a"
+
+
+def _set_embedding_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set a valid embedding model choice in the environment, as compose.yaml does."""
+    for name, value in EMBEDDING_ENV.items():
+        monkeypatch.setenv(name, value)
+
+
+def _embedding(**changes: object) -> dict[str, object]:
+    """Return valid embedding settings as a plain dict, with ``changes`` applied, for validation tests."""
+    values: dict[str, object] = {
+        "model": "intfloat/multilingual-e5-small",
+        "revision": REVISION,
+        "weights_file": "onnx/model.onnx",
+        "dimension": 384,
+        "passage_prefix": "passage: ",
+        "query_prefix": "query: ",
+    }
+    return values | changes
 
 
 @pytest.mark.covers("US-001", "AC-3")
@@ -32,6 +64,8 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("APP_COURSES__SOURCE_DIR", "/sources")
     monkeypatch.setenv("APP_INGEST__CHUNK_SIZE", "800")
     monkeypatch.setenv("APP_INGEST__CHUNK_OVERLAP", "80")
+    _set_embedding_env(monkeypatch)
+    monkeypatch.setenv("APP_EMBEDDING__MODEL_DIR", "/models")
 
     settings = load_settings()
 
@@ -42,6 +76,7 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     assert settings.admin.api_key.get_secret_value() == "admin-key-from-env"
     assert settings.courses.source_dir == Path("/sources")
     assert (settings.ingest.chunk_size, settings.ingest.chunk_overlap) == (800, 80)
+    assert settings.embedding == EmbeddingSettings.model_validate(_embedding(model_dir=Path("/models")))
 
 
 @pytest.mark.covers("US-001", "AC-3")
@@ -151,6 +186,7 @@ def test_migration_settings_read_owner_role_and_image_commit(monkeypatch: pytest
     monkeypatch.setenv("APP_DB__PASSWORD", "owner-password")
     monkeypatch.setenv("APP_SERVER_ROLE__PASSWORD", "app-password")
     monkeypatch.setenv("APP_READER_ROLE__PASSWORD", "reader-password")
+    _set_embedding_env(monkeypatch)
 
     settings = load_migration_settings()
 
@@ -160,6 +196,7 @@ def test_migration_settings_read_owner_role_and_image_commit(monkeypatch: pytest
     assert settings.server_role.password.get_secret_value() == "app-password"
     assert settings.reader_role.name == "app_ro"
     assert settings.reader_role.password.get_secret_value() == "reader-password"
+    assert settings.embedding.revision == REVISION
 
 
 @pytest.mark.covers("US-001", "AC-9")
@@ -170,6 +207,7 @@ def test_one_name_for_both_roles_is_refused() -> None:
             db=DbSettings(password=SecretStr("owner-password")),
             server_role=ServerRoleSettings(name="shared", password=SecretStr("app-password")),
             reader_role=ReaderRoleSettings(name="shared", password=SecretStr("reader-password")),
+            embedding=EmbeddingSettings.model_validate(_embedding()),
         )
 
 
@@ -201,3 +239,102 @@ def test_role_name_must_be_a_plain_lower_case_name(name: str) -> None:
     """Guards the name rule: a name that needs quoting would be case-sensitive and not found by psql or the app."""
     with pytest.raises(ValidationError):
         ServerRoleSettings(name=name, password=SecretStr("app-password"))
+
+
+@pytest.mark.covers("US-001", "AC-3")
+@pytest.mark.parametrize(
+    "missing", ["model", "revision", "weights_file", "dimension", "passage_prefix", "query_prefix"]
+)
+def test_embedding_model_has_no_default(missing: str) -> None:
+    """Leaves out one field that names the model or its vector space and expects a validation error naming it.
+
+    Catches a default added to such a field: the app would then embed with a model nobody chose, and a
+    forgotten variable would not stop startup.
+    """
+    values = _embedding()
+    del values[missing]
+
+    with pytest.raises(ValidationError, match=rf"(?m)^{missing}$"):
+        EmbeddingSettings.model_validate(values)
+
+
+@pytest.mark.covers("US-001", "AC-3")
+@pytest.mark.covers("US-004", "AC-22")
+@pytest.mark.parametrize("revision", ["main", "v1.0", REVISION[:7], REVISION.upper(), REVISION + "0"])
+def test_model_revision_must_be_a_full_commit_hash(revision: str) -> None:
+    """Gives a branch, a tag, a short or an upper-case hash as the revision and expects it to be refused.
+
+    Catches a looser rule: a branch or tag can later point to other model files, and their vectors would be
+    stored as if they came from the same model.
+    """
+    with pytest.raises(ValidationError, match="revision"):
+        EmbeddingSettings.model_validate(_embedding(revision=revision))
+
+
+@pytest.mark.covers("US-001", "AC-3")
+@pytest.mark.parametrize("model", ["../evil", "owner/../evil", "owner", "owner/name/extra", "/owner/name", ".x/name"])
+def test_model_id_must_be_a_plain_owner_and_name(model: str) -> None:
+    """Gives model ids that are not a plain "owner/name" and expects each to be refused.
+
+    Catches a looser rule: the id becomes part of a download address and of a folder name, so ".." or an
+    extra part could make the app read or write files outside the model folder.
+    """
+    with pytest.raises(ValidationError, match="model"):
+        EmbeddingSettings.model_validate(_embedding(model=model))
+
+
+@pytest.mark.covers("US-001", "AC-3")
+@pytest.mark.parametrize("weights_file", ["../model.onnx", "onnx/../model.onnx", "/onnx/model.onnx", "onnx/model.bin"])
+def test_weights_file_must_be_an_onnx_file_inside_the_repository(weights_file: str) -> None:
+    """Gives weights paths that leave the model's repository or are not ONNX files and expects each to be refused.
+
+    Catches a looser rule: the path is joined to the model folder, so ".." or an absolute path would load a
+    file from somewhere else, and only ONNX files can be run.
+    """
+    with pytest.raises(ValidationError, match="weights_file"):
+        EmbeddingSettings.model_validate(_embedding(weights_file=weights_file))
+
+
+@pytest.mark.covers("US-001", "AC-3")
+def test_dimension_above_the_vector_index_limit_is_refused() -> None:
+    """Gives 2,001 dimensions and expects a validation error at startup.
+
+    Catches a missing upper limit: the database's vector index accepts at most 2,000 dimensions, so a larger
+    model would pass startup and fail later, when the migration run creates the index.
+    """
+    with pytest.raises(ValidationError, match="dimension"):
+        EmbeddingSettings.model_validate(_embedding(dimension=2001))
+
+
+@pytest.mark.covers("US-001", "AC-3")
+def test_prefixes_keep_their_trailing_space(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reads the prefixes from the environment and expects them unchanged, trailing space included.
+
+    Catches stripping of the values: the model was trained with "passage: " and "query: ", and without the
+    space every vector would silently change.
+    """
+    _set_embedding_env(monkeypatch)
+    monkeypatch.setenv("APP_DB__PASSWORD", "from-env")
+    monkeypatch.setenv("APP_ADMIN__API_KEY", "admin-key-from-env")
+
+    settings = load_settings()
+
+    assert (settings.embedding.passage_prefix, settings.embedding.query_prefix) == ("passage: ", "query: ")
+
+
+@pytest.mark.covers("US-001", "AC-3")
+@pytest.mark.parametrize("load", [load_settings, load_migration_settings])
+def test_startup_errors_name_the_setting_but_not_its_value(
+    load: Callable[[], BaseSettings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gives an invalid database port and expects an error that names the setting but does not show the value.
+
+    Catches error messages that repeat the input: a secret set in the wrong variable, or a too-short key,
+    would then be written to the startup log.
+    """
+    monkeypatch.setenv("APP_DB__PORT", CANARY)
+
+    with pytest.raises(ValidationError, match=r"db\.port") as error:
+        load()
+
+    assert CANARY not in str(error.value)
