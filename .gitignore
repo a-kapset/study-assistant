@@ -28,3 +28,6 @@ htmlcov/
 *.code-workspace
 .DS_Store
 Thumbs.db
+
+# Downloaded model files: fetched by revision and checked by hash, never committed
+models/

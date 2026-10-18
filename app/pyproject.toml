@@ -94,9 +94,10 @@ strict_equality = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-# pypdfium2 ships no type information. It is used only inside the PDF parser module,
-# behind functions with explicit types, so untyped values do not spread through the app.
-module = ["pypdfium2.*"]
+# pypdfium2 and onnxruntime ship no type information. Each is used only inside one module
+# (the PDF parser, the local embedder), behind functions with explicit types, so untyped
+# values do not spread through the app.
+module = ["pypdfium2.*", "onnxruntime.*"]
 ignore_missing_imports = true
 
 
