@@ -48,7 +48,6 @@ def client() -> Iterator[TestClient]:
         embedding=EmbeddingSettings(
             model="intfloat/multilingual-e5-small",
             revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
-            weights_file="onnx/model.onnx",
             dimension=384,
             passage_prefix="passage: ",
             query_prefix="query: ",

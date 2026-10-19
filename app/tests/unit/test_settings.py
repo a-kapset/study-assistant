@@ -25,7 +25,6 @@ REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
 EMBEDDING_ENV = {
     "APP_EMBEDDING__MODEL": "intfloat/multilingual-e5-small",
     "APP_EMBEDDING__REVISION": REVISION,
-    "APP_EMBEDDING__WEIGHTS_FILE": "onnx/model.onnx",
     "APP_EMBEDDING__DIMENSION": "384",
     "APP_EMBEDDING__PASSAGE_PREFIX": "passage: ",
     "APP_EMBEDDING__QUERY_PREFIX": "query: ",
@@ -45,7 +44,6 @@ def _embedding(**changes: object) -> dict[str, object]:
     values: dict[str, object] = {
         "model": "intfloat/multilingual-e5-small",
         "revision": REVISION,
-        "weights_file": "onnx/model.onnx",
         "dimension": 384,
         "passage_prefix": "passage: ",
         "query_prefix": "query: ",
@@ -242,9 +240,7 @@ def test_role_name_must_be_a_plain_lower_case_name(name: str) -> None:
 
 
 @pytest.mark.covers("US-001", "AC-3")
-@pytest.mark.parametrize(
-    "missing", ["model", "revision", "weights_file", "dimension", "passage_prefix", "query_prefix"]
-)
+@pytest.mark.parametrize("missing", ["model", "revision", "dimension", "passage_prefix", "query_prefix"])
 def test_embedding_model_has_no_default(missing: str) -> None:
     """Leaves out one field that names the model or its vector space and expects a validation error naming it.
 
@@ -281,18 +277,6 @@ def test_model_id_must_be_a_plain_owner_and_name(model: str) -> None:
     """
     with pytest.raises(ValidationError, match="model"):
         EmbeddingSettings.model_validate(_embedding(model=model))
-
-
-@pytest.mark.covers("US-001", "AC-3")
-@pytest.mark.parametrize("weights_file", ["../model.onnx", "onnx/../model.onnx", "/onnx/model.onnx", "onnx/model.bin"])
-def test_weights_file_must_be_an_onnx_file_inside_the_repository(weights_file: str) -> None:
-    """Gives weights paths that leave the model's repository or are not ONNX files and expects each to be refused.
-
-    Catches a looser rule: the path is joined to the model folder, so ".." or an absolute path would load a
-    file from somewhere else, and only ONNX files can be run.
-    """
-    with pytest.raises(ValidationError, match="weights_file"):
-        EmbeddingSettings.model_validate(_embedding(weights_file=weights_file))
 
 
 @pytest.mark.covers("US-001", "AC-3")

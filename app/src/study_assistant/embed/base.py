@@ -1,9 +1,9 @@
 """Embedding spaces and what ingestion and search need from an embedder.
 
 Two vectors can only be compared when the same model computed them in the same way. An embedding space names
-exactly that: the model, its revision, the weights file, the passage and query prefixes and the version of our
-embedding code. Every stored vector belongs to one space, and each space has its own table, so vectors of
-different spaces are never mixed or counted together.
+exactly that: the model, its revision, the passage and query prefixes and the version of our embedding code.
+Every stored vector belongs to one space, and each space has its own table, so vectors of different spaces are
+never mixed or counted together.
 """
 
 import hashlib
@@ -28,10 +28,9 @@ class EmbeddingSpace:
 
     model: str
     revision: str
-    weights_file: str
     passage_prefix: str
     query_prefix: str
-    # Version of our code that turns the model's output into vectors (truncation, pooling, normalization).
+    # Version of our code that turns texts into vectors (the library it uses and how it calls it).
     embedder_version: str
 
     @classmethod
@@ -40,7 +39,6 @@ class EmbeddingSpace:
         return cls(
             model=settings.model,
             revision=settings.revision,
-            weights_file=settings.weights_file,
             passage_prefix=settings.passage_prefix,
             query_prefix=settings.query_prefix,
             embedder_version=embedder_version,
@@ -57,7 +55,6 @@ class EmbeddingSpace:
         fields = [
             self.model,
             self.revision,
-            self.weights_file,
             self.passage_prefix,
             self.query_prefix,
             self.embedder_version,

@@ -25,8 +25,6 @@ MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
 # A full commit hash: a branch or tag can later point to other files, and their vectors would be stored as if
 # they came from the same model.
 MODEL_REVISION_PATTERN = r"^[0-9a-f]{40}$"
-# A path inside the model's repository; every part starts with a letter or digit, so ".." cannot occur.
-MODEL_FILE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*\.onnx$"
 
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
@@ -126,8 +124,8 @@ class IngestSettings(BaseModel):
 class EmbeddingSettings(BaseModel):
     """Which embedding model turns text into vectors, and how; set as APP_EMBEDDING__<FIELD>.
 
-    The model, its revision, the weights file and the two prefixes name the embedding space that the vectors
-    belong to: changing any of them starts a new space, and vectors of different spaces are never compared.
+    The model, its revision and the two prefixes name the embedding space that the vectors belong to:
+    changing any of them starts a new space, and vectors of different spaces are never compared.
     They have no defaults, so the model is always chosen on purpose.
     """
 
@@ -135,10 +133,8 @@ class EmbeddingSettings(BaseModel):
 
     # Hugging Face model id, e.g. "intfloat/multilingual-e5-small".
     model: str = Field(pattern=MODEL_ID_PATTERN)
-    # Commit of the model's repository that the files are taken from.
+    # Commit of the model's repository that the files are taken from; it alone decides which files are used.
     revision: str = Field(pattern=MODEL_REVISION_PATTERN)
-    # The ONNX file with the network, as a path inside the repository, e.g. "onnx/model.onnx".
-    weights_file: str = Field(pattern=MODEL_FILE_PATTERN)
     # Length of every vector. The vector table is created with it before any model is loaded, and loading
     # the model checks that the model really gives vectors of this length. The vector index accepts at
     # most 2,000 dimensions.

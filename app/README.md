@@ -15,6 +15,9 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
   [pypdfium2](https://pypdfium2.readthedocs.io/) for the text layer of PDF sources,
   [LangChain text splitters](https://docs.langchain.com/oss/python/integrations/splitters) for cutting sections
   into chunks
+- Local embeddings: [sentence-transformers](https://sbert.net/) through LangChain's
+  [`HuggingFaceEmbeddings`](https://docs.langchain.com/oss/python/integrations/embeddings/index), on PyTorch for
+  the CPU (installed from PyTorch's CPU-only package index)
 - PostgreSQL 18 with [pgvector](https://github.com/pgvector/pgvector), reached through
   [psycopg 3](https://www.psycopg.org/psycopg3/) and its connection pool
 - Docker Compose for running the app next to its database
@@ -42,6 +45,9 @@ app/
 │   ├── courses/            # courses as data: nothing course-specific lives in the code
 │   │   ├── models.py       # the course manifest: metadata, structure rules, source files
 │   │   └── registry.py     # loads the enabled courses' manifests at startup; a bad one stops the app
+│   ├── embed/              # text to vectors
+│   │   ├── base.py         # embedding spaces (which model made a vector) and the Embedder protocol
+│   │   └── local.py        # the local model from its downloaded files; load errors name the folder or both lengths
 │   ├── ingest/             # course sources to clean page text, the course structure and chunks, stored per course
 │   │   ├── parser.py       # PDF text layer page by page, with the parser and PDF engine versions
 │   │   ├── normalize.py    # header and footer lines, words split at line ends, spacing, Unicode form; page status
@@ -57,7 +63,8 @@ app/
 │       └── config.py
 └── tests/
     ├── integration/        # the real database driver without a server: startup and readiness while the database is down
-    └── unit/               # in-process tests: the API through FastAPI's TestClient, parsing on the demo course PDF
+    └── unit/               # in-process tests: the API through FastAPI's TestClient, parsing on the demo course PDF,
+                            # the embedder on the real model files
 ```
 
 ## Getting started
@@ -280,6 +287,16 @@ poetry run ruff format --check .
 poetry run ruff check .
 poetry run mypy .
 poetry run pytest
+```
+
+The embedder tests use the real model files, which are not in the repository. Without them those tests fail
+and name the folder they looked in. Download the pinned revision once (about 490 MB) from `app/`:
+
+```powershell
+poetry run hf download intfloat/multilingual-e5-small modules.json config.json sentence_bert_config.json `
+  1_Pooling/config.json model.safetensors tokenizer.json tokenizer_config.json special_tokens_map.json `
+  sentencepiece.bpe.model --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3 `
+  --local-dir ../models/intfloat/multilingual-e5-small/614241f622f53c4eeff9890bdc4f31cfecc418b3
 ```
 
 The same checks, a secret scan and a check that app code contains no course-specific names run as

@@ -9,7 +9,6 @@ from study_assistant.settings import EmbeddingSettings
 SETTINGS = EmbeddingSettings(
     model="intfloat/multilingual-e5-small",
     revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
-    weights_file="onnx/model.onnx",
     dimension=384,
     passage_prefix="passage: ",
     query_prefix="query: ",
@@ -18,7 +17,7 @@ VERSION = "test-embedder/1"
 
 # The id of the space of SETTINGS computed by VERSION. Vector tables are named after space ids, so a changed id
 # leaves every stored vector behind in an old table; update this value only when that is intended.
-GOLDEN_ID = "multilingual_e5_small_5e2ac19734bb"
+GOLDEN_ID = "multilingual_e5_small_629221270262"
 
 # A space id is a model name of at most 24 characters, "_" and 12 hex digits.
 MAX_ID_LENGTH = 37
@@ -39,7 +38,6 @@ def test_space_is_named_by_the_configured_fields() -> None:
     assert _space() == EmbeddingSpace(
         model="intfloat/multilingual-e5-small",
         revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
-        weights_file="onnx/model.onnx",
         passage_prefix="passage: ",
         query_prefix="query: ",
         embedder_version=VERSION,
@@ -52,7 +50,6 @@ def test_space_is_named_by_the_configured_fields() -> None:
     [
         ("model", "intfloat/multilingual-e5-base"),
         ("revision", "0" * 40),
-        ("weights_file", "onnx/model_qint8_avx512_vnni.onnx"),
         ("passage_prefix", "passage:"),
         ("query_prefix", "query:"),
         ("embedder_version", "test-embedder/2"),
