@@ -1,9 +1,11 @@
 """Embedding spaces and what ingestion and search need from an embedder.
 
 Two vectors can only be compared when the same model computed them in the same way. An embedding space names
-exactly that: the model, its revision, the passage and query prefixes and the version of our embedding code.
-Every stored vector belongs to one space, and each space has its own table, so vectors of different spaces are
-never mixed or counted together.
+the model, its revision and the passage and query prefixes, all taken from the configuration. Every stored
+vector belongs to one space, and each space has its own table, so vectors of different spaces are never mixed
+or counted together. How the vectors are computed (the embedding server, our client and their libraries) is not
+part of the space: a change there is accepted only when a comparison with reference vectors shows that the
+vectors stayed the same.
 """
 
 import hashlib
@@ -30,19 +32,15 @@ class EmbeddingSpace:
     revision: str
     passage_prefix: str
     query_prefix: str
-    # Version of our client code: the library it uses and how it sends texts to the embedding server. The server's
-    # own version is not part of the space; an upgrade of it is accepted only when its vectors stay the same.
-    embedder_version: str
 
     @classmethod
-    def from_settings(cls, settings: EmbeddingSettings, embedder_version: str) -> Self:
-        """Name the space of the configured model when an embedder of the given version computes the vectors."""
+    def from_settings(cls, settings: EmbeddingSettings) -> Self:
+        """Name the space of the configured model and prefixes."""
         return cls(
             model=settings.model,
             revision=settings.revision,
             passage_prefix=settings.passage_prefix,
             query_prefix=settings.query_prefix,
-            embedder_version=embedder_version,
         )
 
     @property
@@ -58,7 +56,6 @@ class EmbeddingSpace:
             self.revision,
             self.passage_prefix,
             self.query_prefix,
-            self.embedder_version,
         ]
         digest = hashlib.sha256(json.dumps(fields).encode("utf-8")).hexdigest()[:_HASH_LENGTH]
         model_name = self.model.rsplit("/", 1)[-1].lower()

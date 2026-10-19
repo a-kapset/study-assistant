@@ -13,11 +13,9 @@ SETTINGS = EmbeddingSettings(
     passage_prefix="passage: ",
     query_prefix="query: ",
 )
-VERSION = "test-embedder/1"
-
-# The id of the space of SETTINGS computed by VERSION. Vector tables are named after space ids, so a changed id
+# The id of the space of SETTINGS. Vector tables are named after space ids, so a changed id
 # leaves every stored vector behind in an old table; update this value only when that is intended.
-GOLDEN_ID = "multilingual_e5_small_629221270262"
+GOLDEN_ID = "multilingual_e5_small_9e0ac3757316"
 
 # A space id is a model name of at most 24 characters, "_" and 12 hex digits.
 MAX_ID_LENGTH = 37
@@ -25,7 +23,7 @@ MAX_ID_LENGTH = 37
 
 def _space() -> EmbeddingSpace:
     """The space of the test model choice."""
-    return EmbeddingSpace.from_settings(SETTINGS, VERSION)
+    return EmbeddingSpace.from_settings(SETTINGS)
 
 
 @pytest.mark.covers("US-004", "AC-18")
@@ -40,7 +38,6 @@ def test_space_is_named_by_the_configured_fields() -> None:
         revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
         passage_prefix="passage: ",
         query_prefix="query: ",
-        embedder_version=VERSION,
     )
 
 
@@ -52,7 +49,6 @@ def test_space_is_named_by_the_configured_fields() -> None:
         ("revision", "0" * 40),
         ("passage_prefix", "passage:"),
         ("query_prefix", "query:"),
-        ("embedder_version", "test-embedder/2"),
     ],
 )
 def test_any_changed_field_gives_another_space_id(field: str, value: str) -> None:
