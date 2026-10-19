@@ -10,10 +10,16 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
+from pydantic import HttpUrl, SecretStr
 
 from study_assistant.composition import build_app
-from study_assistant.settings import AdminSettings, DbSettings, EmbeddingSettings, Settings
+from study_assistant.settings import (
+    AdminSettings,
+    DbSettings,
+    EmbeddingServiceSettings,
+    EmbeddingSettings,
+    Settings,
+)
 
 
 def _closed_port() -> int:
@@ -52,6 +58,8 @@ def client() -> Iterator[TestClient]:
             passage_prefix="passage: ",
             query_prefix="query: ",
         ),
+        # Nothing listens there; these tests never reach the embedding server.
+        embedding_service=EmbeddingServiceSettings(url=HttpUrl("http://embedder.invalid")),
         admin=AdminSettings(api_key=SecretStr("integration-test-admin-key")),
     )
     with TestClient(build_app(settings), backend_options={"loop_factory": asyncio.SelectorEventLoop}) as test_client:

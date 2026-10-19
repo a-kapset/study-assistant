@@ -3,12 +3,13 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
-from pydantic import BaseModel, SecretStr, ValidationError
+from pydantic import BaseModel, HttpUrl, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from study_assistant.settings import (
     AdminSettings,
     DbSettings,
+    EmbeddingServiceSettings,
     EmbeddingSettings,
     MigrationSettings,
     ReaderRoleSettings,
@@ -29,6 +30,7 @@ EMBEDDING_ENV = {
     "APP_EMBEDDING__PASSAGE_PREFIX": "passage: ",
     "APP_EMBEDDING__QUERY_PREFIX": "query: ",
 }
+EMBEDDING_SERVICE_URL = "http://embedder:8080"
 # A value that must never appear in an error message.
 CANARY = "canary-value-7f3a"
 
@@ -37,6 +39,14 @@ def _set_embedding_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set a valid embedding model choice in the environment, as compose.yaml does."""
     for name, value in EMBEDDING_ENV.items():
         monkeypatch.setenv(name, value)
+
+
+def _set_app_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set every variable the app server needs and nothing more: password, admin key, model and embedding server."""
+    monkeypatch.setenv("APP_DB__PASSWORD", "from-env")
+    monkeypatch.setenv("APP_ADMIN__API_KEY", "admin-key-from-env")
+    _set_embedding_env(monkeypatch)
+    monkeypatch.setenv("APP_EMBEDDING_SERVICE__URL", EMBEDDING_SERVICE_URL)
 
 
 def _embedding(**changes: object) -> dict[str, object]:
@@ -64,6 +74,8 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("APP_INGEST__CHUNK_OVERLAP", "80")
     _set_embedding_env(monkeypatch)
     monkeypatch.setenv("APP_EMBEDDING__MODEL_DIR", "/models")
+    monkeypatch.setenv("APP_EMBEDDING_SERVICE__URL", EMBEDDING_SERVICE_URL)
+    monkeypatch.setenv("APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS", "5")
 
     settings = load_settings()
 
@@ -75,6 +87,7 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     assert settings.courses.source_dir == Path("/sources")
     assert (settings.ingest.chunk_size, settings.ingest.chunk_overlap) == (800, 80)
     assert settings.embedding == EmbeddingSettings.model_validate(_embedding(model_dir=Path("/models")))
+    assert settings.embedding_service == EmbeddingServiceSettings(url=HttpUrl(EMBEDDING_SERVICE_URL), timeout_seconds=5)
 
 
 @pytest.mark.covers("US-001", "AC-3")
@@ -297,13 +310,55 @@ def test_prefixes_keep_their_trailing_space(monkeypatch: pytest.MonkeyPatch) -> 
     Catches stripping of the values: the model was trained with "passage: " and "query: ", and without the
     space every vector would silently change.
     """
-    _set_embedding_env(monkeypatch)
-    monkeypatch.setenv("APP_DB__PASSWORD", "from-env")
-    monkeypatch.setenv("APP_ADMIN__API_KEY", "admin-key-from-env")
+    _set_app_server_env(monkeypatch)
 
     settings = load_settings()
 
     assert (settings.embedding.passage_prefix, settings.embedding.query_prefix) == ("passage: ", "query: ")
+
+
+@pytest.mark.covers("US-001", "AC-3")
+@pytest.mark.parametrize("other_service_env", [{}, {"APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS": "5"}])
+def test_missing_embedding_service_url_stops_startup(
+    other_service_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sets everything the app server needs except the embedding server's address and expects startup to stop.
+
+    Runs once with no embedding server variable at all and once with only the timeout set, so both a default
+    for the whole group and a default for the address are caught. With either default a forgotten variable
+    would pass startup and show up only as a failed connection at the first ingest.
+    """
+    _set_app_server_env(monkeypatch)
+    monkeypatch.delenv("APP_EMBEDDING_SERVICE__URL")
+    for name, value in other_service_env.items():
+        monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError, match=r"(?m)^embedding_service(\.url)?$"):
+        load_settings()
+
+
+@pytest.mark.covers("US-001", "AC-3")
+@pytest.mark.parametrize("url", ["embedder:8080", "embedder", "ftp://embedder", "/v1"])
+def test_embedding_service_url_must_be_an_http_address(url: str) -> None:
+    """Gives addresses without an http(s) scheme or without a host and expects each to be refused.
+
+    Catches the field typed as a plain string: such a value would pass startup, and the client would fail
+    only at the first ingest, with an error about the request instead of one naming the setting.
+    """
+    with pytest.raises(ValidationError, match="url"):
+        EmbeddingServiceSettings.model_validate({"url": url})
+
+
+@pytest.mark.covers("US-001", "AC-3")
+@pytest.mark.parametrize("timeout", [0, -1, 301, 30000])
+def test_embedding_service_timeout_must_be_positive_and_at_most_five_minutes(timeout: float) -> None:
+    """Gives a zero, negative or too long timeout and expects it to be refused.
+
+    Catches missing limits: zero or less would make every request fail at once, and a value written in
+    milliseconds by mistake (30000) would let a hanging server stop ingestion for hours.
+    """
+    with pytest.raises(ValidationError, match="timeout_seconds"):
+        EmbeddingServiceSettings.model_validate({"url": EMBEDDING_SERVICE_URL, "timeout_seconds": timeout})
 
 
 @pytest.mark.covers("US-001", "AC-3")

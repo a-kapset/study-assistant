@@ -5,11 +5,17 @@ from collections.abc import AsyncGenerator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import pytest
-from pydantic import SecretStr
+from pydantic import HttpUrl, SecretStr
 
 from study_assistant.db import Connection, DatabaseUnavailableError
 from study_assistant.ingest.service import CorpusCounts, Edition, PreparedDocument
-from study_assistant.settings import AdminSettings, DbSettings, EmbeddingSettings, Settings
+from study_assistant.settings import (
+    AdminSettings,
+    DbSettings,
+    EmbeddingServiceSettings,
+    EmbeddingSettings,
+    Settings,
+)
 
 ADMIN_KEY = "unit-test-admin-key"
 # A valid embedding model choice; unit tests never download or load it.
@@ -20,6 +26,8 @@ EMBEDDING = EmbeddingSettings(
     passage_prefix="passage: ",
     query_prefix="query: ",
 )
+# An address nothing listens on; unit tests never call the embedding server.
+EMBEDDING_SERVICE = EmbeddingServiceSettings(url=HttpUrl("http://embedder.invalid"))
 
 
 class FakeDatabase:
@@ -126,6 +134,7 @@ def settings() -> Settings:
     return Settings(
         db=DbSettings(password=SecretStr("unit-test-password")),
         embedding=EMBEDDING,
+        embedding_service=EMBEDDING_SERVICE,
         admin=AdminSettings(api_key=SecretStr(ADMIN_KEY)),
     )
 

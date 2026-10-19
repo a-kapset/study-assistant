@@ -69,7 +69,12 @@ def test_enabled_courses_are_read_as_a_comma_list(settings: Settings, monkeypatc
     """Guards the variable format: without the raw-string handling the value would have to be a JSON list."""
     monkeypatch.setenv("APP_COURSES__ENABLED", " alpha, beta ,")
 
-    from_env = Settings(db=settings.db, embedding=settings.embedding, admin=settings.admin)
+    from_env = Settings(
+        db=settings.db,
+        embedding=settings.embedding,
+        embedding_service=settings.embedding_service,
+        admin=settings.admin,
+    )
 
     assert from_env.courses.enabled == ("alpha", "beta")
 

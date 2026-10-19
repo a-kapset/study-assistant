@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from study_assistant.courses.models import COURSE_ID_PATTERN
@@ -147,6 +147,23 @@ class EmbeddingSettings(BaseModel):
     model_dir: Path = Path("../models")
 
 
+class EmbeddingServiceSettings(BaseModel):
+    """Where the embedding server runs and how long one request to it may take; set as APP_EMBEDDING_SERVICE__<FIELD>.
+
+    Only the app server talks to the embedding server. The migration run reads the model settings but never calls
+    the server, so this group is kept apart from ``EmbeddingSettings``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Base address of the server, e.g. "http://embedder"; the client adds the API path itself. No default: the
+    # address depends on how the stack is run.
+    url: HttpUrl
+    # Longest wait for one request, in seconds. The client library waits up to ten minutes by default, so a server
+    # that hangs would stop ingestion for that long; a batch of 32 chunks takes about 2 s on a CPU.
+    timeout_seconds: float = Field(default=30, gt=0, le=300)
+
+
 class AdminSettings(BaseModel):
     """Access to the admin endpoints; set as APP_ADMIN__<FIELD>."""
 
@@ -234,6 +251,9 @@ class Settings(BaseSettings):
 
     # APP_EMBEDDING__*: the embedding model.
     embedding: EmbeddingSettings
+
+    # APP_EMBEDDING_SERVICE__*: the server that computes the vectors.
+    embedding_service: EmbeddingServiceSettings
 
     # APP_ADMIN__*: access to the admin endpoints.
     admin: AdminSettings
