@@ -15,9 +15,10 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
   [pypdfium2](https://pypdfium2.readthedocs.io/) for the text layer of PDF sources,
   [LangChain text splitters](https://docs.langchain.com/oss/python/integrations/splitters) for cutting sections
   into chunks
-- Local embeddings: [sentence-transformers](https://sbert.net/) through LangChain's
-  [`HuggingFaceEmbeddings`](https://docs.langchain.com/oss/python/integrations/embeddings/index), on PyTorch for
-  the CPU (installed from PyTorch's CPU-only package index)
+- Embeddings: [Text Embeddings Inference](https://github.com/huggingface/text-embeddings-inference) (TEI, CPU
+  image, ONNX Runtime backend) as a separate Compose service, called through LangChain's
+  [`OpenAIEmbeddings`](https://docs.langchain.com/oss/python/integrations/embeddings/index) against its
+  OpenAI-compatible endpoint; the app image holds no model and no PyTorch
 - PostgreSQL 18 with [pgvector](https://github.com/pgvector/pgvector), reached through
   [psycopg 3](https://www.psycopg.org/psycopg3/) and its connection pool
 - Docker Compose for running the app next to its database
@@ -47,7 +48,7 @@ app/
 │   │   └── registry.py     # loads the enabled courses' manifests at startup; a bad one stops the app
 │   ├── embed/              # text to vectors
 │   │   ├── base.py         # embedding spaces (which model made a vector) and the Embedder protocol
-│   │   └── local.py        # the local model from its downloaded files; load errors name the folder or both lengths
+│   │   └── remote.py       # the client of the embedding server: adds the prefixes, sends texts in batches, typed errors
 │   ├── ingest/             # course sources to clean page text, the course structure and chunks, stored per course
 │   │   ├── parser.py       # PDF text layer page by page, with the parser and PDF engine versions
 │   │   ├── normalize.py    # header and footer lines, words split at line ends, spacing, Unicode form; page status
@@ -62,9 +63,10 @@ app/
 │       ├── admin.py        # endpoints behind the admin key: course ingestion
 │       └── config.py
 └── tests/
-    ├── integration/        # the real database driver without a server: startup and readiness while the database is down
+    ├── integration/        # the real database driver without a server: startup and readiness while the database is down;
+    │                       # the running embedding server against reference vectors (pytest -m embedding_server)
     └── unit/               # in-process tests: the API through FastAPI's TestClient, parsing on the demo course PDF,
-                            # the embedder on the real model files
+                            # the embedding client on a fake HTTP server
 ```
 
 ## Getting started
@@ -82,9 +84,11 @@ curl.exe -i http://127.0.0.1:8000/ready
 ```
 
 The stack starts in order: the database, then `migrate`, a one-shot run of the same image that applies new
-migration files as the database owner and prepares the app's role and the read-only role, then the app, only after `migrate` has
-exited without an error. `--wait` returns once the database and the app are healthy (the app counts as
-healthy when `/ready` answers 200); `docker compose ps -a` shows `migrate` as exited with code 0.
+migration files as the database owner and prepares the app's role and the read-only role; next to it
+`model-check` checks the model files and `embedder` loads the model; then the app, only after `migrate` has
+exited without an error and `embedder` is healthy. `--wait` returns once the database, the embedding server and
+the app are healthy (the app counts as healthy when `/ready` answers 200); `docker compose ps -a` shows `migrate`
+and `model-check` as exited with code 0. The model files must be in place first (see "Model files" below).
 
 `docker compose down` stops the stack and keeps the database volume; `docker compose down -v` also
 deletes it, which is needed after changing `DB_OWNER` or `DB_PASSWORD`, because PostgreSQL sets the owner
@@ -104,6 +108,26 @@ curl.exe -X POST -H "X-Admin-Key: $key" http://127.0.0.1:8000/v1/admin/courses/d
 curl.exe http://127.0.0.1:8000/v1/courses/demo
 ```
 
+### Model files
+
+The embedding server reads the files of the pinned model revision from `models/<model>/<revision>/` in the
+repository root (not committed, about 490 MB). Before it starts, `model-check` compares every file with the SHA-256
+committed in [`models.sha256`](../models.sha256); a missing or changed file is named in
+`docker compose logs model-check` and the server does not start. The server never downloads anything itself.
+
+Download them once from the repository root, in a throwaway container:
+
+```powershell
+docker run --rm -v "${PWD}/models:/models" python:3.14.8-slim-trixie sh -c "pip install -q huggingface-hub==2.2.0 && hf download intfloat/multilingual-e5-small 1_Pooling/config.json config.json modules.json onnx/model.onnx sentence_bert_config.json sentencepiece.bpe.model special_tokens_map.json tokenizer.json tokenizer_config.json --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3 --local-dir /models/intfloat/multilingual-e5-small/614241f622f53c4eeff9890bdc4f31cfecc418b3"
+```
+
+To change the model or its revision: download the new revision's files the same way; check that the SHA-256 of
+`onnx/model.onnx` equals the one Hugging Face shows for that file; write the new hashes into `models.sha256`
+(`docker run --rm -v "${PWD}/models/<model>/<revision>:/m:ro" -w /m busybox:1.37.0 sha256sum <files>`); change
+`APP_EMBEDDING__*` in `.env` and `.env.example`; commit both files together. The new revision is a new embedding
+space, so the next ingestion computes every vector again. If the reference-vector check (see "Development checks")
+then fails, the reference vectors have to be made again for the new model. If `model-check` fails while nothing
+was changed, the local files are damaged: download them again and leave `models.sha256` as it is.
 
 ### Without Docker
 
@@ -289,15 +313,17 @@ poetry run mypy .
 poetry run pytest
 ```
 
-The embedder tests use the real model files, which are not in the repository. Without them those tests fail
-and name the folder they looked in. Download the pinned revision once (about 490 MB) from `app/`:
+A plain `pytest` needs no server and no model files. One more test calls the running embedding server through
+the app's client and compares its vectors with reference vectors of the model; it needs the stack
+(`docker compose up -d --wait`) and runs with:
 
 ```powershell
-poetry run hf download intfloat/multilingual-e5-small modules.json config.json sentence_bert_config.json `
-  1_Pooling/config.json model.safetensors tokenizer.json tokenizer_config.json special_tokens_map.json `
-  sentencepiece.bpe.model --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3 `
-  --local-dir ../models/intfloat/multilingual-e5-small/614241f622f53c4eeff9890bdc4f31cfecc418b3
+poetry run pytest -m embedding_server
 ```
+
+Without the server it fails with a connection error instead of being skipped. Run it after any change of the
+embedding client, its libraries, the server image or the model files: none of these is part of the embedding
+space, so only this comparison shows that the vectors stayed the same.
 
 The same checks, a secret scan and a check that app code contains no course-specific names run as
 pre-commit hooks from the repository root:

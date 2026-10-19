@@ -1,4 +1,5 @@
-# Local stack: PostgreSQL with pgvector, a one-shot migration run, then the app.
+# Local stack: PostgreSQL with pgvector, the embedding server (after a check of its model files), a one-shot
+# migration run, then the app.
 # Every value comes from the .env file next to this one (see .env.example); a missing one stops Compose
 # with its name. Each service gets only the values it needs.
 name: study-assistant
@@ -60,6 +61,49 @@ services:
       db:
         condition: service_healthy
 
+  # Checks the model files before the embedding server may read them. The expected SHA-256 of every file the server
+  # needs is committed in models.sha256, so a missing, damaged or different file is named here and the server never
+  # starts with it. Runs once and exits, like the migration run; no network is needed.
+  model-check:
+    image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+    working_dir: /model
+    # The list starts with comment lines, which sha256sum cannot skip, so they are filtered out first. An empty list
+    # still fails ("no checksum lines found"), so a list with only comments cannot pass.
+    command: ["sh", "-c", "grep -v '^#' /hashes/models.sha256 | sha256sum -c -"]
+    network_mode: none
+    volumes:
+      # The folder is named after the configured model and revision, so a revision changed in .env without its
+      # files fails here instead of serving the old model under the new name.
+      - ./models/${APP_EMBEDDING__MODEL}/${APP_EMBEDDING__REVISION}:/model:ro
+      - ./models.sha256:/hashes/models.sha256:ro
+
+  # The embedding server: runs the model and turns texts into vectors for the app (Hugging Face Text Embeddings
+  # Inference). The image is pinned by digest, so an upgrade is a deliberate change that the vector reference
+  # check has to pass.
+  embedder:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9@sha256:2538ea1c9640d3763b15af668039d24172d063b42337b0c27796fc2be180c78d
+    # Serves the model from the checked folder. Because onnx/model.onnx is there, the server runs it on the ONNX
+    # Runtime backend; without that file it would quietly switch to another backend with slightly different vectors.
+    command: ["--model-id", "/data/model"]
+    environment:
+      # Never download anything: the server reads only the files that model-check has just checked.
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - ./models/${APP_EMBEDDING__MODEL}/${APP_EMBEDDING__REVISION}:/data/model:ro
+    ports:
+      # Reachable from this machine only, for checks that compare the server's vectors with reference vectors.
+      - "127.0.0.1:${EMBEDDER_PUBLISHED_PORT:?set EMBEDDER_PUBLISHED_PORT in .env, see .env.example}:80"
+    depends_on:
+      # Starts only when every model file matched its committed hash.
+      model-check:
+        condition: service_completed_successfully
+    healthcheck:
+      # Healthy once the model is loaded and the server answers; loading takes a few seconds.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   app:
     build: *app-build
     environment:
@@ -82,6 +126,9 @@ services:
       APP_EMBEDDING__DIMENSION: ${APP_EMBEDDING__DIMENSION}
       APP_EMBEDDING__PASSAGE_PREFIX: ${APP_EMBEDDING__PASSAGE_PREFIX}
       APP_EMBEDDING__QUERY_PREFIX: ${APP_EMBEDDING__QUERY_PREFIX}
+      # Where the embedding server is and how long one request to it may take.
+      APP_EMBEDDING_SERVICE__URL: ${APP_EMBEDDING_SERVICE__URL:?set APP_EMBEDDING_SERVICE__URL in .env, see .env.example}
+      APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS: ${APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS:?set APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS in .env, see .env.example}
       APP_ADMIN__API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env, see .env.example}
     volumes:
       # Course manifests are data, not part of the image; the app only reads them.
@@ -99,6 +146,9 @@ services:
       # Starts only after the migration run has finished without an error.
       migrate:
         condition: service_completed_successfully
+      # Ingestion needs vectors, so the app starts once the embedding server has loaded its model.
+      embedder:
+        condition: service_healthy
     healthcheck:
       # The image has no curl; Python's standard library is enough. Healthy means ready, not only alive.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]

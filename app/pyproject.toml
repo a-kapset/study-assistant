@@ -109,7 +109,10 @@ warn_required_dynamic_aliases = true
 minversion = "9.0"
 testpaths = ["tests"]
 # importlib mode: test files need no __init__.py and are not put on sys.path.
-addopts = ["--import-mode=importlib", "--strict-markers"]
+# Tests that need the running embedding server are left out of a plain run; `pytest -m embedding_server` runs them
+# (a later -m replaces this one).
+addopts = ["--import-mode=importlib", "--strict-markers", "-m", "not embedding_server"]
 markers = [
     "covers(story, *criteria): the user story and the acceptance criteria this test proves, e.g. covers(\"US-001\", \"AC-2\")",
+    "embedding_server: needs the stack's embedding server (docker compose up); fails, never skips, when it is not there",
 ]
