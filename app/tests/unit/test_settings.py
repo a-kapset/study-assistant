@@ -73,7 +73,6 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("APP_INGEST__CHUNK_SIZE", "800")
     monkeypatch.setenv("APP_INGEST__CHUNK_OVERLAP", "80")
     _set_embedding_env(monkeypatch)
-    monkeypatch.setenv("APP_EMBEDDING__MODEL_DIR", "/models")
     monkeypatch.setenv("APP_EMBEDDING_SERVICE__URL", EMBEDDING_SERVICE_URL)
     monkeypatch.setenv("APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS", "5")
 
@@ -86,7 +85,7 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     assert settings.admin.api_key.get_secret_value() == "admin-key-from-env"
     assert settings.courses.source_dir == Path("/sources")
     assert (settings.ingest.chunk_size, settings.ingest.chunk_overlap) == (800, 80)
-    assert settings.embedding == EmbeddingSettings.model_validate(_embedding(model_dir=Path("/models")))
+    assert settings.embedding == EmbeddingSettings.model_validate(_embedding())
     assert settings.embedding_service == EmbeddingServiceSettings(url=HttpUrl(EMBEDDING_SERVICE_URL), timeout_seconds=5)
 
 

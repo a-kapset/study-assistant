@@ -30,7 +30,8 @@ class EmbeddingSpace:
     revision: str
     passage_prefix: str
     query_prefix: str
-    # Version of our code that turns texts into vectors (the library it uses and how it calls it).
+    # Version of our client code: the library it uses and how it sends texts to the embedding server. The server's
+    # own version is not part of the space; an upgrade of it is accepted only when its vectors stay the same.
     embedder_version: str
 
     @classmethod
@@ -69,7 +70,8 @@ class Embedder(Protocol):
     """What ingestion and search need from an embedding model: the space it computes and its vectors.
 
     The embedder reports its own space, so vectors are always stored under the space that really made them,
-    never under one taken from somewhere else. The methods match LangChain's embeddings interface.
+    never under one taken from somewhere else. The methods are asynchronous because every call waits for the
+    embedding server; their names match the asynchronous methods of LangChain's embeddings interface.
     """
 
     @property
@@ -77,10 +79,10 @@ class Embedder(Protocol):
         """The embedding space of every vector this embedder returns."""
         ...
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         """Turn course passages into vectors, one per text, in the same order; the passage prefix is added."""
         ...
 
-    def embed_query(self, text: str) -> list[float]:
+    async def aembed_query(self, text: str) -> list[float]:
         """Turn one search query into a vector; the query prefix is added."""
         ...

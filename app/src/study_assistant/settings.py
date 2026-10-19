@@ -135,16 +135,13 @@ class EmbeddingSettings(BaseModel):
     model: str = Field(pattern=MODEL_ID_PATTERN)
     # Commit of the model's repository that the files are taken from; it alone decides which files are used.
     revision: str = Field(pattern=MODEL_REVISION_PATTERN)
-    # Length of every vector. The vector table is created with it before any model is loaded, and loading
-    # the model checks that the model really gives vectors of this length. The vector index accepts at
-    # most 2,000 dimensions.
+    # Length of every vector. The vector table is created with it, so the database refuses a vector of any other
+    # length. The vector index accepts at most 2,000 dimensions.
     dimension: int = Field(ge=1, le=2000)
     # Text put before every passage and every query, as the model was trained; "" for a model without one.
     # A trailing space is part of the prefix, so .env keeps these values in double quotes.
     passage_prefix: str = Field(max_length=64)
     query_prefix: str = Field(max_length=64)
-    # Folder with the downloaded model files; the app only reads it. The default fits a run from app/.
-    model_dir: Path = Path("../models")
 
 
 class EmbeddingServiceSettings(BaseModel):
