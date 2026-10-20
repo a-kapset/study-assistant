@@ -29,8 +29,7 @@ evaluation-harness/
 │   ├── corpus_db.py        # direct reads of the app's stored corpus, as the read-only database role
 │   ├── testdata/           # test data written into the app's stores: created and removed in one place
 │   │   ├── __init__.py     # the name prefix every piece of test data carries
-│   │   ├── corpus.py       # extra courses and documents, documents made to look old; removal by prefix
-│   │   ├── cleanup.py      # removes all test data from every store and lists what is left
+│   │   ├── cleanup.py      # removes all test data from every store and lists what is left (no kind of data yet)
 │   │   └── __main__.py     # the clean / check command
 │   ├── transport.py        # SutTransport: async HTTP client that never raises on HTTP or network errors
 │   └── observation.py      # Observation: one request/response record, or the transport error instead
@@ -64,21 +63,18 @@ role `DB_READER_USER` / `DB_READER_PASSWORD`, the app's role `DB_APP_USER` / `DB
 `ADMIN_API_KEY`. A variable of the same name in the environment wins over the file.
 
 Every read of the database goes through the read-only role, so a check cannot change what it checks. The
-app's role is used only to write rows a test needs and to delete them again.
+app's role is meant only for writing test data and deleting it again; no check uses it today.
 
 ## Test data
 
-Some checks need data the app cannot create through its API, for example a second course next to the demo
-course. Such data is created through `evalharness.testdata` (in tests, through the `test_data` fixture), not
-by single test files, and every name it writes starts with `evalharness_`. Removal deletes everything with
-that prefix, so no course or file in `courses/` may use it (a unit test checks this).
+Every state the current checks need is reached through the app itself (its configuration, its API, its input
+files), so the harness writes nothing into the app's stores today. When a check needs data the app cannot be
+brought to, for example recorded model answers, that data is created through `evalharness.testdata`, not by
+single test files, and every name it writes starts with `evalharness_`. Removal deletes everything with that
+prefix, so no course or file in `courses/` may use it (a unit test checks this).
 
-A test may create data at any point, before its first request or between two of them, by calling the
-fixture's methods. The fixture deletes leftovers of an earlier run before the test and all test data after
-it, whenever the data was made and also when the test fails, then fails the test if anything is left.
-
-Run the api tests against one stack at a time. Two runs at once on the same stack would change the same demo
-course and remove each other's test data; for parallel runs, start a separate stack for each run
+Run the api tests against one stack at a time. Two runs at once on the same stack would ingest the same demo
+course at the same time; for parallel runs, start a separate stack for each run
 (`docker compose -p <name> up -d`) and point each run at its own one.
 
 After a run that was stopped before its cleanup, remove the data by hand:

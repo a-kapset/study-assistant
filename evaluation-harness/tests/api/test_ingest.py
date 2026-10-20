@@ -2,15 +2,12 @@
 
 Each test calls the admin endpoint for the demo course, then reads the database directly to see what was
 really stored. The answer of the API alone is not enough: it can say one thing while the tables hold another.
-Data the app cannot create through its API is made with the ``test_data`` fixture and removed by it.
 """
 
 import pytest
 from pydantic import JsonValue
 
 from evalharness.corpus_db import CorpusReader
-from evalharness.testdata import name
-from evalharness.testdata.corpus import CorpusTestData
 from evalharness.transport import SutTransport
 
 INGEST_DEMO = "/v1/admin/courses/demo/ingest"
@@ -19,10 +16,6 @@ DEMO_FILE = "vardolin_rules.pdf"
 # four units, eleven objectives. Chunk counts depend on the configured chunk size, so they are compared
 # with the database instead.
 DEMO_STRUCTURE = {"documents": 1, "sections": 4, "learning_objectives": 11}
-
-# Test data names; they carry the harness prefix, so the cleanup finds them.
-FOREIGN_COURSE = name("foreign")
-STALE_FILE = name("stale.pdf")
 
 
 async def _ingest_demo(sut: SutTransport, headers: dict[str, str]) -> dict[str, JsonValue]:
@@ -89,69 +82,3 @@ async def test_reported_counts_are_the_stored_rows(
     assert isinstance(detail.body_json, dict)
     assert report["corpus"] == detail.body_json["corpus"] == stored
     assert {name: stored[name] for name in DEMO_STRUCTURE} == DEMO_STRUCTURE
-
-
-@pytest.mark.covers("US-004", "AC-6")
-async def test_document_dropped_from_the_manifest_is_deleted(
-    sut: SutTransport, admin_headers: dict[str, str], corpus: CorpusReader, test_data: CorpusTestData
-) -> None:
-    """A document that is no longer in the manifest must be deleted from the database.
-
-    The test adds such a document to the demo course, then ingests. The report must list it as removed, and the
-    database must keep only the real demo document. Otherwise search would still find text that is no longer
-    part of the course.
-    """
-    await _ingest_demo(sut, admin_headers)
-    test_data.add_document("demo", STALE_FILE)
-
-    report = await _ingest_demo(sut, admin_headers)
-
-    assert report["removed"] == [STALE_FILE]
-    assert set(corpus.documents("demo")) == {DEMO_FILE}
-
-
-@pytest.mark.covers("US-004", "AC-4")
-async def test_changed_document_is_replaced(
-    sut: SutTransport, admin_headers: dict[str, str], corpus: CorpusReader, test_data: CorpusTestData
-) -> None:
-    """A document stored from another version of its file must be rebuilt from the current file.
-
-    The test fakes an older version by changing the stored file hash, then ingests. The report must say
-    "replaced", the database must hold the real hash again, and the chunks must be the same as before: no old
-    chunks left and none missing.
-    """
-    await _ingest_demo(sut, admin_headers)
-    current_sha256 = corpus.documents("demo")[DEMO_FILE]
-    chunks_before = corpus.chunk_ids("demo")
-    test_data.age_document("demo", DEMO_FILE)
-
-    report = await _ingest_demo(sut, admin_headers)
-
-    assert report["documents"] == [{"source_file": DEMO_FILE, "outcome": "replaced"}]
-    assert corpus.documents("demo")[DEMO_FILE] == current_sha256
-    assert corpus.chunk_ids("demo") == chunks_before
-
-
-@pytest.mark.covers("US-004", "AC-7")
-async def test_ingest_leaves_other_courses_untouched(
-    sut: SutTransport, admin_headers: dict[str, str], corpus: CorpusReader, test_data: CorpusTestData
-) -> None:
-    """Ingest of the demo course must not change another course, even one with documents of the same file names.
-
-    The other course is a full copy of the demo course (documents, sections, objectives, chunks) plus a document
-    named like the demo's removed one. The demo ingest here deletes in both ways: a document removed from the
-    manifest and a replaced one. A delete of documents or chunks that filters only by file name, not by course,
-    would also delete rows of the other course.
-    """
-    await _ingest_demo(sut, admin_headers)
-    test_data.copy_course("demo", FOREIGN_COURSE)
-    test_data.add_document(FOREIGN_COURSE, STALE_FILE)
-    test_data.add_document("demo", STALE_FILE)
-    test_data.age_document("demo", DEMO_FILE)
-    foreign_documents = corpus.documents(FOREIGN_COURSE)
-    foreign_chunks = corpus.chunk_ids(FOREIGN_COURSE)
-
-    await _ingest_demo(sut, admin_headers)
-
-    assert corpus.documents(FOREIGN_COURSE) == foreign_documents
-    assert corpus.chunk_ids(FOREIGN_COURSE) == foreign_chunks

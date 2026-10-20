@@ -363,10 +363,11 @@ with pgvector: counts and vector counts per course, the chunks still missing a v
 keeps two ingestions of one course apart, and the app role's rights on a newly created vector table.
 `tests/integration/test_embedding_space_change.py` plays a change of the embedding model: the migration run
 prepares the new space, and the next ingestion adds a vector for every stored chunk there while the old space
-keeps its own. The tests
-start a throwaway container of the stack's database image with Testcontainers, prepare it with the app's own
-migration run and remove it at the end; the stack's database is never touched. They need Docker running and
-nothing else:
+keeps its own. `tests/integration/test_ingest_sql.py` changes a course the way an author does (a source dropped
+from the manifest, a PDF saved again) and checks what ingestion deletes, also next to a course with files of the
+same names. The tests start a throwaway container of the stack's database image with Testcontainers, prepare it
+with the app's own migration run and remove it at the end; the stack's database is never touched. They need
+Docker running and nothing else:
 
 ```powershell
 poetry run pytest -m database

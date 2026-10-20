@@ -7,8 +7,6 @@ import pytest
 
 from evalharness.corpus_db import CorpusReader
 from evalharness.settings import HarnessSettings, StackSettings, load_stack_settings
-from evalharness.testdata.cleanup import leftovers, remove_all
-from evalharness.testdata.corpus import CorpusTestData, connect_writer
 from evalharness.transport import SutTransport
 
 _API_DIR = Path(__file__).parent
@@ -52,19 +50,3 @@ def corpus(settings: HarnessSettings, stack: StackSettings) -> Iterator[CorpusRe
     """Open a read-only connection to the stack's database for one test."""
     with CorpusReader(settings, stack) as reader:
         yield reader
-
-
-@pytest.fixture
-def test_data(settings: HarnessSettings, stack: StackSettings) -> Iterator[CorpusTestData]:
-    """Give the test a way to create test data in the app's database, and remove all of it afterwards.
-
-    Before the test, data left by an earlier run (for example one that was killed) is deleted. After the test,
-    also when it failed, all test data is deleted again and the database is checked: if anything is left, the
-    test ends with an error that lists it.
-    """
-    remove_all(settings, stack)
-    with connect_writer(settings, stack) as conn:
-        yield CorpusTestData(conn)
-    remove_all(settings, stack)
-    left = leftovers(settings, stack)
-    assert not left, f"test data is still in the database after cleanup: {left}"
