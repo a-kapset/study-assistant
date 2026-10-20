@@ -79,3 +79,12 @@ def test_space_id_is_a_short_plain_name() -> None:
     space = dataclasses.replace(_space(), model="Some-Org/Multi.Lingual-Embedding-Model-Large-V2.1")
     assert re.fullmatch(r"[a-z0-9_]+", space.id)
     assert len(space.id) <= MAX_ID_LENGTH
+
+
+def test_vector_table_is_named_after_the_space() -> None:
+    """Expects the vector table of a known space to have exactly the stored name.
+
+    Catches a change of how the name is made: the migration run would create a new empty table, and the vectors
+    already stored would stay unused in the old one.
+    """
+    assert _space().vector_table == f"vectors_{GOLDEN_ID}"

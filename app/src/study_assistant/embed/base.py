@@ -62,6 +62,15 @@ class EmbeddingSpace:
         name = re.sub(r"[^a-z0-9]+", "_", model_name)[:_NAME_LENGTH].strip("_")
         return f"{name}_{digest}"
 
+    @property
+    def vector_table(self) -> str:
+        """The name of the table that holds this space's vectors: "vectors_" and the space id.
+
+        For example ``vectors_multilingual_e5_small_1a2b3c4d5e6f``. The migration run creates the table; ingestion
+        writes to it and the course endpoints count its rows, all through this one name.
+        """
+        return f"vectors_{self.id}"
+
 
 class Embedder(Protocol):
     """What ingestion and search need from an embedding model: the space it computes and its vectors.

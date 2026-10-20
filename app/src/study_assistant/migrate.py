@@ -18,6 +18,7 @@ import structlog
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from study_assistant.embed.base import EmbeddingSpace
 from study_assistant.logging_setup import configure_logging
 from study_assistant.settings import (
     DbSettings,
@@ -116,16 +117,60 @@ def apply_migrations(conn: psycopg.Connection, migrations: Sequence[Migration]) 
     return newly_applied
 
 
+def prepare_embedding_space(conn: psycopg.Connection, space: EmbeddingSpace, dimension: int) -> bool:
+    """Register the configured embedding space and create its vector table and index; return True if it was new.
+
+    A space that is already registered is left as it is, so a repeated run changes nothing. A space registered with
+    another vector length stops the run: its table would refuse every vector of the configured length. Run before
+    the role grants, so the app server gets rights on a table created here.
+    """
+    with conn.transaction():
+        row = conn.execute("SELECT dimension FROM embedding_spaces WHERE space_id = %s", (space.id,)).fetchone()
+        if row is not None:
+            if row[0] != dimension:
+                raise MigrationError(
+                    f"embedding space {space.id} is registered with {row[0]} dimensions, "
+                    f"the configuration says {dimension}"
+                )
+            return False
+        conn.execute(
+            "INSERT INTO embedding_spaces (space_id, model, revision, passage_prefix, query_prefix, dimension)"
+            " VALUES (%s, %s, %s, %s, %s, %s)",
+            (space.id, space.model, space.revision, space.passage_prefix, space.query_prefix, dimension),
+        )
+        table = sql.Identifier(space.vector_table)
+        # The vector row points at its chunk and repeats the chunk's course, so deleting a chunk deletes its vector
+        # and a search can filter by course in this table.
+        conn.execute(
+            sql.SQL(
+                "CREATE TABLE {table} ("
+                " chunk_id text PRIMARY KEY,"
+                " course_id text NOT NULL,"
+                " embedding vector({dimension}) NOT NULL,"
+                " FOREIGN KEY (chunk_id, course_id) REFERENCES chunks (chunk_id, course_id) ON DELETE CASCADE)"
+            ).format(table=table, dimension=sql.Literal(dimension))
+        )
+        # Cosine distance, the measure the model's vectors are compared with.
+        conn.execute(
+            sql.SQL("CREATE INDEX {index} ON {table} USING hnsw (embedding vector_cosine_ops)").format(
+                index=sql.Identifier(f"{space.vector_table}_hnsw"), table=table
+            )
+        )
+    return True
+
+
 def prepare_server_role(conn: psycopg.Connection, role: ServerRoleSettings, owner: str) -> None:
     """Create the app server's role, or set its password if it exists, and let it read and write rows only.
 
-    The role may select, insert, update and delete rows of every table, and only read the journal; it cannot
-    create, alter or drop anything. Run after the migrations, so tables they added are covered too.
+    The role may select, insert, update and delete rows of every table, and only read the journal and the registry
+    of embedding spaces; it cannot create, alter or drop anything. Run after the migrations and the embedding space,
+    so tables they added are covered too.
     """
     with conn.transaction():
         name = _login_role(conn, role, owner)
         conn.execute(sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}").format(name))
         conn.execute(sql.SQL("REVOKE INSERT, UPDATE, DELETE ON schema_migrations FROM {}").format(name))
+        conn.execute(sql.SQL("REVOKE INSERT, UPDATE, DELETE ON embedding_spaces FROM {}").format(name))
 
 
 def prepare_reader_role(conn: psycopg.Connection, role: ReaderRoleSettings, owner: str) -> None:
@@ -153,15 +198,17 @@ def _login_role(conn: psycopg.Connection, role: RoleSettings, owner: str) -> sql
 
 
 def main() -> int:
-    """Apply the migrations and prepare the app server's role and the read-only role; return the exit code."""
+    """Apply the migrations, prepare the configured embedding space and the two roles; return the exit code."""
     settings = load_migration_settings()
     configure_logging(settings.log_level)
     log = structlog.get_logger().bind(git_commit=settings.git_commit)
     migrations_dir = files("study_assistant") / "migrations"
+    space = EmbeddingSpace.from_settings(settings.embedding)
     try:
         migrations = load_migrations(migrations_dir)
         with psycopg.connect(_conninfo(settings.db), autocommit=True) as conn:
             applied = apply_migrations(conn, migrations)
+            space_created = prepare_embedding_space(conn, space, settings.embedding.dimension)
             prepare_server_role(conn, settings.server_role, owner=settings.db.user)
             prepare_reader_role(conn, settings.reader_role, owner=settings.db.user)
     except (MigrationError, psycopg.Error) as exc:
@@ -171,6 +218,8 @@ def main() -> int:
         "migration_done",
         applied=applied,
         known=len(migrations),
+        embedding_space=space.id,
+        embedding_space_created=space_created,
         server_role=settings.server_role.name,
         reader_role=settings.reader_role.name,
     )

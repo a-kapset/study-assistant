@@ -10,15 +10,24 @@ import pytest
 from psycopg import sql
 from pydantic import SecretStr
 
+from study_assistant.embed.base import EmbeddingSpace
 from study_assistant.migrate import (
     Migration,
     MigrationError,
     apply_migrations,
     load_migrations,
+    prepare_embedding_space,
     prepare_reader_role,
     prepare_server_role,
 )
 from study_assistant.settings import ReaderRoleSettings, RoleSettings, ServerRoleSettings
+
+SPACE = EmbeddingSpace(
+    model="intfloat/multilingual-e5-small",
+    revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    passage_prefix="passage: ",
+    query_prefix="query: ",
+)
 
 
 def _write(directory: Path, files_and_text: dict[str, str]) -> None:
@@ -49,16 +58,22 @@ class _Result:
 
 
 class _FakeConnection:
-    """Stands in for a database connection: a journal of applied versions and a record of the SQL run.
+    """Stands in for a database connection: a journal of applied versions, the registered embedding spaces and a
+    record of the SQL run with its parameters.
 
     A statement equal to ``failing_sql`` raises the way PostgreSQL rejects a broken file.
     """
 
-    def __init__(self, journal: dict[int, str], failing_sql: str | None = None) -> None:
-        """Start with ``journal`` (version -> SHA-256) as the applied files."""
+    def __init__(
+        self, journal: dict[int, str], failing_sql: str | None = None, spaces: dict[str, int] | None = None
+    ) -> None:
+        """Start with ``journal`` (version -> SHA-256) as the applied files and ``spaces`` (id -> dimension) as the
+        registered embedding spaces."""
         self.journal = dict(journal)
         self.failing_sql = failing_sql
+        self.spaces = dict(spaces or {})
         self.executed: list[str] = []
+        self.params: list[tuple[object, ...] | None] = []
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -66,7 +81,7 @@ class _FakeConnection:
         yield
 
     def execute(self, query: str | sql.Composable, params: tuple[object, ...] | None = None) -> _Result:
-        """Answer the journal query, record journal inserts and run (record) everything else.
+        """Answer the journal and registry queries, record journal inserts and run (record) everything else.
 
         A statement composed from parts is recorded as the text it would send. No role exists yet.
         """
@@ -76,11 +91,15 @@ class _FakeConnection:
             raise psycopg.errors.UndefinedObject("type does not exist")
         if query.startswith("SELECT version, sha256 FROM schema_migrations"):
             return _Result(list(self.journal.items()))
+        if query.startswith("SELECT dimension FROM embedding_spaces") and params is not None:
+            space_id = cast(str, params[0])
+            return _Result([(self.spaces[space_id],)] if space_id in self.spaces else [])
         if query.startswith("INSERT INTO schema_migrations") and params is not None:
             version, _name, sha256 = params
             self.journal[cast(int, version)] = cast(str, sha256)
             return _Result([])
         self.executed.append(query)
+        self.params.append(params)
         return _Result([])
 
 
@@ -245,4 +264,117 @@ def test_reader_role_named_like_the_owner_is_refused() -> None:
 
     with pytest.raises(MigrationError, match="must not be the database owner"):
         prepare_reader_role(cast(psycopg.Connection, conn), role, owner="owner_user")
+    assert conn.executed == []
+
+
+@pytest.mark.covers("US-001", "AC-9")
+def test_server_role_may_only_read_the_journal_and_the_space_registry() -> None:
+    """Expects write rights on the journal and on the space registry to be taken back after the grant to all tables.
+
+    Catches a lost or misplaced revoke: the app server could then fake an applied migration or register a space
+    without its vector table, and the next migration run would trust that row.
+    """
+    role = ServerRoleSettings(password=SecretStr("app-password"))
+
+    statements = _role_statements(prepare_server_role, role)
+
+    grant = statements.index('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "app_rw"')
+    assert statements[grant + 1 :] == [
+        'REVOKE INSERT, UPDATE, DELETE ON schema_migrations FROM "app_rw"',
+        'REVOKE INSERT, UPDATE, DELETE ON embedding_spaces FROM "app_rw"',
+    ]
+
+
+def _prepare_space(conn: _FakeConnection, dimension: int = 384) -> bool:
+    """Run ``prepare_embedding_space`` for the test space against the fake connection."""
+    return prepare_embedding_space(cast(psycopg.Connection, conn), SPACE, dimension)
+
+
+@pytest.mark.covers("US-004", "AC-18")
+def test_new_space_is_registered_with_its_identity_and_length() -> None:
+    """Starts with an empty registry and expects one registry row with the space id, its four identity fields and
+    the configured length.
+
+    Catches a row that names another space than the table it describes, or a lost length: the next run could not
+    tell that the configured length no longer fits the table.
+    """
+    conn = _FakeConnection(journal={})
+
+    created = _prepare_space(conn)
+
+    assert created is True
+    insert = conn.executed.index(
+        "INSERT INTO embedding_spaces (space_id, model, revision, passage_prefix, query_prefix, dimension)"
+        " VALUES (%s, %s, %s, %s, %s, %s)"
+    )
+    assert conn.params[insert] == (
+        SPACE.id,
+        "intfloat/multilingual-e5-small",
+        "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "passage: ",
+        "query: ",
+        384,
+    )
+
+
+@pytest.mark.covers("US-004", "AC-20")
+def test_vector_table_has_the_configured_length_and_follows_its_chunks() -> None:
+    """Starts with an empty registry and expects the space's table with vectors of the configured length, pointing
+    at the chunk and its course and deleted with the chunk.
+
+    Catches a fixed or wrong length (every insert of the model's vectors would fail) and a lost cascade: a replaced
+    document would leave vectors of chunks that no longer exist.
+    """
+    conn = _FakeConnection(journal={})
+
+    _prepare_space(conn, dimension=768)
+
+    assert (
+        f'CREATE TABLE "{SPACE.vector_table}" ('
+        " chunk_id text PRIMARY KEY,"
+        " course_id text NOT NULL,"
+        " embedding vector(768) NOT NULL,"
+        " FOREIGN KEY (chunk_id, course_id) REFERENCES chunks (chunk_id, course_id) ON DELETE CASCADE)"
+    ) in conn.executed
+
+
+def test_vector_table_gets_a_cosine_hnsw_index() -> None:
+    """Starts with an empty registry and expects an HNSW index with cosine distance on the space's table.
+
+    Catches another distance class: a search ordered by cosine distance would then not use the index and would read
+    every vector of the table.
+    """
+    conn = _FakeConnection(journal={})
+
+    _prepare_space(conn)
+
+    table = SPACE.vector_table
+    assert f'CREATE INDEX "{table}_hnsw" ON "{table}" USING hnsw (embedding vector_cosine_ops)' in conn.executed
+
+
+def test_registered_space_is_left_as_it_is() -> None:
+    """Registers the space with the configured length first and expects the run to create and insert nothing.
+
+    Catches a repeated run that creates the table again (the run would fail on every start after the first) or adds
+    a second registry row.
+    """
+    conn = _FakeConnection(journal={}, spaces={SPACE.id: 384})
+
+    created = _prepare_space(conn)
+
+    assert created is False
+    assert conn.executed == []
+
+
+def test_space_registered_with_another_length_stops_the_run() -> None:
+    """Registers the space with 384 dimensions, configures 768, and expects an error naming the space and both
+    lengths, with nothing created.
+
+    Catches a run that goes on with the old table: the app would then fail on every vector it stores, far from the
+    setting that caused it.
+    """
+    conn = _FakeConnection(journal={}, spaces={SPACE.id: 384})
+
+    with pytest.raises(MigrationError, match=rf"{SPACE.id} is registered with 384 dimensions.*says 768"):
+        _prepare_space(conn, dimension=768)
     assert conn.executed == []
