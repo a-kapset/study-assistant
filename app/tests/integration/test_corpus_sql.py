@@ -141,10 +141,13 @@ def test_the_app_role_may_write_the_vectors_of_a_space_the_run_just_created(
 
     Expects yes. Catches a run that grants the role its rights before it creates the space's table: the grants
     reach only tables that exist, so the app would fail to store any vector after a new space is configured.
+    The space must not be registered before the run, or the run would create no table and grant nothing new.
     """
     new_settings = embedder.settings.model_copy(update={"query_prefix": "query:"})
+    new_space = EmbeddingSpace.from_settings(new_settings)
+    assert not postgres.space_registered(new_space), "another test already prepared this space"
     postgres.migrate(new_settings)
-    table = EmbeddingSpace.from_settings(new_settings).vector_table
+    table = new_space.vector_table
 
     with postgres.owner_connection() as conn:
         row = conn.execute("SELECT has_table_privilege(%s, %s, 'INSERT')", (postgres.app_role, table)).fetchone()

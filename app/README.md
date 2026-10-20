@@ -360,7 +360,10 @@ run only when asked for.
 
 `tests/integration/test_corpus_sql.py` runs the app's corpus SQL and its migration run against a real PostgreSQL
 with pgvector: counts and vector counts per course, the chunks still missing a vector in a space, the lock that
-keeps two ingestions of one course apart, and the app role's rights on a newly created vector table. The tests
+keeps two ingestions of one course apart, and the app role's rights on a newly created vector table.
+`tests/integration/test_embedding_space_change.py` plays a change of the embedding model: the migration run
+prepares the new space, and the next ingestion adds a vector for every stored chunk there while the old space
+keeps its own. The tests
 start a throwaway container of the stack's database image with Testcontainers, prepare it with the app's own
 migration run and remove it at the end; the stack's database is never touched. They need Docker running and
 nothing else:

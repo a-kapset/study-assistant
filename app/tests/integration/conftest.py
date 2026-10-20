@@ -89,6 +89,12 @@ class MigratedDatabase:
             exit_code = migrate.main()
         assert exit_code == 0, f"the migration run for space {EmbeddingSpace.from_settings(embedding).id} failed"
 
+    def space_registered(self, space: EmbeddingSpace) -> bool:
+        """Tell whether a migration run has already registered ``space`` in this database."""
+        with self.owner_connection() as conn:
+            row = conn.execute("SELECT 1 FROM embedding_spaces WHERE space_id = %s", (space.id,)).fetchone()
+        return row is not None
+
     def empty_corpus(self) -> None:
         """Delete every course and, through the foreign keys, every row that belongs to one, vectors included."""
         with self.owner_connection() as conn:
@@ -112,6 +118,10 @@ class FixedLengthEmbedder:
     def space(self) -> EmbeddingSpace:
         """The space of the settings this embedder was made with."""
         return self._space
+
+    def with_settings(self, settings: EmbeddingSettings) -> FixedLengthEmbedder:
+        """Return an embedder of another configured space, as the app has after a restart with that configuration."""
+        return FixedLengthEmbedder(settings)
 
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         """Return one vector per text: its length in the first place, ones after it."""
