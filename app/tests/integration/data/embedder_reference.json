@@ -1,6 +1,8 @@
 {
  "model": "intfloat/multilingual-e5-small",
  "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+ "passage_prefix": "passage: ",
+ "query_prefix": "query: ",
  "reference": {
   "sentence-transformers": "6.1.0",
   "transformers": "5.20.1",

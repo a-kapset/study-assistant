@@ -70,6 +70,9 @@ select = ["E", "F", "I", "UP", "ANN", "B", "SIM"]
 [tool.mypy]
 python_version = "3.14"
 files = ["src", "tests"]
+# tools/ holds scripts that run in a throwaway container with their own libraries (torch, sentence-transformers),
+# which the app's environment does not have; `mypy .` would otherwise check them too.
+exclude = ["^tools/"]
 # Resolve the package from its sources, not from the installed copy, so an editor checking a
 # single test file sees the same types as a full run.
 mypy_path = "src"

@@ -18,8 +18,10 @@ from study_assistant.settings import EmbeddingServiceSettings, EmbeddingSettings
 
 pytestmark = [pytest.mark.anyio, pytest.mark.embedding_server]
 
-# Vectors made once by sentence-transformers on the same model revision, outside the app (the texts are invented).
-# They include a Russian text and one longer than the model's limit of 512 tokens, which must be cut the same way.
+# Vectors made by the model's reference implementation (sentence-transformers) on the same model revision, outside
+# the app, by tools/make_embedder_reference.py; the file also names the model, revision and prefixes they were made
+# with. The texts are invented and include a Russian text and one longer than the model's limit of 512 tokens, which
+# must be cut the same way.
 REFERENCE = json.loads((Path(__file__).parent / "data" / "embedder_reference.json").read_text(encoding="utf-8"))
 # Equal vectors give 1.0. The tolerance only allows rounding differences between runtimes; a lost or swapped prefix,
 # OpenAI token ids sent instead of text, or other model files give far less.
@@ -35,13 +37,14 @@ def anyio_backend() -> str:
 
 
 def _embedder(http_client: httpx2.AsyncClient) -> RemoteEmbedder:
-    """The app's client for the reference model and its prefixes, pointed at the server published on this machine."""
+    """The app's client set up exactly as the reference was made (model, revision, prefixes), pointed at the server
+    published on this machine."""
     embedding = EmbeddingSettings(
         model=REFERENCE["model"],
         revision=REFERENCE["revision"],
-        dimension=384,
-        passage_prefix="passage: ",
-        query_prefix="query: ",
+        dimension=len(REFERENCE["passages"][0]["vector"]),
+        passage_prefix=REFERENCE["passage_prefix"],
+        query_prefix=REFERENCE["query_prefix"],
     )
     service = EmbeddingServiceSettings(url=HttpUrl(f"http://127.0.0.1:{PORT}"))
     return RemoteEmbedder.from_settings(embedding, service, http_client)

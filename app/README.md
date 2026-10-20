@@ -62,9 +62,12 @@ app/
 │       ├── courses.py
 │       ├── admin.py        # endpoints behind the admin key: course ingestion
 │       └── config.py
+├── tools/
+│   └── make_embedder_reference.py  # makes the reference vectors, in a throwaway container (see "Reference vectors")
 └── tests/
     ├── integration/        # the real database driver without a server: startup and readiness while the database is down;
-    │                       # the running embedding server against reference vectors (pytest -m embedding_server)
+    │                       # the running embedding server against reference vectors (pytest -m embedding_server);
+    │                       # data/embedder_reference.json: the reference vectors
     └── unit/               # in-process tests: the API through FastAPI's TestClient, parsing on the demo course PDF,
                             # the embedding client on a fake HTTP server
 ```
@@ -125,8 +128,8 @@ To change the model or its revision: download the new revision's files the same 
 `onnx/model.onnx` equals the one Hugging Face shows for that file; write the new hashes into `models.sha256`
 (`docker run --rm -v "${PWD}/models/<model>/<revision>:/m:ro" -w /m busybox:1.37.0 sha256sum <files>`); change
 `APP_EMBEDDING__*` in `.env` and `.env.example`; commit both files together. The new revision is a new embedding
-space, so the next ingestion computes every vector again. If the reference-vector check (see "Development checks")
-then fails, the reference vectors have to be made again for the new model. If `model-check` fails while nothing
+space, so the next ingestion computes every vector again. A new model or revision also needs new reference vectors
+for the reference-vector check (see "Reference vectors" under "Development checks"). If `model-check` fails while nothing
 was changed, the local files are damaged: download them again and leave `models.sha256` as it is.
 
 ### Without Docker
@@ -347,17 +350,48 @@ poetry run mypy .
 poetry run pytest
 ```
 
-A plain `pytest` needs no server and no model files. One more test calls the running embedding server through
-the app's client and compares its vectors with reference vectors of the model; it needs the stack
-(`docker compose up -d --wait`) and runs with:
+A plain `pytest` needs no server and no model files. The reference-vector check below needs the running stack.
+
+### Reference vectors
+
+**What they are.** `tests/integration/data/embedder_reference.json` holds the vectors that the model's reference
+implementation (sentence-transformers on CPU, the pinned revision downloaded from Hugging Face) gives for five
+invented texts: four passages, among them a Russian text and one longer than the model's limit of 512 tokens, and
+one query. The file also names the model, the revision, the passage and query prefixes and the library versions
+the vectors were made with.
+
+**How the check uses them.** `tests/integration/test_embedding_server_reference.py` sends the same texts through
+the app's own embedding client to the running embedding server, with the model, revision and prefixes named in
+the file, and expects every vector to point the same way as the reference (cosine at least 0.9999). It sees what
+an HTTP status cannot: a lost or wrong prefix, token ids sent instead of text, a long text cut in another place,
+other model files, a changed server image or client library. It needs the stack (`docker compose up -d --wait`)
+and runs only when asked for:
 
 ```powershell
 poetry run pytest -m embedding_server
 ```
 
-Without the server it fails with a connection error instead of being skipped. Run it after any change of the
+A plain `pytest` leaves it out (marker `embedding_server`); asked for without a server, it fails instead of being
+skipped, so a check that did not run can never look like one that passed. Run it after any change of the
 embedding client, its libraries, the server image or the model files: none of these is part of the embedding
 space, so only this comparison shows that the vectors stayed the same.
+
+**When to make new reference vectors.** Only for another model, revision or prefixes. Never because the check
+fails after an upgrade of the server image, the client or its libraries: that failure is the finding, and new
+reference vectors would hide it.
+
+**How.** `tools/make_embedder_reference.py` makes the file in a throwaway container, with the library versions
+pinned to those the current file was made with. From `app/`:
+
+```powershell
+docker run --rm -v "${PWD}/tools:/tools:ro" -v "${PWD}/tests/integration/data:/out" python:3.14.8-slim-trixie sh -c "pip install -q --root-user-action=ignore --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 && pip install -q --root-user-action=ignore sentence-transformers==6.1.0 transformers==5.20.1 && python /tools/make_embedder_reference.py --out /out/embedder_reference.json"
+```
+
+It downloads about 700 MB (the libraries and the model). For another model, add the values of
+`APP_EMBEDDING__*` from `.env` at the end: `--model <model> --revision <revision> --passage-prefix "<prefix>"
+--query-prefix "<prefix>"`. Run with the defaults, the command gives exactly the vectors in the committed file;
+`git diff` on the file then shows no change. Commit the new file together with the `.env.example` change, then
+run the check against the stack with the new model.
 
 The same checks, a secret scan and a check that app code contains no course-specific names run as
 pre-commit hooks from the repository root:
