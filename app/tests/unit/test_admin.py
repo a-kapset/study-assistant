@@ -125,6 +125,27 @@ def test_course_detail_shows_the_stored_counts(
     assert after.json()["corpus"] == {"documents": 1, "sections": 4, "learning_objectives": 11, "chunks": 12}
 
 
+@pytest.mark.covers("US-004", "AC-17")
+def test_course_detail_shows_the_vectors_in_the_configured_space(
+    settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore, fake_embedder: FakeEmbedder
+) -> None:
+    """Reads the course detail before an ingestion and after it with one stored vector removed, and expects the
+    embedder's space with 0, then 11 vectors (the demo has 12 chunks).
+
+    Catches a count taken from the chunks or from the ingest plan instead of the stored vectors: after a change of
+    model the detail would show vectors the configured space does not have.
+    """
+    with _client(settings, fake_db, fake_store, fake_embedder) as client:
+        before = client.get("/v1/courses/demo").json()
+        client.post(INGEST_DEMO, headers=_key(settings))
+        fake_store.vectors["demo"].popitem()
+        after = client.get("/v1/courses/demo").json()
+
+    space = fake_embedder.space.id
+    assert (before["embedding_space"], before["vectors"]) == (space, 0)
+    assert (after["embedding_space"], after["vectors"]) == (space, 11)
+
+
 @pytest.mark.covers("US-003", "AC-3")
 def test_course_detail_of_a_course_not_served_answers_404(
     settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore, fake_embedder: FakeEmbedder

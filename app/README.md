@@ -309,7 +309,7 @@ banks are not chunked.
 | `GET` | `/v1/config` | Effective configuration: app version and settings, every secret masked |
 | `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}` when the database and the embedding server answer, otherwise 503 in the error envelope naming each failed check |
 | `GET` | `/v1/courses` | The enabled courses in the configured order: `id`, `title`, `description`, `language` |
-| `GET` | `/v1/courses/{course_id}` | One course and its stored `corpus` counts (documents, sections, learning objectives, chunks); 404 for a course not served |
+| `GET` | `/v1/courses/{course_id}` | One course, its stored `corpus` counts (documents, sections, learning objectives, chunks), the configured `embedding_space` and the number of the course's `vectors` in it (0 after a change of model until the next ingestion); 404 for a course not served |
 | `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count |
 
 

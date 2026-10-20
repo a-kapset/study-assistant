@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from study_assistant.courses.models import CourseManifest
+from study_assistant.embed.base import EmbeddingSpace
 from study_assistant.errors import ErrorEnvelope
 from study_assistant.ingest.service import CorpusCounts, CorpusStore
 
@@ -24,6 +25,10 @@ class CourseDetail(CourseSummary):
     """One course and how much of it is stored; all counts are zero until the course is ingested."""
 
     corpus: CorpusCounts
+    # The configured embedding space, and how many of the course's chunks have a vector in it; zero after a change
+    # of model until the course is ingested again.
+    embedding_space: str
+    vectors: int
 
 
 class CoursesResponse(BaseModel):
@@ -33,8 +38,9 @@ class CoursesResponse(BaseModel):
     courses: list[CourseSummary]
 
 
-def courses_router(courses: Mapping[str, CourseManifest], store: CorpusStore) -> APIRouter:
-    """Build the router that serves ``GET /v1/courses`` and ``GET /v1/courses/{course_id}``."""
+def courses_router(courses: Mapping[str, CourseManifest], store: CorpusStore, space: EmbeddingSpace) -> APIRouter:
+    """Build the router that serves ``GET /v1/courses`` and ``GET /v1/courses/{course_id}``; vectors are counted in
+    ``space``."""
     # Courses do not change while the app runs, so their summaries are built once.
     summaries = {
         course.id: CourseSummary(
@@ -56,6 +62,11 @@ def courses_router(courses: Mapping[str, CourseManifest], store: CorpusStore) ->
         summary = summaries.get(course_id)
         if summary is None:
             raise HTTPException(status_code=404, detail=f"No course '{course_id}' is served by this app")
-        return CourseDetail(**summary.model_dump(), corpus=await store.counts(course_id))
+        return CourseDetail(
+            **summary.model_dump(),
+            corpus=await store.counts(course_id),
+            embedding_space=space.id,
+            vectors=await store.vector_count(course_id, space),
+        )
 
     return router

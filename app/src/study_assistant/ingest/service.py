@@ -175,6 +175,10 @@ class CorpusStore(Protocol):
         """Count a course's stored rows; all zero for a course never ingested."""
         ...
 
+    async def vector_count(self, course_id: str, space: EmbeddingSpace) -> int:
+        """Count a course's vectors in ``space``; zero for a course never ingested in it."""
+        ...
+
 
 class CourseIngestor:
     """Ingests the courses the app serves from their source files into a corpus store, with a vector per chunk."""

@@ -146,7 +146,7 @@ class FakeCourseWriter:
 
     async def vector_count(self) -> int:
         """Count the course's stored vectors, the way the database would."""
-        return self._store.vector_count(self._course_id)
+        return self._store.count_vectors(self._course_id)
 
 
 class FakeCorpusStore:
@@ -212,7 +212,12 @@ class FakeCorpusStore:
             chunks=sum(len(d.chunks) for d in documents),
         )
 
-    def vector_count(self, course_id: str) -> int:
+    async def vector_count(self, course_id: str, space: EmbeddingSpace) -> int:
+        """Count the course's stored vectors outside any writer, recording the space asked for."""
+        self.spaces.append(space.id)
+        return self.count_vectors(course_id)
+
+    def count_vectors(self, course_id: str) -> int:
         """Count the course's stored vectors."""
         return len(self.vectors.get(course_id, {}))
 

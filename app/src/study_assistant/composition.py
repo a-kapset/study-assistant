@@ -70,7 +70,7 @@ def build_app(
     app.add_middleware(RequestIdMiddleware)
     install_error_handlers(app)
     app.include_router(health_router(db, embedder))
-    app.include_router(courses_router(courses, corpus))
+    app.include_router(courses_router(courses, corpus, embedder.space))
     app.include_router(admin_router(courses, ingestor, settings.admin.api_key))
     app.include_router(config_router(settings=settings, app_version=app_version))
 

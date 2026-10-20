@@ -94,6 +94,11 @@ class PostgresCorpusStore:
         async with self._database.connection() as conn:
             return await _count(conn, course_id)
 
+    async def vector_count(self, course_id: str, space: EmbeddingSpace) -> int:
+        """Count a course's vectors in ``space`` outside any ingestion."""
+        async with self._database.connection() as conn:
+            return await _count_vectors(conn, course_id, space)
+
 
 class PostgresCourseWriter:
     """The writes of one course inside the transaction ``PostgresCorpusStore.course_writer`` opened."""
@@ -190,17 +195,22 @@ class PostgresCourseWriter:
 
     async def vector_count(self) -> int:
         """Count the course's vectors in the space's table as this transaction sees them, including its own writes."""
-        cursor = await self._conn.execute(_in_space(_COUNT_VECTORS, self._space), (self._course_id,))
-        row = await cursor.fetchone()
-        if row is None:
-            raise RuntimeError("a count query returned no row")
-        count: int = row[0]
-        return count
+        return await _count_vectors(self._conn, self._course_id, self._space)
 
 
 def _in_space(statement: str, space: EmbeddingSpace) -> sql.Composed:
     """Put the space's table into a vector statement, quoted as an identifier."""
     return sql.SQL(statement).format(table=sql.Identifier(space.vector_table))
+
+
+async def _count_vectors(conn: Connection, course_id: str, space: EmbeddingSpace) -> int:
+    """Count a course's vectors in the space's table."""
+    cursor = await conn.execute(_in_space(_COUNT_VECTORS, space), (course_id,))
+    row = await cursor.fetchone()
+    if row is None:
+        raise RuntimeError("a count query returned no row")
+    count: int = row[0]
+    return count
 
 
 async def _stored(conn: Connection, course_id: str, space: EmbeddingSpace) -> StoredCourse:

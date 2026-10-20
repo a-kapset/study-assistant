@@ -128,7 +128,7 @@ async def test_reported_counts_are_read_back_from_the_store(
     """
     stored = CorpusCounts(documents=7, sections=7, learning_objectives=7, chunks=7)
     monkeypatch.setattr(fake_store, "count", lambda course_id: stored)
-    monkeypatch.setattr(fake_store, "vector_count", lambda course_id: 7)
+    monkeypatch.setattr(fake_store, "count_vectors", lambda course_id: 7)
 
     report = await _ingestor(fake_store, fake_embedder).ingest(_demo())
 
