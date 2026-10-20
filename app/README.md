@@ -41,20 +41,20 @@ app/
 │   ├── logging_setup.py    # structlog, one JSON object per line on stdout
 │   ├── errors.py           # the error envelope and the handlers that use it
 │   ├── db.py               # Database protocol and the PostgreSQL pool, opened at startup, closed at shutdown
-│   ├── migrate.py          # one-shot migration run: applies new SQL files, prepares the app's role and a read-only role
+│   ├── migrate.py          # one-shot migration run: applies new SQL files, the embedding space's vector table, the two roles
 │   ├── migrations/         # numbered SQL files (001_vector.sql, 002_corpus.sql, ...), applied in order
 │   ├── courses/            # courses as data: nothing course-specific lives in the code
 │   │   ├── models.py       # the course manifest: metadata, structure rules, source files
 │   │   └── registry.py     # loads the enabled courses' manifests at startup; a bad one stops the app
 │   ├── embed/              # text to vectors
 │   │   ├── base.py         # embedding spaces (which model made a vector) and the Embedder protocol
-│   │   └── remote.py       # the client of the embedding server: adds the prefixes, sends texts in batches, typed errors
+│   │   └── remote.py       # the client of the embedding server: adds the prefixes, sends texts in batches, readiness ping, typed errors
 │   ├── ingest/             # course sources to clean page text, the course structure and chunks, stored per course
 │   │   ├── parser.py       # PDF text layer page by page, with the parser and PDF engine versions
 │   │   ├── normalize.py    # header and footer lines, words split at line ends, spacing, Unicode form; page status
 │   │   ├── structure.py    # sections and learning objectives found by the course's structure rules
 │   │   ├── chunker.py      # chunks within sections: size cap, pages, objectives, content-derived ids, rules version
-│   │   ├── service.py      # ingestion of a course: read every source, then add, keep, replace or remove documents
+│   │   ├── service.py      # ingestion of a course: read every source, compute missing vectors, then add, keep, replace or remove documents
 │   │   └── repository.py   # the corpus tables in PostgreSQL: one transaction per course, counts read back
 │   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
 │       ├── middleware.py   # request id on every request; unhandled exceptions become a 500 envelope
@@ -181,12 +181,19 @@ in the `schema_migrations` journal, so a failing file leaves nothing behind. The
 SHA-256: an applied file must never be edited (the run stops and names it); a change goes into a new file
 with the next number.
 
-After the files, the run creates two roles or resets their passwords, each starting from no table rights:
-the app's role (`DB_APP_USER`) may select, insert, update and delete rows of every table and only read the
-journal; the read-only role (`DB_READER_USER`) may only select. The app connects as its role, so it cannot
-create, alter or drop anything; only the migration run uses the owner.
+Then the run prepares the configured embedding space (`APP_EMBEDDING__*`): it registers the space in
+`embedding_spaces` and creates its vector table `vectors_<space id>` with an HNSW index for cosine distance. A
+space that is already registered is left as it is; one registered with another vector length stops the run. A new
+model, revision or prefix is a new space with its own table, so vectors of two models are never mixed, and the
+tables of earlier spaces stay.
 
-Every row carries its course id; a document's sections, objectives and chunks are deleted with it.
+After that, the run creates two roles or resets their passwords, each starting from no table rights:
+the app's role (`DB_APP_USER`) may select, insert, update and delete rows of every table and only read the
+journal and the space registry; the read-only role (`DB_READER_USER`) may only select. The app connects as its
+role, so it cannot create, alter or drop anything; only the migration run uses the owner.
+
+Every row carries its course id; a document's sections, objectives and chunks are deleted with it, and a chunk's
+vectors with the chunk.
 
 ```mermaid
 erDiagram
@@ -196,6 +203,8 @@ erDiagram
     documents ||--o{ chunks : "cut into"
     sections |o--o{ learning_objectives : "owns"
     sections |o--o{ chunks : "holds"
+    chunks ||--o| vectors_space_id : "has a vector in each space"
+    embedding_spaces ||--|| vectors_space_id : "names"
     courses {
         text course_id PK
         text title
@@ -234,6 +243,19 @@ erDiagram
         text_array objective_ids
         text text
     }
+    embedding_spaces {
+        text space_id PK "model name and a hash of the four fields"
+        text model
+        text revision
+        text passage_prefix
+        text query_prefix
+        int dimension
+    }
+    vectors_space_id {
+        text chunk_id PK
+        text course_id "the chunk's course"
+        vector embedding "HNSW index, cosine distance"
+    }
 ```
 
 ## Ingestion
@@ -247,7 +269,8 @@ flowchart LR
     P --> N["normalize.py<br/>clean page text"]
     N --> S["structure.py<br/>sections, objectives"]
     S --> C["chunker.py<br/>chunks with ids"]
-    C --> R["service.py + repository.py<br/>one transaction per course"]
+    C --> E["remote.py<br/>vectors from the embedding server"]
+    E --> R["service.py + repository.py<br/>one transaction per course"]
     R --> DB[("PostgreSQL")]
     M -. "sources: file, role, authority" .-> P
     M -. "noise_lines" .-> N
@@ -255,15 +278,25 @@ flowchart LR
     M -. "language" .-> C
 ```
 
-Every source is read and chunked before anything is written, so a source that cannot be read (answered with
-422 `ingest_failed`, naming the file) leaves the database as it was. Then, in one transaction per course:
+Every source is read and chunked, and the missing vectors are computed, before anything is written, so a source
+that cannot be read (422 `ingest_failed`, naming the file) or an embedding server that cannot be reached (503
+`embedding_unavailable`) or answers with an error (502 `embedding_failed`) leaves the database as it was. Then, in
+one transaction per course:
 
 - a document whose file, parser, chunking rules and shaping manifest values are all unchanged is kept as it is;
 - a changed document is deleted with all its rows and written again;
-- a document the manifest no longer lists is deleted.
+- a document the manifest no longer lists is deleted;
+- every chunk gets one vector in the configured embedding space, stored in that space's table; an unchanged
+  document whose chunks have no vectors there (after a change of model) gets only its vectors (outcome
+  `embedded`). Vectors are deleted with their chunks.
+
+The vectors are computed outside the transaction, so no database connection waits for the embedding server. If
+another ingestion of the same course changed it in the meantime so that a chunk needs a vector that was not
+computed, the ingestion stops with 409 `ingest_conflict` and nothing written; running it again is safe.
 
 Ingesting the same files twice therefore changes nothing, and chunk ids stay the same. The answer lists what
-happened to each file and the counts read back from the database. Two ingestions of one course run one
+happened to each file, the counts read back from the database, the embedding space and the number of the
+course's chunks with a vector in it. Two ingestions of one course run one
 after the other. Chunk length and overlap are settings (`APP_INGEST__CHUNK_SIZE`, `APP_INGEST__CHUNK_OVERLAP`);
 changing them rebuilds every document on the next ingestion. Only PDF sources are ingested so far; question
 banks are not chunked.
@@ -274,10 +307,10 @@ banks are not chunked.
 |---|---|---|
 | `GET` | `/health` | Liveness: `{"status": "ok"}` while the process is serving HTTP |
 | `GET` | `/v1/config` | Effective configuration: app version and settings, every secret masked |
-| `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok"}}` when the database answers, otherwise 503 in the error envelope |
+| `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}` when the database and the embedding server answer, otherwise 503 in the error envelope naming each failed check |
 | `GET` | `/v1/courses` | The enabled courses in the configured order: `id`, `title`, `description`, `language` |
 | `GET` | `/v1/courses/{course_id}` | One course and its stored `corpus` counts (documents, sections, learning objectives, chunks); 404 for a course not served |
-| `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts |
+| `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count |
 
 
 ## Errors and request ids
@@ -294,6 +327,7 @@ Every error has the status code that fits it and one body format:
 ```
 
 `code` is stable for programs to read: `not_found`, `method_not_allowed`, `unauthorized`, `ingest_failed`,
+`ingest_conflict`, `embedding_failed`, `embedding_unavailable`,
 `internal_server_error` and so on. A 422 also lists `details` with the location and reason of each invalid field; the values that were
 sent are not echoed. A 503 from `/ready` lists the failed checks the same way, for example
 `{"loc": ["checks", "db"], "msg": "unavailable"}`. A 500 never shows the exception; it is written to the log with the

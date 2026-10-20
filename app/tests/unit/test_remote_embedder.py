@@ -193,3 +193,47 @@ async def test_error_status_is_reported_with_its_code_and_not_repeated(settings:
 
     assert error.value.status_code == 422
     assert len(attempts) == 1
+
+
+@pytest.mark.covers("US-001", "AC-2")
+async def test_ping_asks_the_servers_health_endpoint(settings: Settings) -> None:
+    """Answers 200 on the server's health path and expects ping to return after one GET of exactly that path.
+
+    Catches a ping sent to another path (the real server answers 404 there, so the app would never be ready) or one
+    that computes a vector, which makes every readiness probe wait for the model.
+    """
+    requests: list[httpx2.Request] = []
+
+    def healthy(request: httpx2.Request) -> httpx2.Response:
+        """Keep the request and answer like a healthy server."""
+        requests.append(request)
+        return httpx2.Response(200)
+
+    await _embedder(settings, healthy).ping()
+
+    assert [(request.method, str(request.url)) for request in requests] == [("GET", "http://embedder.invalid/health")]
+
+
+def _refuse_connection(request: httpx2.Request) -> httpx2.Response:
+    """Fail the way a server that is not running does."""
+    raise httpx2.ConnectError("connection refused", request=request)
+
+
+@pytest.mark.covers("US-001", "AC-2")
+@pytest.mark.parametrize(
+    ("handler", "reason"),
+    [
+        pytest.param(_refuse_connection, "ConnectError", id="unreachable"),
+        pytest.param(lambda request: httpx2.Response(503), "health status 503", id="unhealthy"),
+    ],
+)
+async def test_ping_reports_an_unreachable_or_unhealthy_server_as_unavailable(
+    settings: Settings, handler: Handler, reason: str
+) -> None:
+    """Refuses the connection, or answers 503, and expects ``EmbeddingServiceUnavailableError`` naming the reason.
+
+    Catches a ping that lets the transport error escape (readiness would answer 500 instead of 503) or that treats
+    any answer as healthy.
+    """
+    with pytest.raises(EmbeddingServiceUnavailableError, match=reason):
+        await _embedder(settings, handler).ping()

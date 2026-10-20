@@ -7,25 +7,29 @@ from study_assistant.composition import build_app
 from study_assistant.settings import Settings
 
 if TYPE_CHECKING:
-    from conftest import FakeDatabase
+    from conftest import FakeDatabase, FakeEmbedder
 
 
 @pytest.mark.covers("US-001", "AC-2")
-def test_ready_answers_200_with_each_check_when_the_database_answers(settings: Settings, fake_db: FakeDatabase) -> None:
+def test_ready_answers_200_with_each_check_when_the_database_and_the_embedder_answer(
+    settings: Settings, fake_db: FakeDatabase, fake_embedder: FakeEmbedder
+) -> None:
     """Guards the success body: a renamed field or a missing check would break every readiness probe."""
-    with TestClient(build_app(settings, fake_db)) as client:
+    with TestClient(build_app(settings, fake_db, embedder=fake_embedder)) as client:
         response = client.get("/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "checks": {"db": "ok"}}
+    assert response.json() == {"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}
 
 
 @pytest.mark.covers("US-001", "AC-2")
-def test_ready_answers_503_in_the_envelope_naming_the_database(settings: Settings, fake_db: FakeDatabase) -> None:
+def test_ready_answers_503_in_the_envelope_naming_the_database(
+    settings: Settings, fake_db: FakeDatabase, fake_embedder: FakeEmbedder
+) -> None:
     """Guards the failure path: a 200, another status or an envelope without the failed check would hide the cause."""
     fake_db.up = False
 
-    with TestClient(build_app(settings, fake_db)) as client:
+    with TestClient(build_app(settings, fake_db, embedder=fake_embedder)) as client:
         response = client.get("/ready", headers={"X-Request-ID": "ready-1"})
 
     assert response.status_code == 503
@@ -39,6 +43,24 @@ def test_ready_answers_503_in_the_envelope_naming_the_database(settings: Setting
         "request_id": "ready-1",
     }
     assert response.headers["X-Request-ID"] == "ready-1"
+
+
+@pytest.mark.covers("US-001", "AC-2")
+def test_ready_answers_503_naming_the_embedder_when_only_it_is_down(
+    settings: Settings, fake_db: FakeDatabase, fake_embedder: FakeEmbedder
+) -> None:
+    """Keeps the database up, makes the embedding server unreachable and expects a 503 naming only the embedder.
+
+    Catches readiness that looks at the database alone: the app would report ready while no course can be ingested
+    or searched.
+    """
+    fake_embedder.up = False
+
+    with TestClient(build_app(settings, fake_db, embedder=fake_embedder)) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["details"] == [{"loc": ["checks", "embedder"], "msg": "unavailable"}]
 
 
 @pytest.mark.covers("US-001", "AC-1")

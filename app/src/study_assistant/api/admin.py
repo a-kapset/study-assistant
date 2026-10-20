@@ -10,8 +10,9 @@ from fastapi.responses import JSONResponse
 from pydantic import SecretStr
 
 from study_assistant.courses.models import CourseManifest
+from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
 from study_assistant.errors import ErrorBody, ErrorEnvelope, error_response
-from study_assistant.ingest.service import CourseIngestor, IngestError, IngestReport
+from study_assistant.ingest.service import CourseIngestor, IngestConflictError, IngestError, IngestReport
 
 ADMIN_KEY_HEADER = "X-Admin-Key"
 
@@ -32,26 +33,50 @@ def admin_router(courses: Mapping[str, CourseManifest], ingestor: CourseIngestor
     @router.post(
         "/courses/{course_id}/ingest",
         response_model=IngestReport,
-        responses={401: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}, 422: {"model": ErrorEnvelope}},
+        responses={
+            401: {"model": ErrorEnvelope},
+            404: {"model": ErrorEnvelope},
+            409: {"model": ErrorEnvelope},
+            422: {"model": ErrorEnvelope},
+            502: {"model": ErrorEnvelope},
+            503: {"model": ErrorEnvelope},
+        },
     )
     async def ingest_course(course_id: str, request: Request) -> IngestReport | JSONResponse:
-        """Bring the stored corpus of a course in line with its source files; repeating it changes nothing."""
+        """Bring the stored corpus of a course in line with its source files; repeating it changes nothing.
+
+        Every failure leaves the stored corpus as it was: a source that cannot be read is a 422, another ingestion
+        of the course that changed it meanwhile a 409, an embedding server that answers with an error a 502, and one
+        that cannot be reached a 503.
+        """
         manifest = courses.get(course_id)
         if manifest is None:
             raise HTTPException(status_code=404, detail=f"No course '{course_id}' is served by this app")
         try:
             report = await ingestor.ingest(manifest)
         except IngestError as exc:
-            log.warning("ingest_failed", course_id=course_id, error=str(exc))
-            error = ErrorBody(code="ingest_failed", message=str(exc))
-            return error_response(422, error, request.state.request_id)
+            return _failed(request, course_id, 422, "ingest_failed", str(exc))
+        except IngestConflictError as exc:
+            return _failed(request, course_id, 409, "ingest_conflict", str(exc))
+        except EmbeddingServiceRequestError as exc:
+            return _failed(request, course_id, 502, "embedding_failed", str(exc))
+        except EmbeddingServiceUnavailableError as exc:
+            message = f"the embedding server could not be reached ({exc})"
+            return _failed(request, course_id, 503, "embedding_unavailable", message)
         log.info(
             "ingest_done",
             course_id=course_id,
             documents={document.source_file: document.outcome for document in report.documents},
             removed=report.removed,
             corpus=report.corpus.model_dump(),
+            embedding_space=report.embedding_space,
+            vectors=report.vectors,
         )
         return report
+
+    def _failed(request: Request, course_id: str, status: int, code: str, message: str) -> JSONResponse:
+        """Log a failed ingestion and answer it in the error envelope with ``status`` and ``code``."""
+        log.warning("ingest_failed", course_id=course_id, code=code, error=message)
+        return error_response(status, ErrorBody(code=code, message=message), request.state.request_id)
 
     return router

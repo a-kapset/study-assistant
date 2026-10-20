@@ -21,6 +21,8 @@ _BATCH_SIZE = 32
 _MAX_RETRIES = 2
 # The server does not check a key, but the client library refuses to start without one.
 _UNUSED_KEY = SecretStr("not-used")
+# How long the readiness check waits for the server's health answer, which needs no model work.
+_PING_TIMEOUT_SECONDS = 5.0
 
 
 class EmbeddingServiceError(Exception):
@@ -48,27 +50,30 @@ class RemoteEmbedder:
     several requests of at most 32 texts. A failed call raises an ``EmbeddingServiceError``.
     """
 
-    def __init__(self, space: EmbeddingSpace, client: OpenAIEmbeddings) -> None:
-        """Use ``client`` for the calls and report ``space`` for every vector it returns."""
+    def __init__(
+        self, space: EmbeddingSpace, client: OpenAIEmbeddings, http_client: httpx2.AsyncClient, health_url: str
+    ) -> None:
+        """Use ``client`` for the embedding calls and ``http_client`` to ask ``health_url`` whether the server is
+        ready; report ``space`` for every vector it returns."""
         self._space = space
         self._client = client
+        self._http_client = http_client
+        self._health_url = health_url
 
     @classmethod
     def from_settings(
-        cls,
-        embedding: EmbeddingSettings,
-        service: EmbeddingServiceSettings,
-        http_client: httpx2.AsyncClient | None = None,
+        cls, embedding: EmbeddingSettings, service: EmbeddingServiceSettings, http_client: httpx2.AsyncClient
     ) -> Self:
         """Build the embedder for the configured model and server; nothing is sent until the first call.
 
-        ``http_client`` replaces the connection the client library opens itself, so tests can answer the calls
+        Every call goes through ``http_client``, which the caller opens and closes; tests give one that answers
         without a server.
         """
+        base_url = str(service.url).rstrip("/")
         client = OpenAIEmbeddings(
             # The server ignores the model name; it is sent because the API requires one.
             model=embedding.model,
-            openai_api_base=str(service.url).rstrip("/") + "/v1",
+            openai_api_base=base_url + "/v1",
             # Given explicitly, so OPENAI_* variables in the environment can never redirect or change the calls.
             openai_api_key=_UNUSED_KEY,
             openai_organization=None,
@@ -82,7 +87,7 @@ class RemoteEmbedder:
             max_retries=_MAX_RETRIES,
             http_async_client=http_client,
         )
-        return cls(EmbeddingSpace.from_settings(embedding), client)
+        return cls(EmbeddingSpace.from_settings(embedding), client, http_client, base_url + "/health")
 
     @property
     def space(self) -> EmbeddingSpace:
@@ -97,6 +102,19 @@ class RemoteEmbedder:
         """Return the vector of one search question, with the query prefix added before sending."""
         vectors = await self._embed([self._space.query_prefix + text])
         return vectors[0]
+
+    async def ping(self) -> None:
+        """Ask the server's health endpoint whether the model is loaded and can compute vectors now.
+
+        No answer in time raises ``EmbeddingServiceUnavailableError`` with the error's type; any status but 200
+        (the server answers 503 when it is not healthy) raises it with the status.
+        """
+        try:
+            response = await self._http_client.get(self._health_url, timeout=_PING_TIMEOUT_SECONDS)
+        except httpx2.TransportError as error:
+            raise EmbeddingServiceUnavailableError(type(error).__name__) from error
+        if response.status_code != 200:
+            raise EmbeddingServiceUnavailableError(f"health status {response.status_code}")
 
     async def _embed(self, texts: list[str]) -> list[list[float]]:
         """Send texts that already carry their prefix to the server and return its vectors.

@@ -1,14 +1,18 @@
 """The course corpus in PostgreSQL: the SQL behind ingestion's writes and the counts read back.
 
 Every statement names the course, so writing one course can never change another course's rows, even where
-both courses have a file of the same name.
+both courses have a file of the same name. Vectors go to the table of their embedding space, which the
+migration run created; its name comes from the space, never from a request.
 """
 
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 
+from psycopg import sql
+
 from study_assistant.db import Connection, Database
-from study_assistant.ingest.service import CorpusCounts, Edition, PreparedDocument
+from study_assistant.embed.base import EmbeddingSpace
+from study_assistant.ingest.service import CorpusCounts, Edition, PreparedDocument, StoredCourse
 
 # Sections are counted only when they have a heading: the text before a file's first heading is not a section.
 _COUNTS = """
@@ -51,6 +55,17 @@ INSERT INTO chunks (chunk_id, course_id, source_file, position, section_id, obje
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
+# The vector statements name the space's table, so they are composed with it as an identifier.
+_CHUNKS_WITHOUT_VECTORS = """
+SELECT c.chunk_id FROM chunks c
+WHERE c.course_id = %s AND NOT EXISTS (SELECT 1 FROM {table} v WHERE v.chunk_id = c.chunk_id)
+"""
+
+# A list of floats arrives as a float array, which the cast turns into a vector of the table's length.
+_INSERT_VECTOR = "INSERT INTO {table} (chunk_id, course_id, embedding) VALUES (%s, %s, %s::vector)"
+
+_COUNT_VECTORS = "SELECT count(*) FROM {table} WHERE course_id = %s"
+
 
 class PostgresCorpusStore:
     """The corpus store of the running app, on the app's connection pool."""
@@ -60,13 +75,19 @@ class PostgresCorpusStore:
         self._database = database
 
     @asynccontextmanager
-    async def course_writer(self, course_id: str) -> AsyncGenerator[PostgresCourseWriter]:
-        """Open one transaction for a course; it commits when the block ends and rolls back on an error."""
+    async def course_writer(self, course_id: str, space: EmbeddingSpace) -> AsyncGenerator[PostgresCourseWriter]:
+        """Open one transaction for a course and its vectors in ``space``; it commits when the block ends and rolls
+        back on an error."""
         async with self._database.connection() as conn, conn.transaction():
             # Held until the transaction ends: a second ingestion of the course waits here instead of reading
             # the stored documents before the first one has written them.
             await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (course_id,))
-            yield PostgresCourseWriter(conn, course_id)
+            yield PostgresCourseWriter(conn, course_id, space)
+
+    async def stored(self, course_id: str, space: EmbeddingSpace) -> StoredCourse:
+        """Read what is stored for a course outside any ingestion's transaction."""
+        async with self._database.connection() as conn:
+            return await _stored(conn, course_id, space)
 
     async def counts(self, course_id: str) -> CorpusCounts:
         """Count a course's stored rows outside any ingestion."""
@@ -77,15 +98,16 @@ class PostgresCorpusStore:
 class PostgresCourseWriter:
     """The writes of one course inside the transaction ``PostgresCorpusStore.course_writer`` opened."""
 
-    def __init__(self, conn: Connection, course_id: str) -> None:
-        """Keep the transaction's connection and the course every statement is limited to."""
+    def __init__(self, conn: Connection, course_id: str, space: EmbeddingSpace) -> None:
+        """Keep the transaction's connection, the course every statement is limited to and the space of its
+        vectors."""
         self._conn = conn
         self._course_id = course_id
+        self._space = space
 
-    async def editions(self) -> dict[str, Edition]:
-        """Return what each stored document of the course was made from, keyed by source file."""
-        cursor = await self._conn.execute(_EDITIONS, (self._course_id,))
-        return {row[0]: Edition(*row[1:]) for row in await cursor.fetchall()}
+    async def stored(self) -> StoredCourse:
+        """Return what each stored document of the course was made from and its chunks without a vector."""
+        return await _stored(self._conn, self._course_id, self._space)
 
     async def save_course(self, title: str, language: str) -> None:
         """Create the course's row, or update its title and language from the manifest."""
@@ -153,9 +175,41 @@ class PostgresCourseWriter:
                 ],
             )
 
+    async def insert_vectors(self, vectors: Sequence[tuple[str, list[float]]]) -> None:
+        """Store one vector for each given chunk id of this course in the space's table."""
+        if vectors:
+            async with self._conn.cursor() as cursor:
+                await cursor.executemany(
+                    _in_space(_INSERT_VECTOR, self._space),
+                    [(chunk_id, self._course_id, vector) for chunk_id, vector in vectors],
+                )
+
     async def counts(self) -> CorpusCounts:
         """Count the course's rows as this transaction sees them, including its own writes."""
         return await _count(self._conn, self._course_id)
+
+    async def vector_count(self) -> int:
+        """Count the course's vectors in the space's table as this transaction sees them, including its own writes."""
+        cursor = await self._conn.execute(_in_space(_COUNT_VECTORS, self._space), (self._course_id,))
+        row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError("a count query returned no row")
+        count: int = row[0]
+        return count
+
+
+def _in_space(statement: str, space: EmbeddingSpace) -> sql.Composed:
+    """Put the space's table into a vector statement, quoted as an identifier."""
+    return sql.SQL(statement).format(table=sql.Identifier(space.vector_table))
+
+
+async def _stored(conn: Connection, course_id: str, space: EmbeddingSpace) -> StoredCourse:
+    """Read the editions of a course's documents and the ids of its chunks that have no vector in ``space``."""
+    cursor = await conn.execute(_EDITIONS, (course_id,))
+    editions = {row[0]: Edition(*row[1:]) for row in await cursor.fetchall()}
+    cursor = await conn.execute(_in_space(_CHUNKS_WITHOUT_VECTORS, space), (course_id,))
+    missing = frozenset(row[0] for row in await cursor.fetchall())
+    return StoredCourse(editions=editions, chunks_without_vectors=missing)
 
 
 async def _count(conn: Connection, course_id: str) -> CorpusCounts:

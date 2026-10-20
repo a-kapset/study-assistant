@@ -11,6 +11,11 @@ with the database as it was. The writing then happens in one transaction per cou
 
 Running it twice on the same files therefore changes nothing. Only the course being ingested is touched:
 another course's rows stay as they are, even where both courses have a file of the same name.
+
+Every chunk gets one vector in the configured embedding space. The vectors are computed before the write
+transaction, from what is stored at that moment, so no database connection waits for the embedding server; the
+transaction then checks that every chunk it writes a vector for got one. A document whose rows are unchanged but
+whose chunks have no vectors in the configured space (after a model change) gets only its vectors.
 """
 
 import asyncio
@@ -26,6 +31,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from study_assistant.courses.models import CourseManifest, CourseSource
+from study_assistant.embed.base import Embedder, EmbeddingSpace
 from study_assistant.ingest.chunker import Chunk, ChunkSize, chunk_source, chunker_version
 from study_assistant.ingest.normalize import normalize_document
 from study_assistant.ingest.parser import ParserVersion, SourceParseError, parse_pdf
@@ -35,11 +41,15 @@ from study_assistant.ingest.structure import CourseStructureError, DocumentStruc
 _TEXT_ROLES = frozenset({"material", "glossary"})
 
 # What happened to a document listed in the manifest.
-type DocumentOutcome = Literal["added", "replaced", "unchanged"]
+type DocumentOutcome = Literal["added", "replaced", "unchanged", "embedded"]
 
 
 class IngestError(Exception):
     """A course source cannot be ingested; the message names the file and why. Nothing has been written."""
+
+
+class IngestConflictError(Exception):
+    """Another ingestion of the course changed the stored rows while this one computed vectors; nothing was written."""
 
 
 @dataclass(frozen=True)
@@ -63,6 +73,22 @@ class PreparedDocument:
     page_count: int
     structure: DocumentStructure
     chunks: tuple[Chunk, ...]
+
+
+@dataclass(frozen=True)
+class StoredCourse:
+    """What is stored for a course: each document's edition, and the chunks that have no vector in the space."""
+
+    editions: dict[str, Edition]
+    chunks_without_vectors: frozenset[str]
+
+
+@dataclass(frozen=True)
+class IngestPlan:
+    """What an ingestion does with each listed document, and which chunks need a vector."""
+
+    outcomes: dict[str, DocumentOutcome]
+    to_embed: tuple[Chunk, ...]
 
 
 class CorpusCounts(BaseModel):
@@ -93,13 +119,16 @@ class IngestReport(BaseModel):
     # Documents stored before but no longer listed in the manifest; their rows are deleted.
     removed: list[str]
     corpus: CorpusCounts
+    # The embedding space of the course's vectors, and how many of its chunks have a vector there.
+    embedding_space: str
+    vectors: int
 
 
 class CourseWriter(Protocol):
     """Writes of one course inside one transaction; other courses' rows are never touched."""
 
-    async def editions(self) -> dict[str, Edition]:
-        """Return the stored documents of the course, keyed by source file."""
+    async def stored(self) -> StoredCourse:
+        """Return the stored documents of the course and its chunks without a vector, as the transaction sees them."""
         ...
 
     async def save_course(self, title: str, language: str) -> None:
@@ -114,19 +143,32 @@ class CourseWriter(Protocol):
         """Store a document with its sections, objectives and chunks."""
         ...
 
+    async def insert_vectors(self, vectors: Sequence[tuple[str, list[float]]]) -> None:
+        """Store one vector for each given chunk id of the course."""
+        ...
+
     async def counts(self) -> CorpusCounts:
         """Count the course's stored rows, as the transaction sees them."""
+        ...
+
+    async def vector_count(self) -> int:
+        """Count the course's chunks that have a vector, as the transaction sees them."""
         ...
 
 
 class CorpusStore(Protocol):
     """Where course corpora are stored."""
 
-    def course_writer(self, course_id: str) -> AbstractAsyncContextManager[CourseWriter]:
-        """Open one transaction for writing a course; it commits when the block ends without an error.
+    def course_writer(self, course_id: str, space: EmbeddingSpace) -> AbstractAsyncContextManager[CourseWriter]:
+        """Open one transaction for writing a course and its vectors in ``space``; it commits when the block ends
+        without an error.
 
         Two ingestions of the same course wait for each other instead of interleaving.
         """
+        ...
+
+    async def stored(self, course_id: str, space: EmbeddingSpace) -> StoredCourse:
+        """Read what is stored for a course outside any write; it may change before the write begins."""
         ...
 
     async def counts(self, course_id: str) -> CorpusCounts:
@@ -135,38 +177,59 @@ class CorpusStore(Protocol):
 
 
 class CourseIngestor:
-    """Ingests the courses the app serves from their source files into a corpus store."""
+    """Ingests the courses the app serves from their source files into a corpus store, with a vector per chunk."""
 
-    def __init__(self, store: CorpusStore, source_dir: Path, size: ChunkSize) -> None:
-        """Keep where sources are and how to chunk them; nothing is read until a course is ingested."""
+    def __init__(self, store: CorpusStore, embedder: Embedder, source_dir: Path, size: ChunkSize) -> None:
+        """Keep where sources are, how to chunk them and what computes vectors; nothing is read or sent yet."""
         self._store = store
+        self._embedder = embedder
         self._source_dir = source_dir
         self._size = size
 
     async def ingest(self, manifest: CourseManifest) -> IngestReport:
-        """Read every source of the course, then bring its stored corpus in line with them in one transaction."""
+        """Read every source of the course, compute the missing vectors, then bring the stored corpus in line with
+        both in one transaction."""
         # Parsing is CPU work; a worker thread keeps the server answering other requests meanwhile.
         prepared = await asyncio.to_thread(prepare_course, manifest, self._source_dir / manifest.id, self._size)
-        async with self._store.course_writer(manifest.id) as writer:
-            stored = await writer.editions()
-            outcomes = {
-                document.source.file: outcome(stored.get(document.source.file), document.edition)
-                for document in prepared
-            }
-            removed = sorted(stored.keys() - outcomes.keys())
+        space = self._embedder.space
+        # Vectors are computed before the write transaction, so no database connection waits for the embedding
+        # server. The plan is made again inside the transaction, where nothing else can change it.
+        early = plan(prepared, await self._store.stored(manifest.id, space))
+        vectors = await self._embed(early.to_embed)
+        async with self._store.course_writer(manifest.id, space) as writer:
+            stored = await writer.stored()
+            final = plan(prepared, stored)
+            missing = [chunk.id for chunk in final.to_embed if chunk.id not in vectors]
+            if missing:
+                raise IngestConflictError(
+                    f"another ingestion of {manifest.id} changed it meanwhile; {len(missing)} chunks have no vector yet"
+                )
+            removed = sorted(stored.editions.keys() - final.outcomes.keys())
             await writer.save_course(manifest.title, manifest.language)
-            replaced = [file for file, result in outcomes.items() if result == "replaced"]
+            replaced = [file for file, result in final.outcomes.items() if result == "replaced"]
             await writer.delete_documents([*removed, *replaced])
             for document in prepared:
-                if outcomes[document.source.file] != "unchanged":
+                if final.outcomes[document.source.file] in ("added", "replaced"):
                     await writer.insert_document(document)
+            await writer.insert_vectors([(chunk.id, vectors[chunk.id]) for chunk in final.to_embed])
             corpus = await writer.counts()
+            vector_count = await writer.vector_count()
         return IngestReport(
             course_id=manifest.id,
-            documents=[DocumentReport(source_file=file, outcome=result) for file, result in outcomes.items()],
+            documents=[DocumentReport(source_file=file, outcome=result) for file, result in final.outcomes.items()],
             removed=removed,
             corpus=corpus,
+            embedding_space=space.id,
+            vectors=vector_count,
         )
+
+    async def _embed(self, chunks: Sequence[Chunk]) -> dict[str, list[float]]:
+        """Compute the vectors of ``chunks``, keyed by chunk id; nothing is sent when there is nothing to compute."""
+        if not chunks:
+            return {}
+        vectors = await self._embedder.aembed_documents([chunk.text for chunk in chunks])
+        # strict: one vector more or less than there are chunks is an error, not a vector stored for another chunk.
+        return {chunk.id: vector for chunk, vector in zip(chunks, vectors, strict=True)}
 
 
 def outcome(stored: Edition | None, current: Edition) -> DocumentOutcome:
@@ -174,6 +237,27 @@ def outcome(stored: Edition | None, current: Edition) -> DocumentOutcome:
     if stored is None:
         return "added"
     return "unchanged" if stored == current else "replaced"
+
+
+def plan(prepared: Sequence[PreparedDocument], stored: StoredCourse) -> IngestPlan:
+    """Decide what to do with each document and which chunks need a vector, given what is stored.
+
+    Added and replaced documents need a vector for every chunk. An unchanged document keeps its rows; if some of its
+    chunks have no vector in the space, it gets only those vectors and the outcome "embedded".
+    """
+    outcomes: dict[str, DocumentOutcome] = {}
+    to_embed: list[Chunk] = []
+    for document in prepared:
+        result = outcome(stored.editions.get(document.source.file), document.edition)
+        if result == "unchanged":
+            missing = [chunk for chunk in document.chunks if chunk.id in stored.chunks_without_vectors]
+            if missing:
+                result = "embedded"
+                to_embed.extend(missing)
+        else:
+            to_embed.extend(document.chunks)
+        outcomes[document.source.file] = result
+    return IngestPlan(outcomes=outcomes, to_embed=tuple(to_embed))
 
 
 def prepare_course(manifest: CourseManifest, course_dir: Path, size: ChunkSize) -> tuple[PreparedDocument, ...]:

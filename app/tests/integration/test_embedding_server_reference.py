@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 
+import httpx2
 import pytest
 from pydantic import HttpUrl
 
@@ -33,7 +34,7 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def _embedder() -> RemoteEmbedder:
+def _embedder(http_client: httpx2.AsyncClient) -> RemoteEmbedder:
     """The app's client for the reference model and its prefixes, pointed at the server published on this machine."""
     embedding = EmbeddingSettings(
         model=REFERENCE["model"],
@@ -42,7 +43,8 @@ def _embedder() -> RemoteEmbedder:
         passage_prefix="passage: ",
         query_prefix="query: ",
     )
-    return RemoteEmbedder.from_settings(embedding, EmbeddingServiceSettings(url=HttpUrl(f"http://127.0.0.1:{PORT}")))
+    service = EmbeddingServiceSettings(url=HttpUrl(f"http://127.0.0.1:{PORT}"))
+    return RemoteEmbedder.from_settings(embedding, service, http_client)
 
 
 def _cosine(first: list[float], second: list[float]) -> float:
@@ -60,10 +62,10 @@ async def test_server_vectors_match_the_reference_implementation() -> None:
     the server's folder, and an upgrade of the server image or of the client libraries. None of these is part of the
     space id, so their vectors would otherwise be stored and compared as if nothing had changed.
     """
-    embedder = _embedder()
-
-    passages = await embedder.aembed_documents([item["text"] for item in REFERENCE["passages"]])
-    queries = [await embedder.aembed_query(item["text"]) for item in REFERENCE["queries"]]
+    async with httpx2.AsyncClient() as http_client:
+        embedder = _embedder(http_client)
+        passages = await embedder.aembed_documents([item["text"] for item in REFERENCE["passages"]])
+        queries = [await embedder.aembed_query(item["text"]) for item in REFERENCE["queries"]]
     expected = [item["vector"] for item in REFERENCE["passages"] + REFERENCE["queries"]]
 
     cosines = [_cosine(got, want) for got, want in zip(passages + queries, expected, strict=True)]

@@ -73,11 +73,13 @@ class EmbeddingSpace:
 
 
 class Embedder(Protocol):
-    """What ingestion and search need from an embedding model: the space it computes and its vectors.
+    """What ingestion, search and the readiness check need from an embedding model: the space it computes, its
+    vectors, and whether it can answer now.
 
     The embedder reports its own space, so vectors are always stored under the space that really made them,
     never under one taken from somewhere else. The methods are asynchronous because every call waits for the
-    embedding server; their names match the asynchronous methods of LangChain's embeddings interface.
+    embedding server; the names of the embedding methods match the asynchronous methods of LangChain's embeddings
+    interface.
     """
 
     @property
@@ -91,4 +93,8 @@ class Embedder(Protocol):
 
     async def aembed_query(self, text: str) -> list[float]:
         """Turn one search query into a vector; the query prefix is added."""
+        ...
+
+    async def ping(self) -> None:
+        """Return when the embedding model can compute vectors now; raise an error when it cannot."""
         ...
