@@ -11,7 +11,7 @@ from study_assistant.ingest.service import CourseIngestor, IngestConflictError, 
 from study_assistant.settings import CoursesSettings, Settings
 
 if TYPE_CHECKING:
-    from conftest import FakeCorpusStore, FakeDatabase, FakeEmbedder
+    from .conftest import FakeCorpusStore, FakeDatabase, FakeEmbedder
 
 # The repository's own course folder: app/tests/unit/<this file> -> repository root.
 REPO_COURSES = Path(__file__).resolve().parents[3] / "courses"

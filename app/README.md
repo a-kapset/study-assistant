@@ -24,8 +24,9 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
 - Docker Compose for running the app next to its database
 - [Poetry 2](https://python-poetry.org/) for dependencies and the virtual environment
 - Development: [pytest](https://docs.pytest.org/) with [Hypothesis](https://hypothesis.readthedocs.io/) for property
-  tests, [ruff](https://docs.astral.sh/ruff/) (format and lint), [mypy](https://mypy.readthedocs.io/) (strict),
-  [pre-commit](https://pre-commit.com/)
+  tests, [Testcontainers](https://testcontainers-python.readthedocs.io/) for a throwaway database in the
+  integration tests, [ruff](https://docs.astral.sh/ruff/) (format and lint), [mypy](https://mypy.readthedocs.io/)
+  (strict), [pre-commit](https://pre-commit.com/)
 
 ## Structure
 
@@ -67,6 +68,7 @@ app/
 │   └── make_embedder_reference.py  # makes the reference vectors, in a throwaway container (see "Reference vectors")
 └── tests/
     ├── integration/        # the real database driver without a server: startup and readiness while the database is down;
+    │                       # the corpus SQL and the migration run on a throwaway PostgreSQL (pytest -m database);
     │                       # the running embedding server against reference vectors (pytest -m embedding_server);
     │                       # data/embedder_reference.json: the reference vectors
     └── unit/               # in-process tests: the API through FastAPI's TestClient, parsing on the demo course PDF,
@@ -351,7 +353,24 @@ poetry run mypy .
 poetry run pytest
 ```
 
-A plain `pytest` needs no server and no model files. The reference-vector check below needs the running stack.
+A plain `pytest` needs no server and no model files. The database tests and the reference-vector check below
+run only when asked for.
+
+### Database tests
+
+`tests/integration/test_corpus_sql.py` runs the app's corpus SQL and its migration run against a real PostgreSQL
+with pgvector: counts and vector counts per course, the chunks still missing a vector in a space, the lock that
+keeps two ingestions of one course apart, and the app role's rights on a newly created vector table. The tests
+start a throwaway container of the stack's database image with Testcontainers, prepare it with the app's own
+migration run and remove it at the end; the stack's database is never touched. They need Docker running and
+nothing else:
+
+```powershell
+poetry run pytest -m database
+```
+
+A plain `pytest` leaves them out (marker `database`); without Docker they fail, never skip. Run them after any
+change of the SQL in `ingest/repository.py`, of `migrate.py` or of a migration file.
 
 ### Reference vectors
 

@@ -39,6 +39,7 @@ test = [
     # it is listed here because the tests use it directly.
     "httpx2 (>=2.13.1,<2.14.0)",
     "hypothesis (>=6.169.0,<7.0.0)",
+    "testcontainers (>=4.15.0,<4.16.0)",
 ]
 lint = [
     "ruff (>=0.16.9,<0.17.0)",
@@ -112,10 +113,11 @@ warn_required_dynamic_aliases = true
 minversion = "9.0"
 testpaths = ["tests"]
 # importlib mode: test files need no __init__.py and are not put on sys.path.
-# Tests that need the running embedding server are left out of a plain run; `pytest -m embedding_server` runs them
-# (a later -m replaces this one).
-addopts = ["--import-mode=importlib", "--strict-markers", "-m", "not embedding_server"]
+# Tests that need a running service are left out of a plain run: `pytest -m embedding_server` needs the stack's
+# embedding server, `pytest -m database` starts a throwaway PostgreSQL in Docker (a later -m replaces this one).
+addopts = ["--import-mode=importlib", "--strict-markers", "-m", "not embedding_server and not database"]
 markers = [
     "covers(story, *criteria): the user story and the acceptance criteria this test proves, e.g. covers(\"US-001\", \"AC-2\")",
     "embedding_server: needs the stack's embedding server (docker compose up); fails, never skips, when it is not there",
+    "database: starts a throwaway PostgreSQL with pgvector in Docker; fails, never skips, when Docker is not running",
 ]

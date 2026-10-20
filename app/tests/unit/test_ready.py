@@ -7,7 +7,7 @@ from study_assistant.composition import build_app
 from study_assistant.settings import Settings
 
 if TYPE_CHECKING:
-    from conftest import FakeDatabase, FakeEmbedder
+    from .conftest import FakeDatabase, FakeEmbedder
 
 
 @pytest.mark.covers("US-001", "AC-2")

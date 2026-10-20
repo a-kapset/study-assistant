@@ -24,7 +24,7 @@ from study_assistant.ingest.service import (
 )
 
 if TYPE_CHECKING:
-    from conftest import FakeCorpusStore, FakeEmbedder
+    from .conftest import FakeCorpusStore, FakeEmbedder
 
 # The async tests run on the anyio plugin, which the web framework already brings.
 pytestmark = pytest.mark.anyio
