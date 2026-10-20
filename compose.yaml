@@ -23,7 +23,8 @@ services:
         # The app and the migration run reach the database by this name.
         aliases: ["${DB_HOST:?set DB_HOST in .env, see .env.example}"]
     volumes:
-      # PostgreSQL 18 images keep their data under this directory.
+      # The data lives in the named volume, not in the container: stopping, removing or rebuilding containers keeps
+      # it; only "docker compose down -v" deletes it. PostgreSQL 18 images keep their data under this directory.
       - db-data:/var/lib/postgresql
     healthcheck:
       # $$ passes the variable to the container's shell instead of Compose.
@@ -37,7 +38,12 @@ services:
 
   migrate:
     build: *app-build
-    # Applies new migration files as the owner, prepares the app's role, then exits; the app waits for it.
+    # Runs once as the database owner, then exits; the app waits for it. It changes the tables, not the course data in them:
+    # 1. applies the files in app/src/study_assistant/migrations/ the database has not seen yet, in order; the
+    #    applied ones are listed in the table schema_migrations, which lives in the same volume as the data;
+    # 2. prepares the configured embedding space: a new one gets a registry row and an empty vector table with its
+    #    index (ingestion fills it); a known one is left as it is; a known one with another vector length stops;
+    # 3. prepares two login roles: the app's (reads and writes rows, cannot change tables) and a read-only one.
     command: ["python", "-m", "study_assistant.migrate"]
     environment:
       APP_LOG_LEVEL: ${APP_LOG_LEVEL:?set APP_LOG_LEVEL in .env, see .env.example}
