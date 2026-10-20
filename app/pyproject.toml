@@ -112,7 +112,8 @@ warn_required_dynamic_aliases = true
 [tool.pytest]
 minversion = "9.0"
 testpaths = ["tests"]
-# importlib mode: test files need no __init__.py and are not put on sys.path.
+# importlib mode: test files are not put on sys.path. The test folders are packages only so that the type
+# checker can tell their two conftest modules apart.
 # Tests that need a running service are left out of a plain run: `pytest -m embedding_server` needs the stack's
 # embedding server, `pytest -m database` starts a throwaway PostgreSQL in Docker (a later -m replaces this one).
 addopts = ["--import-mode=importlib", "--strict-markers", "-m", "not embedding_server and not database"]
