@@ -23,8 +23,9 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
   [psycopg 3](https://www.psycopg.org/psycopg3/) and its connection pool
 - Docker Compose for running the app next to its database
 - [Poetry 2](https://python-poetry.org/) for dependencies and the virtual environment
-- Development: pytest with [Hypothesis](https://hypothesis.readthedocs.io/) for property tests, ruff (format and lint),
-  mypy (strict), pre-commit
+- Development: [pytest](https://docs.pytest.org/) with [Hypothesis](https://hypothesis.readthedocs.io/) for property
+  tests, [ruff](https://docs.astral.sh/ruff/) (format and lint), [mypy](https://mypy.readthedocs.io/) (strict),
+  [pre-commit](https://pre-commit.com/)
 
 ## Structure
 

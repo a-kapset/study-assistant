@@ -14,7 +14,9 @@ How checks are split between the app's own tests and the harness: [TESTING.md](.
   [pydantic](https://docs.pydantic.dev/) and pydantic-settings, [structlog](https://www.structlog.org/) (JSON logs),
   [psycopg 3](https://www.psycopg.org/psycopg3/) for reading the app's database directly
 - [Poetry 2](https://python-poetry.org/) for dependencies and the virtual environment
-- Development: pytest with pytest-asyncio, ruff (format and lint), mypy (strict), pre-commit
+- Development: [pytest](https://docs.pytest.org/) with [pytest-asyncio](https://pytest-asyncio.readthedocs.io/),
+  [ruff](https://docs.astral.sh/ruff/) (format and lint), [mypy](https://mypy.readthedocs.io/) (strict),
+  [pre-commit](https://pre-commit.com/)
 
 ## Structure
 
