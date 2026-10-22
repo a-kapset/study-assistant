@@ -10,7 +10,7 @@ materials themselves (syllabi, books, exams) never are and stay on the local mac
 | Course | What it is |
 |---|---|
 | [`demo`](demo/course.yaml) | Synthetic course: the rules of an invented board game. Used by tests and local runs. |
-| [`istqb_ctfl`](istqb_ctfl/course.yaml) | ISTQB Certified Tester Foundation Level, syllabus v4.0.1. |
+| [`istqb_ctfl`](istqb_ctfl/course.yaml) | ISTQB Certified Tester Foundation Level, syllabus v4.0.1, with a question bank from the four sample exam sets. |
 
 ## The manifest
 
@@ -51,6 +51,46 @@ poetry -C app install --with tools
 poetry -C app run python ../courses/demo/tools/build_pdf.py
 poetry -C app run pytest -q
 ```
+
+## Question banks
+
+A course's exam questions are one more source in its manifest, with the role `question_bank`. Ingestion does not
+cut a bank into chunks. Every course writes its bank in the same format: JSON Lines, one question per line.
+
+| Field | Meaning |
+|---|---|
+| `id` | Unique in the bank; answers and results refer to the question by it. |
+| `stem` | The question text, with any scenario or list it needs; line breaks kept. |
+| `options` | Two or more answer options, each `{"id": "a", "text": "..."}`; the ids are unique. |
+| `keys` | One or more option ids that are correct; a question with two keys asks to select both. |
+| `objective_id` | The learning objective the question tests. |
+| `knowledge_level` | Optional, e.g. `K2`. |
+| `source` | Where a person finds the question: `document`, `version`, `question` (the number the document prints), optional `page`. |
+
+The app reads a bank as a whole and stops at the first unusable line, naming the line and the reason:
+`invalid_json` (the line is not JSON), `invalid_item` (a missing or unknown field, a key that is not one of the
+options, repeated option ids or keys) or `duplicate_item_id`.
+
+### The `istqb_ctfl` bank
+
+The bank comes from the four official sample exam sets. Each set is two PDFs, the questions and the answers (a key
+table with the correct options, the learning objective and the K-level of every question).
+`istqb_ctfl/tools/convert_sample_exams.py` reads both and checks them against each other before it writes anything:
+the same question numbers in both, as many keys as the question asks to select, every key among the options, the
+options lettered a, b, c in order. On any difference it lists all of them and writes nothing; otherwise it writes the
+bank, reads it back with the app's reader and prints the number of questions and the file's SHA-256. The PDFs and the
+bank stay on this machine.
+
+From the repository root (Poetry runs the command inside `app/`), with the folder that holds the sample exam PDFs and
+the bank file in the course's source folder:
+
+```powershell
+poetry -C app run python ../courses/istqb_ctfl/tools/convert_sample_exams.py C:/materials/istqb/Sample_Exams C:/materials/istqb/sample_exams_bank.jsonl
+```
+
+The check catches a misread key table, but not a misread question text (for example, the second line of a long option
+moved into the question). After a new conversion, compare a few questions with long options against the PDF. Figures
+are not in the text: a question built on a diagram keeps only its words.
 
 ## Adding and enabling a course
 

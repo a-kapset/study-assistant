@@ -59,6 +59,8 @@ app/
 │   │   ├── chunker.py      # chunks within sections: size cap, pages, objectives, content-derived ids, rules version
 │   │   ├── service.py      # ingestion of a course: read every source, compute missing vectors, then add, keep, replace or remove documents
 │   │   └── repository.py   # the corpus tables in PostgreSQL: one transaction per course, counts read back
+│   ├── exams/              # a course's question bank
+│   │   └── bank.py         # the common bank format (one question per JSON line) and its reader; a bad line names its number and a reason code
 │   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
 │       ├── middleware.py   # request id on every request; unhandled exceptions become a 500 envelope
 │       ├── health.py

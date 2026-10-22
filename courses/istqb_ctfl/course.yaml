@@ -32,3 +32,8 @@ sources:
       - 'Foundation Level'
       - 'v4\.0\.1 Page \d+ of \d+ \d{4}-\d{2}-\d{2}'
       - '© International Software Testing Qualifications Board'
+  # Written by tools/convert_sample_exams.py from the four sample exam sets (questions and answers PDFs);
+  # stays on this machine like the other sources.
+  - file: sample_exams_bank.jsonl
+    role: question_bank
+    authority: primary
