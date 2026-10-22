@@ -40,7 +40,7 @@ yet.
 | Harness evaluation | `evaluation-harness` (not yet) | Retrieval and answer quality on fixed datasets: reference answers, relations between related inputs, model-graded rubrics, repeated runs with confidence intervals, cost and latency | Quality belongs to the whole system on a fixed corpus and pinned models; it needs datasets and statistics, not assertions on one call |
 | Harness experiments | `evaluation-harness` (not yet) | Defects injected on purpose (bad configuration, failing dependencies, patched code) to see which checks catch them | Shows that the checks have power, not only that they pass |
 | Stack startup | `compose.yaml` | Checks a one-shot service runs before another service may start, such as the hashes of the model files | A wrong input stops the stack with its name instead of reaching a running service |
-| Gates | pre-commit; CI (not yet) | Format, lint, types, secret scan, course-name check; later the test levels above | Stops a known-bad change before it is shared |
+| Gates | pre-commit; CI (`.github/workflows/ci.yml`) | Format, lint, types, secret scan, course-name check; in CI also every test level above that exists, on the demo course | Stops a known-bad change before it is shared; CI runs on a clean Linux machine, so a change that works only on one developer's machine fails there |
 
 ## Choosing a level
 
@@ -154,6 +154,8 @@ its checks run, including the API checks against a stack rebuilt from the change
 | The transport returns failures as data, classifies them, sends its own request id and keeps a base-URL path | Harness unit | `evaluation-harness/tests/unit/test_transport.py` | Simulated HTTP makes every failure kind reproducible without a network |
 | No course-specific names in app code and app tests | Gate (pre-commit) | `.pre-commit-config.yaml` | A text search is enough; before every commit it costs nothing |
 | No secrets in commits | Gate (pre-commit) | `.pre-commit-config.yaml` (gitleaks) | The repository is public: a leak must stop before it is pushed |
+| No secrets anywhere in the history | Gate (CI) | `.github/workflows/ci.yml` (job `checks`) | The pre-commit hook reads only staged changes, so in CI, where nothing is staged, it would pass without reading anything; the CI scan reads every commit, including ones made without the hooks |
+| Every hook passes on every file, and every test level runs on each push and pull request: unit tests of both projects; the database tests; the stack started from `compose.yaml` with an empty volume and filled by the ingestion run, then the harness api tests, the reference-vector check and the test-data leftover check | Gate (CI) | `.github/workflows/ci.yml` (jobs `checks`, `database`, `stack`) | A hook sees only changed files and a developer may skip the opt-in levels; CI runs all of them on a clean Linux machine, and `docker compose wait ingest` makes a failed data fill fail the run, which `up --wait` alone would not |
 | Format, lint and strict types in both projects | Gate (pre-commit) | `.pre-commit-config.yaml` (ruff, mypy) | Seconds per run, with the exact file and line |
 
 How to run each project's tests: [app/README.md](app/README.md), [evaluation-harness/README.md](evaluation-harness/README.md).

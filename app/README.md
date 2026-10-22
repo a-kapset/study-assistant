@@ -402,6 +402,10 @@ poetry run pytest
 A plain `pytest` needs no server and no model files. The database tests and the reference-vector check below
 run only when asked for.
 
+CI (`.github/workflows/ci.yml`) runs all of them on every push to `main` and every pull request: the checks and
+unit tests, `pytest -m database`, and `pytest -m embedding_server` on a stack started from `compose.yaml` with the
+demo course. It downloads the model files of `models.sha256` once and keeps them in the Actions cache.
+
 ### Database tests
 
 `tests/integration/test_corpus_sql.py` runs the app's corpus SQL and its migration run against a real PostgreSQL

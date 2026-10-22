@@ -111,5 +111,9 @@ poetry run ruff check .
 poetry run mypy .
 ```
 
+CI (`.github/workflows/ci.yml`) runs the unit tests on every push to `main` and every pull request, and the api
+tests against a stack started from `compose.yaml` with the demo course, followed by
+`python -m evalharness.testdata check`.
+
 The same checks run as pre-commit hooks from the repository root. Run pre-commit from a terminal with
 no activated virtual environment: Poetry prefers an active one over this project's own.
