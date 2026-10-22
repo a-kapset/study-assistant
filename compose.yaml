@@ -1,5 +1,5 @@
 # Local stack: PostgreSQL with pgvector, the embedding server (after a check of its model files), a one-shot
-# migration run, then the app.
+# migration run, the app, then a one-shot ingestion run that brings every course's stored data in line with its files.
 # Every value comes from the .env file next to this one (see .env.example); a missing one stops Compose
 # with its name. Each service gets only the values it needs.
 name: study-assistant
@@ -162,6 +162,25 @@ services:
       timeout: 3s
       retries: 6
       start_period: 5s
+
+  # Runs once when the app is ready, then exits: asks the app to ingest every course it serves, so every start of
+  # the stack ends with the stored data in line with the course files, also on an empty volume. Unchanged courses
+  # cost nothing. It tries every course and exits with 1 if any failed, naming the course in its log.
+  # Nothing depends on it, so "up --wait" neither waits for it nor sees it fail; "docker compose wait ingest"
+  # after it returns this run's exit code.
+  ingest:
+    build: *app-build
+    command: ["python", "-m", "study_assistant.ingest_courses"]
+    environment:
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      # The app inside the stack, by its service name, and the longest wait for one course's ingestion.
+      APP_SERVER__URL: ${APP_SERVER__URL:?set APP_SERVER__URL in .env, see .env.example}
+      APP_SERVER__TIMEOUT_SECONDS: ${APP_SERVER__TIMEOUT_SECONDS:?set APP_SERVER__TIMEOUT_SECONDS in .env, see .env.example}
+      APP_ADMIN__API_KEY: ${ADMIN_API_KEY}
+    depends_on:
+      # Starts only when the app answers /ready: the database is reachable and the embedding server has its model.
+      app:
+        condition: service_healthy
 
 volumes:
   db-data:

@@ -31,3 +31,6 @@ Thumbs.db
 
 # Downloaded model files: fetched by revision and checked by hash, never committed
 models/
+
+# Database dumps: a dump holds the stored course text, which may come from material that is never committed
+backups/

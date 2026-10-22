@@ -44,6 +44,7 @@ app/
 │   ├── errors.py           # the error envelope and the handlers that use it
 │   ├── db.py               # Database protocol and the PostgreSQL pool, opened at startup, closed at shutdown
 │   ├── migrate.py          # one-shot migration run: applies new SQL files, the embedding space's vector table, the two roles
+│   ├── ingest_courses.py   # one-shot ingestion run: asks the running app to ingest every course it serves; exit 1 if any failed
 │   ├── migrations/         # numbered SQL files (001_vector.sql, 002_corpus.sql, ...), applied in order
 │   ├── courses/            # courses as data: nothing course-specific lives in the code
 │   │   ├── models.py       # the course manifest: metadata, structure rules, source files
@@ -85,7 +86,9 @@ From the repository root, with Docker running:
 Copy-Item .env.example .env                   # then set the passwords and ADMIN_API_KEY in .env
 $env:GIT_COMMIT = git rev-parse --short HEAD  # optional: shown by /v1/config
 docker compose up -d --build --wait
+docker compose wait ingest                    # waits for the one-shot ingestion run and returns its exit code
 docker compose logs migrate --no-log-prefix   # which migration files were applied
+docker compose logs ingest --no-log-prefix    # what happened to each course
 curl.exe -i http://127.0.0.1:8000/ready
 ```
 
@@ -96,6 +99,12 @@ exited without an error and `embedder` is healthy. `--wait` returns once the dat
 the app are healthy (the app counts as healthy when `/ready` answers 200); `docker compose ps -a` shows `migrate`
 and `model-check` as exited with code 0. The model files must be in place first (see "Model files" below).
 
+Once the app is healthy, `ingest`, another one-shot run of the same image, asks the app to ingest every course
+it serves (see "Ingestion"), so the stored data matches the course files after every start, also on an empty
+volume; unchanged courses cost nothing. It tries every course and exits with 1 if any failed, naming the course
+and the app's error code in its log. Nothing depends on it, so `--wait` neither waits for it nor sees it fail:
+`docker compose wait ingest` returns its exit code (0 when every course was ingested).
+
 `docker compose down` stops the stack and keeps the database volume; `docker compose down -v` also
 deletes it, which is needed after changing `DB_OWNER` or `DB_PASSWORD`, because PostgreSQL sets the owner
 only when the volume is first created. The database port is published on `127.0.0.1` only
@@ -105,14 +114,51 @@ use `docker compose exec db psql -U study_assistant -d study_assistant` (the `DB
 Compose mounts the repository's `courses/` folder read-only and enables the courses in
 `APP_COURSES__ENABLED` (`demo` in `.env.example`); check with `curl.exe http://127.0.0.1:8000/v1/courses`.
 Course sources are mounted read-only too: `courses/` (the demo course's PDF is committed) and one more folder
-for a course whose material stays on this machine (`LOCAL_COURSE_ID`, `LOCAL_COURSE_SOURCES`). Then ingest a
-course and look at what is stored:
+for a course whose material stays on this machine (`LOCAL_COURSE_ID`, `LOCAL_COURSE_SOURCES`). The `ingest`
+run stores them at startup; check with `curl.exe http://127.0.0.1:8000/v1/courses/demo`.
+A changed source file is picked up by the next start. The app reads the manifests only when it starts, so after
+editing a `course.yaml` restart it first; otherwise the run ingests with the old manifest and reports every
+document as unchanged:
+
+```powershell
+docker compose restart app                                          # only after a manifest change
+docker compose up -d --wait; if ($?) { docker compose wait ingest }
+```
+
+To ingest one course by hand, call the admin endpoint:
 
 ```powershell
 $key = (Select-String '^ADMIN_API_KEY=(.*)' .env).Matches.Groups[1].Value
 curl.exe -X POST -H "X-Admin-Key: $key" http://127.0.0.1:8000/v1/admin/courses/demo/ingest
-curl.exe http://127.0.0.1:8000/v1/courses/demo
 ```
+
+### Saving and restoring the database
+
+Everything stored so far is made from the migrations and the course files, so `down -v` and a start rebuild it.
+A dump keeps an exact state, such as the corpus an evaluation ran on, and saves the ingestion time. Dumps go to
+`backups/`, which git ignores because a dump holds the course text. The dump is written inside the database
+container and copied out: in Windows PowerShell 5.1, `>` would re-encode the binary output as text.
+
+```powershell
+New-Item -ItemType Directory -Force backups | Out-Null
+docker compose exec db sh -c 'pg_dump -U $POSTGRES_USER -d $POSTGRES_DB -Fc -f /tmp/db.dump'
+docker compose cp db:/tmp/db.dump "backups/db-$(Get-Date -Format yyyyMMdd-HHmm).dump"
+docker compose exec db rm /tmp/db.dump
+```
+
+A dump is restored into an empty volume. The migration run first creates the tables and the two roles the dump
+grants rights to, so the stack must use the same role names (`DB_APP_USER`, `DB_READER_USER`); `--clean
+--if-exists` then replaces those empty tables with the dump's, in one transaction:
+
+```powershell
+docker compose down -v
+docker compose run --rm migrate
+docker compose cp backups/<file>.dump db:/tmp/restore.dump
+docker compose exec db sh -c 'pg_restore -U $POSTGRES_USER -d $POSTGRES_DB --clean --if-exists --single-transaction /tmp/restore.dump && rm /tmp/restore.dump'
+docker compose up -d --wait; if ($?) { docker compose wait ingest }
+```
+
+After a restore the ingestion run reports every document as unchanged.
 
 ### Model files
 

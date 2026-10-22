@@ -171,6 +171,21 @@ class AdminSettings(BaseModel):
     api_key: SecretStr = Field(min_length=16)
 
 
+class AppServerSettings(BaseModel):
+    """Where the running app server is and how long one call to it may take; set as APP_SERVER__<FIELD>.
+
+    Used by the one-shot ingestion run, which asks the app server to ingest each course instead of doing it itself.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Base address of the app server, e.g. "http://app:8000". No default: it depends on how the stack is run.
+    url: HttpUrl
+    # Longest wait for one course's ingestion, in seconds. A course of 250 chunks takes about 15 s, and a course
+    # with several books can take minutes; the HTTP client's own default of 5 s would cut every real ingestion.
+    timeout_seconds: float = Field(default=600, gt=0, le=3600)
+
+
 class MigrationSettings(BaseSettings):
     """What the one-shot migration run is configured with: the owner's connection and the app server's role.
 
@@ -212,6 +227,36 @@ class MigrationSettings(BaseSettings):
         if self.server_role.name == self.reader_role.name:
             raise ValueError(f"the server role and the reader role have the same name {self.server_role.name!r}")
         return self
+
+
+class IngestJobSettings(BaseSettings):
+    """What the one-shot ingestion run is configured with: where the app server is and the admin key.
+
+    The run only calls the app server's admin endpoint, so it gets no database, model or course settings,
+    and stops at startup if any of them reaches its environment.
+    """
+
+    # hide_input_in_errors: a wrong value is never printed in the startup error, so a secret given by mistake
+    # does not end up in the log; the field name and the rule it broke say what to fix.
+    model_config = SettingsConfigDict(
+        env_prefix=ENV_PREFIX,
+        env_nested_delimiter=NESTED_DELIMITER,
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
+    )
+
+    # APP_LOG_LEVEL: the lowest level written to the log.
+    log_level: LogLevel = "INFO"
+
+    # APP_GIT_COMMIT: the commit the image was built from; the image sets it for every process it runs.
+    git_commit: str = "unknown"
+
+    # APP_SERVER__*: the app server to call.
+    server: AppServerSettings
+
+    # APP_ADMIN__*: the key the app server expects on its admin endpoints.
+    admin: AdminSettings
 
 
 class Settings(BaseSettings):
@@ -293,6 +338,12 @@ def load_migration_settings() -> MigrationSettings:
     """Build the migration run's settings from the process environment; unknown prefixed variables stop it."""
     _reject_unknown_env_vars(MigrationSettings)
     return MigrationSettings()
+
+
+def load_ingest_job_settings() -> IngestJobSettings:
+    """Build the ingestion run's settings from the process environment; unknown prefixed variables stop it."""
+    _reject_unknown_env_vars(IngestJobSettings)
+    return IngestJobSettings()
 
 
 def _reject_unknown_env_vars(settings_cls: type[BaseSettings]) -> None:
