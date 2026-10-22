@@ -1,0 +1,176 @@
+# Runs on every push to main and on every pull request. The three jobs run side by side:
+# checks   - formatting, types, the course-name rule, a secret scan and the unit tests of both projects;
+# database - the app's SQL and its migration run against a throwaway PostgreSQL;
+# stack    - the whole stack from compose.yaml with the demo course, then the harness's api tests against it.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The jobs only read the repository.
+permissions:
+  contents: read
+
+# A newer push to the same branch stops the run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The same versions as in app/Dockerfile, so CI and the image install the same way.
+  PYTHON_VERSION: "3.14.8"
+  POETRY_VERSION: "2.5.1"
+  PRE_COMMIT_VERSION: "4.6.2"
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # The secret scan reads every commit, not only the last one.
+          fetch-depth: 0
+
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: poetry
+          cache-dependency-path: |
+            app/poetry.lock
+            evaluation-harness/poetry.lock
+
+      - name: Install both projects
+        run: |
+          poetry -C app install
+          poetry -C evaluation-harness install
+
+      - name: Cache the hook environments
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Hooks on every file
+        # The gitleaks hook reads only staged changes, and nothing is staged here, so it would pass
+        # without reading a byte. The next step scans the whole history instead.
+        env:
+          SKIP: gitleaks
+        run: |
+          pipx install "pre-commit==${PRE_COMMIT_VERSION}"
+          pre-commit run --all-files --show-diff-on-failure
+
+      - name: Secret scan of every commit
+        # Runs as the runner's user, so git inside the container accepts the mounted repository as its own.
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.1 git --redact /repo
+
+      - name: App unit tests
+        working-directory: app
+        run: poetry run pytest
+
+      - name: Harness unit tests
+        working-directory: evaluation-harness
+        run: poetry run pytest
+
+  database:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: poetry
+          cache-dependency-path: app/poetry.lock
+
+      - name: Install the app
+        working-directory: app
+        run: poetry install
+
+      - name: Database tests
+        # Each run starts its own PostgreSQL container and removes it at the end.
+        working-directory: app
+        run: poetry run pytest -m database
+
+  stack:
+    runs-on: ubuntu-24.04
+    env:
+      # Shown by /v1/config; a value in the environment wins over the one in .env.
+      GIT_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Stack configuration
+        # The example values are enough for a stack that lives only for this job. The demo course is the only
+        # enabled course, and its sources are committed.
+        run: cp .env.example .env
+
+      - name: Cache the model files
+        id: model-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: models
+          # The list names every file and its hash, so a new model or revision gets a new cache entry.
+          key: models-${{ hashFiles('models.sha256') }}
+
+      - name: Download the model files
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        # Every file in models.sha256, from the pinned revision; model-check compares the hashes when the
+        # stack starts, so a damaged download stops the stack with the file's name.
+        run: |
+          set -a; . ./.env; set +a
+          dir="models/${APP_EMBEDDING__MODEL}/${APP_EMBEDDING__REVISION}"
+          grep -v '^#' models.sha256 | while read -r _ file; do
+            curl -fsSL --retry 3 --create-dirs -o "${dir}/${file}" \
+              "https://huggingface.co/${APP_EMBEDDING__MODEL}/resolve/${APP_EMBEDDING__REVISION}/${file}"
+          done
+
+      - name: Start the stack
+        # "up --wait" does not wait for the ingestion run, which nothing depends on, and returns 0 even when it
+        # fails; "wait ingest" returns that run's exit code.
+        run: |
+          docker compose up -d --build --wait
+          docker compose wait ingest
+
+      - name: Install Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: poetry
+          cache-dependency-path: |
+            app/poetry.lock
+            evaluation-harness/poetry.lock
+
+      - name: Install both projects
+        run: |
+          poetry -C app install
+          poetry -C evaluation-harness install
+
+      - name: Harness api tests
+        working-directory: evaluation-harness
+        run: poetry run pytest -m api
+
+      - name: Reference vectors from the embedding server
+        working-directory: app
+        run: poetry run pytest -m embedding_server
+
+      - name: No harness test data left
+        working-directory: evaluation-harness
+        run: poetry run python -m evalharness.testdata check
+
+      - name: Stack logs
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --no-color
