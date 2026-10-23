@@ -126,6 +126,9 @@ services:
       APP_COURSES__SOURCE_DIR: ${SOURCES_DIR:?set SOURCES_DIR in .env, see .env.example}
       APP_INGEST__CHUNK_SIZE: ${APP_INGEST__CHUNK_SIZE:?set APP_INGEST__CHUNK_SIZE in .env, see .env.example}
       APP_INGEST__CHUNK_OVERLAP: ${APP_INGEST__CHUNK_OVERLAP:?set APP_INGEST__CHUNK_OVERLAP in .env, see .env.example}
+      APP_SEARCH__DEFAULT_K: ${APP_SEARCH__DEFAULT_K:?set APP_SEARCH__DEFAULT_K in .env, see .env.example}
+      APP_SEARCH__MAX_K: ${APP_SEARCH__MAX_K:?set APP_SEARCH__MAX_K in .env, see .env.example}
+      APP_SEARCH__MIN_SCORE: ${APP_SEARCH__MIN_SCORE:?set APP_SEARCH__MIN_SCORE in .env, see .env.example}
       # The embedding model; the vectors' space is named after it.
       APP_EMBEDDING__MODEL: ${APP_EMBEDDING__MODEL}
       APP_EMBEDDING__REVISION: ${APP_EMBEDDING__REVISION}

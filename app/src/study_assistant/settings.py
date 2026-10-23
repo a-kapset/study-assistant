@@ -121,6 +121,31 @@ class IngestSettings(BaseModel):
     chunk_overlap: int = Field(default=100, ge=0)
 
 
+class SearchSettings(BaseModel):
+    """What a search returns when the request does not say; set as APP_SEARCH__<FIELD>.
+
+    A request may ask for its own number of hits and its own lowest score; these values are used otherwise.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Hits returned when a request does not ask for a number.
+    default_k: int = Field(default=5, ge=1)
+    # Most hits one request may ask for, so one request cannot read a whole course.
+    max_k: int = Field(default=50, ge=1, le=200)
+    # Lowest cosine similarity a hit may have. The default model scores almost any text above 0.7 against any
+    # other, so the useful range is narrow: on the first course, real exam questions scored 0.84-0.93 against
+    # their best chunk, unrelated questions 0.76-0.83.
+    min_score: float = Field(default=0.83, ge=-1, le=1)
+
+    @model_validator(mode="after")
+    def _default_within_max(self) -> Self:
+        """Refuse a default number of hits above the most a request may ask for."""
+        if self.default_k > self.max_k:
+            raise ValueError(f"default_k ({self.default_k}) must not be above max_k ({self.max_k})")
+        return self
+
+
 class EmbeddingSettings(BaseModel):
     """Which embedding model turns text into vectors, and how; set as APP_EMBEDDING__<FIELD>.
 
@@ -290,6 +315,9 @@ class Settings(BaseSettings):
 
     # APP_INGEST__*: how sources are chunked.
     ingest: IngestSettings = Field(default_factory=IngestSettings)
+
+    # APP_SEARCH__*: what a search returns by default.
+    search: SearchSettings = Field(default_factory=SearchSettings)
 
     # APP_EMBEDDING__*: the embedding model.
     embedding: EmbeddingSettings
