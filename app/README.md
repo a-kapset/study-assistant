@@ -59,12 +59,17 @@ app/
 │   │   ├── chunker.py      # chunks within sections: size cap, pages, objectives, content-derived ids, rules version
 │   │   ├── service.py      # ingestion of a course: read every source, compute missing vectors, then add, keep, replace or remove documents
 │   │   └── repository.py   # the corpus tables in PostgreSQL: one transaction per course, counts read back
+│   ├── retrieval/          # finding the course passages closest to a question
+│   │   ├── models.py       # the search result: hits with score and rank, status ok / empty, the values used
+│   │   ├── repository.py   # the two search statements: a course's coverage by vectors, its closest passages
+│   │   └── service.py      # vector search in one course: refuse a course not fully embedded, keep hits above the lowest score
 │   ├── exams/              # a course's question bank
 │   │   └── bank.py         # the common bank format (one question per JSON line) and its reader; a bad line names its number and a reason code
 │   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
 │       ├── middleware.py   # request id on every request; unhandled exceptions become a 500 envelope
 │       ├── health.py
 │       ├── courses.py
+│       ├── search.py       # POST /v1/search
 │       ├── admin.py        # endpoints behind the admin key: course ingestion
 │       └── config.py
 ├── tools/
@@ -355,6 +360,28 @@ after the other. Chunk length and overlap are settings (`APP_INGEST__CHUNK_SIZE`
 changing them rebuilds every document on the next ingestion. Only PDF sources are ingested so far; question
 banks are not chunked.
 
+## Search
+
+`POST /v1/search` with `course_id` and `query` returns the course's passages closest to the question by cosine
+similarity, closest first, each with its section, file, pages, text, `score` and `rank`. Passages below the
+lowest score are left out; when none is left the status is `empty`, otherwise `ok`. The answer repeats the
+number of hits asked for (`k`), the lowest score (`min_score`) and the embedding space it used, so a client can
+record what produced it. `k` and `min_score` may be sent with the request; otherwise `APP_SEARCH__DEFAULT_K`
+and `APP_SEARCH__MIN_SCORE` apply, and `k` above `APP_SEARCH__MAX_K` is a 422. The default model scores almost
+any two texts above 0.7, so the useful lowest scores lie in a narrow range (see `.env.example`).
+
+A course that is not ingested, or whose chunks do not all have a vector in the configured space (after a
+change of model), is refused with 409 `course_not_searchable` instead of being searched in part; ingesting it
+again fixes it. An embedding server that cannot be reached is a 503, one that answers with an error a 502.
+
+```powershell
+'{"course_id": "demo", "query": "How many barges does each player receive?"}' | Set-Content search.json
+curl.exe -X POST -H "Content-Type: application/json" --data-binary "@search.json" http://127.0.0.1:8000/v1/search
+```
+
+The JSON goes through a file because Windows PowerShell 5.1 removes the inner double quotes of a JSON argument
+to `curl.exe`. Its `Invoke-RestMethod` also shows non-ASCII course text garbled, although the answer is UTF-8.
+
 ## API
 
 | Method | Path | Purpose |
@@ -364,6 +391,7 @@ banks are not chunked.
 | `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}` when the database and the embedding server answer, otherwise 503 in the error envelope naming each failed check |
 | `GET` | `/v1/courses` | The enabled courses in the configured order: `id`, `title`, `description`, `language` |
 | `GET` | `/v1/courses/{course_id}` | One course, its stored `corpus` counts (documents, sections, learning objectives, chunks), the configured `embedding_space` and the number of the course's `vectors` in it (0 after a change of model until the next ingestion); 404 for a course not served |
+| `POST` | `/v1/search` | The passages of a course closest to a question: `status` (`ok` / `empty`), `hits` with score and rank, the `k`, `min_score` and `embedding_space` used; 404 for a course not served, 409 for a course not fully embedded (see "Search") |
 | `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count |
 
 
@@ -417,7 +445,9 @@ keeps two ingestions of one course apart, and the app role's rights on a newly c
 prepares the new space, and the next ingestion adds a vector for every stored chunk there while the old space
 keeps its own. `tests/integration/test_ingest_sql.py` changes a course the way an author does (a source dropped
 from the manifest, a PDF saved again) and checks what ingestion deletes, also next to a course with files of the
-same names. The tests start a throwaway container of the stack's database image with Testcontainers, prepare it
+same names. `tests/integration/test_search_sql.py` checks the search statements: the closest passages of the
+asked course only, with their similarity, and a course's coverage by vectors per space. The tests start a
+throwaway container of the stack's database image with Testcontainers, prepare it
 with the app's own migration run and remove it at the end; the stack's database is never touched. They need
 Docker running and nothing else:
 
@@ -426,7 +456,7 @@ poetry run pytest -m database
 ```
 
 A plain `pytest` leaves them out (marker `database`); without Docker they fail, never skip. Run them after any
-change of the SQL in `ingest/repository.py`, of `migrate.py` or of a migration file.
+change of the SQL in `ingest/repository.py` or `retrieval/repository.py`, of `migrate.py` or of a migration file.
 
 ### Reference vectors
 
