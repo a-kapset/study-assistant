@@ -1,0 +1,29 @@
+# Retrieval gold set v0 of the first course: every sample-exam question and the course section its learning
+# objective belongs to. The questions are course material and stay on the local machine; the gold set is built
+# from the local question bank at run time. This file pins that bank by its SHA-256 and states, before any run,
+# what is measured and which result counts as good enough.
+
+course_id = "istqb_ctfl"
+
+# The question bank, a file in the course's local source folder (written by courses/istqb_ctfl/tools/convert_sample_exams.py).
+# A run with a bank of another hash is refused: its numbers would not be comparable with earlier runs.
+bank_file = "sample_exams_bank.jsonl"
+bank_sha256 = "99a22d4ed4d46a6c934795c68ea9f65576ff4abbd44e52bc38a25a65a5a9b963"
+
+# Same rule as the course manifest's objective_id: "FL-1.2.3" -> section "1.2" in chapter "1".
+objective_section = 'FL-(?P<section>(?P<chapter>\d+)\.\d+)\.\d+'
+
+# Questions of these sets are held out: nothing is tuned on them, they are run only for a final measurement
+# and only when asked for explicitly.
+held_out_sets = ["D"]
+
+# What a run reports as its main result. Every question has one answer section, and a hit counts when it comes
+# from that section or one of its subsections. A search that fails or finds nothing scores as a miss and stays
+# in the count. The search runs with the threshold the app is configured with, as a user gets it.
+[primary]
+metric = "recall"
+k = 5 # APP_SEARCH__DEFAULT_K=5 in .env.example
+sets = ["A", "B", "C"]
+# Higher is better. A result below this value is the reason to improve retrieval next; with about 150 questions
+# the result is only precise to a few points, so a round value is used.
+target = 0.80

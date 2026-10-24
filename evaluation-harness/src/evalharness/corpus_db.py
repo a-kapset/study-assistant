@@ -5,6 +5,7 @@ to write, rows left over from an older edition, rows written under another cours
 themselves catches those. Every read goes through the stack's read-only role.
 """
 
+import hashlib
 from typing import Self
 
 import psycopg
@@ -65,6 +66,23 @@ class CorpusReader:
             "SELECT chunk_id FROM chunks WHERE course_id = %s ORDER BY source_file, position", (course_id,)
         ).fetchall()
         return [row[0] for row in rows]
+
+    def section_ids(self, course_id: str) -> set[str]:
+        """Return the ids of a course's headed sections, in the form search hits name them (e.g. "4.2")."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT section_id FROM sections WHERE course_id = %s AND section_id IS NOT NULL", (course_id,)
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    def snapshot(self, course_id: str) -> str:
+        """Name the course's current corpus: the SHA-256 of its chunk ids, sorted.
+
+        The app makes a chunk id from the source file's hash, the section, the position and the text, so the name
+        changes when the text or the section of any chunk changes, and stays the same when an unchanged course is
+        ingested again.
+        """
+        ids = sorted(self.chunk_ids(course_id))
+        return hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()
 
     def documents(self, course_id: str) -> dict[str, str]:
         """Map each stored document of a course to the SHA-256 of the file it was made from."""
