@@ -26,9 +26,14 @@ evaluation-harness/
 ├── pyproject.toml          # project metadata, dependencies, ruff / mypy / pytest config
 ├── poetry.lock
 ├── METRICS.md              # the formula and meaning of every metric the harness reports
+├── datasets/               # gold set declarations, one folder per course (the questions stay local)
+├── runs/                   # run records, one JSON file per run (not committed)
 ├── src/evalharness/
 │   ├── settings.py         # where the system under test is (EVAL_*), and the values shared with the stack's .env
 │   ├── corpus_db.py        # direct reads of the app's stored corpus, as the read-only database role
+│   ├── datasets/           # builds a gold set from a course's local question bank under its declaration
+│   ├── oracles/            # scores one search against the answer section, and summarises a group of questions
+│   ├── evaluation/         # a retrieval run: checks, two passes over the search, the run record, the command
 │   ├── testdata/           # test data written into the app's stores: created and removed in one place
 │   │   ├── __init__.py     # the name prefix every piece of test data carries
 │   │   ├── cleanup.py      # removes all test data from every store and lists what is left (no kind of data yet)
@@ -39,6 +44,7 @@ evaluation-harness/
     ├── unit/               # offline: HTTP is simulated, no app needed
     └── api/                # need a running system under test; selected with -m api
 ```
+
 
 ## Getting started
 
@@ -61,8 +67,9 @@ Settings are read from environment variables when a run starts.
 
 Values the harness shares with the stack are read from the stack's own `.env` (the repository root's, see
 [`.env.example`](../.env.example)), so they are set in one place: `DB_NAME`, `DB_PUBLISHED_PORT`, the read-only
-role `DB_READER_USER` / `DB_READER_PASSWORD`, the app's role `DB_APP_USER` / `DB_APP_PASSWORD` and
-`ADMIN_API_KEY`. A variable of the same name in the environment wins over the file.
+role `DB_READER_USER` / `DB_READER_PASSWORD`, the app's role `DB_APP_USER` / `DB_APP_PASSWORD`,
+`ADMIN_API_KEY`, and the local course `LOCAL_COURSE_ID` / `LOCAL_COURSE_SOURCES` (where a retrieval run finds
+the question bank). A variable of the same name in the environment wins over the file.
 
 Every read of the database goes through the read-only role, so a check cannot change what it checks. The
 app's role is meant only for writing test data and deleting it again; no check uses it today.
@@ -89,6 +96,27 @@ poetry run python -m evalharness.testdata clean   # delete it all, then check ag
 ```powershell
 $env:EVAL_SUT_BASE_URL = "http://127.0.0.1:8001"   # only if the app is not on the default address
 ```
+
+## Retrieval evaluation
+
+A run sends every question of a gold set to the app's search twice, with the app's own settings and with no
+lowest score, scores each result against the question's answer section, writes a run record to `runs/` and
+prints the results per exam set, chapter and knowledge level. The metrics: [METRICS.md](METRICS.md).
+
+The gold set is built from the course's local question bank each time; only its declaration is committed
+(`datasets/<course>/`). The stack must serve that course: in the root `.env`, `LOCAL_COURSE_ID` names it and
+`LOCAL_COURSE_SOURCES` is the folder with its materials and question bank.
+
+```powershell
+poetry run python -m evalharness.evaluation datasets/istqb_ctfl/retrieval_gold_v0.toml
+poetry run python -m evalharness.evaluation datasets/istqb_ctfl/retrieval_gold_v0.toml --sets D --include-held-out
+```
+
+Without `--sets` the run takes the sets the declaration's main result is measured on. Held-out sets run only
+with `--include-held-out`, and every such run is counted. A run is refused before the first search, with exit
+code 2, when the bank differs from the declared one, the stack serves another course, a set is unknown, or an
+answer section is not a section of the stored course. A completed run exits with 0, whatever its numbers.
+
 
 ## Running the tests
 

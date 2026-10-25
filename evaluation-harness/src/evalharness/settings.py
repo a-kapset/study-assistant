@@ -47,6 +47,10 @@ class StackSettings(BaseSettings):
     db_app_user: str
     db_app_password: SecretStr
     admin_api_key: SecretStr
+    # The course whose local materials the stack mounts, and their folder. A relative folder starts from the folder
+    # of the .env file (the repository root), as Docker Compose reads it.
+    local_course_id: str
+    local_course_sources: Path
 
 
 def load_stack_settings(env_file: Path) -> StackSettings:

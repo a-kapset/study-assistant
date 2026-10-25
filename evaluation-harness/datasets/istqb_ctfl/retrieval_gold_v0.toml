@@ -17,6 +17,10 @@ objective_section = 'FL-(?P<section>(?P<chapter>\d+)\.\d+)\.\d+'
 # and only when asked for explicitly.
 held_out_sets = ["D"]
 
+# Uses of the held-out sets before run records were kept: on 2026-10-23 a probe of the search threshold looked at
+# set D once. Every recorded run that includes a held-out set adds one to this count.
+held_out_uses_before_records = 1
+
 # What a run reports as its main result. Every question has one answer section, and a hit counts when it comes
 # from that section or one of its subsections. A search that fails or finds nothing scores as a miss and stays
 # in the count. The search runs with the threshold the app is configured with, as a user gets it.

@@ -191,6 +191,68 @@ The last three as a group: $n = 3$, recall@5 = 1/3, MRR = 1/3, one `empty`, one 
 - **Precision has a low ceiling here.** An answer section may hold fewer than $k$ passages, so $\bar{P}$ well
   below 1 is normal; compare it between runs, not with 1.
 
+### A run: two passes and the main result
+
+Code: [`src/evalharness/evaluation/retrieval.py`](src/evalharness/evaluation/retrieval.py) (the run),
+[`src/evalharness/evaluation/__main__.py`](src/evalharness/evaluation/__main__.py) (the printed summary).
+
+A run sends every chosen question of the gold set to the search twice and scores both results with the
+formulas above:
+
+- **primary pass** — the question is sent as a user sends it, so the app's own $k$ and threshold
+  (`min_score`) apply; this is the result a user gets;
+- **diagnostic pass** — the same $k$ with `min_score` = −1. A cosine score is never below −1, so the
+  threshold removes nothing and $L_q$ holds the plain first $k$ passages.
+
+Each pass is summarised over all chosen questions and per sample exam, per chapter and per knowledge level
+(K1–K3), each group with its $n$.
+
+**Reading the two passes together.** Per question:
+
+| Primary | Diagnostic | What it means |
+|---|---|---|
+| `hit` | `hit` | found, and the threshold kept it |
+| `miss` or `empty` | `hit` | the answer section was among the first $k$, but its score was under the threshold: the threshold caused the miss |
+| `miss` or `empty` | `miss` | the answer section was not among the first $k$ at all: the search itself missed |
+
+So recall@k of the diagnostic pass is the highest value that lowering the threshold alone could reach. The
+price of a lower threshold is that questions the course does not cover get passages instead of an empty
+result.
+
+**Main result**, $R$ — recall@k of the primary pass over the questions of the declared sets:
+
+```math
+R = \mathrm{recall@}k \text{ of the primary pass over } Q_{\text{main}}
+```
+
+where
+
+- $Q_{\text{main}}$ — the questions of the sample exams named under `primary.sets` in the gold set's
+  declaration;
+- $k$ — the number of places the app used, as its response reports it;
+- $\mathrm{recall@}k$ — the share of questions whose answer section was found among the first $k$ passages
+  (formula above).
+
+**Target verdict** — whether the main result reaches the target fixed in the declaration before the first run:
+
+```math
+\text{verdict} =
+\begin{cases}
+\text{met} & \text{if } R \ge \tau \\
+\text{below} & \text{if } R < \tau
+\end{cases}
+```
+
+where
+
+- $R$ — the main result;
+- $\tau$ — `primary.target` in the declaration (0.80 for the first course).
+
+The verdict is printed only when the run took exactly the declared sets and the app used the declared $k$
+(`primary.k`). With another $k$ the result is a different metric (recall@10 is not recall@5), so it is shown
+without a verdict. "below" is the reason to improve retrieval next. With about 150 questions $R$ is precise only
+to a few points, so a result just above or just below $\tau$ is not a real difference.
+
 ## Changes
 
 None yet.

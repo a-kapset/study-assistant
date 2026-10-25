@@ -51,6 +51,9 @@ class GoldDeclaration(_Strict):
     # Reads the answer section and its chapter from a question's learning objective id.
     objective_section: re.Pattern[str]
     held_out_sets: tuple[str, ...]
+    # Times the held-out sets were looked at before run records existed; the runner adds the recorded uses to it.
+    held_out_uses_before_records: int = Field(default=0, ge=0)
+
     primary: PrimaryMetric
 
     @model_validator(mode="after")
