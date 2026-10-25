@@ -71,6 +71,11 @@ class CourseSource(ManifestModel):
     # Whole lines the page layout repeats (running header, footer, page number); text normalization drops a
     # line only when one of these matches all of it. Each file has its own layout, so the rules are per source.
     noise_lines: tuple[re.Pattern[str], ...] = ()
+    # The sections whose text is searched, matched against the whole section id. The text of other sections (front
+    # matter, references, appendices, an index, a chapter's list of objectives) stays in the document's structure
+    # but gets no chunks, so it cannot push teaching text out of the results; text before the first heading has no
+    # id and is never matched. Without a pattern every section is searched.
+    content_sections: re.Pattern[str] | None = None
 
 
 class CourseManifest(ManifestModel):

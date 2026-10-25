@@ -10,6 +10,7 @@ be told apart.
 """
 
 import hashlib
+import re
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -72,13 +73,19 @@ def chunk_source(
     language: str,
     authority: SourceAuthority,
     size: ChunkSize,
+    content_sections: re.Pattern[str] | None = None,
 ) -> tuple[Chunk, ...]:
-    """Split every section of one source into chunks, in reading order."""
+    """Split the sections of one source into chunks, in reading order.
+
+    With ``content_sections`` only the sections whose id matches it as a whole are chunked; without it, all are.
+    """
     splitter = RecursiveCharacterTextSplitter(chunk_size=size.size, chunk_overlap=size.overlap, add_start_index=True)
     rules = chunker_version(size)
     sections = {section.id: section for section in structure.sections}
     chunks: list[Chunk] = []
     for section in structure.sections:
+        if content_sections is not None and (section.id is None or content_sections.fullmatch(section.id) is None):
+            continue
         text = "\n".join(line.text for line in section.lines)
         line_starts = _line_starts(section)
         lo_ids = objectives_in_scope(section, sections, structure.objectives)

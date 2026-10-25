@@ -32,6 +32,10 @@ sources:
       - 'Foundation Level'
       - 'v4\.0\.1 Page \d+ of \d+ \d{4}-\d{2}-\d{2}'
       - '© International Software Testing Qualifications Board'
+    # Only the teaching text of chapters 1–6 is searched: sections 1.1 and below. The pages before the first
+    # heading, the introduction (0.x), the chapter pages that list keywords and objectives, the references,
+    # the appendices and the index stay in the document's structure but get no chunks.
+    content_sections: '[1-6](\.\d+)+'
   # Written by tools/convert_sample_exams.py from the four sample exam sets (questions and answers PDFs);
   # stays on this machine like the other sources.
   - file: sample_exams_bank.jsonl

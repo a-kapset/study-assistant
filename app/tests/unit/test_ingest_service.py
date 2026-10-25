@@ -335,6 +335,22 @@ def test_question_bank_sources_are_not_chunked() -> None:
     assert [document.source.file for document in prepared] == [DEMO_FILE]
 
 
+@pytest.mark.covers("US-004", "AC-17")
+def test_a_sources_content_sections_decide_which_text_is_chunked() -> None:
+    """Prepares the demo course with its source limited to unit 2 and expects chunks of unit 2 only.
+
+    Catches the rule being read from the manifest but not handed to chunking, which would keep every section of
+    the source searchable while the manifest says otherwise.
+    """
+    demo = _demo()
+    source = demo.sources[0].model_copy(update={"content_sections": re.compile("2")})
+
+    (document,) = prepare_course(_with_sources(demo, source), REPO_COURSES / "demo", SIZE)
+
+    sections = {chunk.section_id for chunk in document.chunks}
+    assert sections == {"2"}, f"chunked sections: {sorted(sections, key=str)}"
+
+
 @pytest.mark.covers("US-004", "AC-3")
 def test_outcome_of_a_new_and_of_an_identical_document() -> None:
     """Guards the two simple cases: a new document is added, an identical one is kept."""
@@ -367,6 +383,8 @@ def _changed_rules(manifest: CourseManifest, change: str) -> CourseManifest:
         case "noise_lines":
             lines = (*source.noise_lines, re.compile("Draft"))
             return _with_sources(manifest, source.model_copy(update={"noise_lines": lines}))
+        case "content_sections":
+            return _with_sources(manifest, source.model_copy(update={"content_sections": re.compile(r"\d+")}))
         case "section_heading":
             rules = structure.model_copy(update={"section_heading": re.compile(r"^Part (?P<id>\d+)\. (?P<title>.+)$")})
         case "objective_id":
@@ -378,7 +396,17 @@ def _changed_rules(manifest: CourseManifest, change: str) -> CourseManifest:
 
 @pytest.mark.covers("US-004", "AC-4")
 @pytest.mark.parametrize(
-    "change", ["language", "role", "authority", "noise_lines", "section_heading", "objective_id", "knowledge_level"]
+    "change",
+    [
+        "language",
+        "role",
+        "authority",
+        "noise_lines",
+        "content_sections",
+        "section_heading",
+        "objective_id",
+        "knowledge_level",
+    ],
 )
 def test_every_rule_that_shapes_a_document_changes_its_rules_hash(change: str) -> None:
     """Guards the hash's coverage: a manifest value left out would let its edit keep rows made under the old value."""

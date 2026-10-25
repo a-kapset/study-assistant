@@ -288,7 +288,12 @@ def prepare_document(
     except (SourceParseError, CourseStructureError) as exc:
         raise IngestError(f"{source.file}: {exc}") from exc
     chunks = chunk_source(
-        structure, course_id=manifest.id, language=manifest.language, authority=source.authority, size=size
+        structure,
+        course_id=manifest.id,
+        language=manifest.language,
+        authority=source.authority,
+        size=size,
+        content_sections=source.content_sections,
     )
     return PreparedDocument(
         source=source,
@@ -307,6 +312,7 @@ def rules_hash(manifest: CourseManifest, source: CourseSource) -> str:
         "role": source.role,
         "authority": source.authority,
         "noise_lines": [_pattern(line) for line in source.noise_lines],
+        "content_sections": _pattern(source.content_sections) if source.content_sections else None,
         "section_heading": _pattern(rules.section_heading),
         "objective_id": _pattern(rules.objective_id) if rules.objective_id else None,
         "knowledge_level": _pattern(rules.knowledge_level) if rules.knowledge_level else None,

@@ -335,7 +335,7 @@ flowchart LR
     M -. "sources: file, role, authority" .-> P
     M -. "noise_lines" .-> N
     M -. "section_heading, objective_id, knowledge_level" .-> S
-    M -. "language" .-> C
+    M -. "language, content_sections" .-> C
 ```
 
 Every source is read and chunked, and the missing vectors are computed, before anything is written, so a source

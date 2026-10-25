@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
@@ -117,6 +118,34 @@ def test_objectives_of_enclosing_sections_reach_nested_chunks() -> None:
         ("1.1.1", ("LO-1", "LO-11")),
         ("1.2", ("LO-1",)),
     ]
+
+
+@pytest.mark.covers("US-004", "AC-17")
+def test_only_content_sections_matched_as_a_whole_id_are_chunked() -> None:
+    """Chunks a source with front matter, a chapter, two sections and an appendix under the rule "1.1".
+
+    Expects chunks of section 1.1 only. Catches a rule that is ignored (boilerplate pushes teaching text out of
+    search results again), one matched at the start of the id only (1.10 would be searched too), and text before
+    the first heading slipping through because it has no id.
+    """
+    structure = _structure(
+        _section(None, None, (1, "Copyright and revision history")),
+        _section("1", None, (2, "1 Basics: objectives of the chapter")),
+        _section("1.1", "1", (2, "1.1 Terms")),
+        _section("1.10", "1", (3, "1.10 More terms")),
+        _section("7", None, (4, "7 References")),
+    )
+
+    chunks = chunk_source(
+        structure,
+        course_id="alpha",
+        language="en",
+        authority="primary",
+        size=DEFAULT_SIZE,
+        content_sections=re.compile(r"1\.1"),
+    )
+
+    assert [chunk.section_id for chunk in chunks] == ["1.1"], f"chunked sections: {[c.section_id for c in chunks]}"
 
 
 @pytest.mark.covers("US-004", "AC-11")
