@@ -54,9 +54,10 @@ def _gold(*cases: GoldCase) -> GoldSet:
 class _Corpus:
     """A stored corpus with a fixed list of sections, in place of the database reader."""
 
-    def __init__(self, sections: set[str]) -> None:
-        """Keep the sections the corpus reports."""
+    def __init__(self, sections: set[str], texts: tuple[str, ...] = ("Testing finds defects.",)) -> None:
+        """Keep the sections and the chunk texts the corpus reports."""
         self._sections = sections
+        self._texts = texts
 
     def section_ids(self, course_id: str) -> set[str]:
         """Return the fixed sections."""
@@ -65,6 +66,10 @@ class _Corpus:
     def snapshot(self, course_id: str) -> str:
         """Return a fixed corpus name."""
         return "evalharness_snapshot"
+
+    def chunk_texts(self, course_id: str) -> list[str]:
+        """Return the fixed chunk texts."""
+        return list(self._texts)
 
 
 def _found(request: httpx2.Request, k: int = 5) -> httpx2.Response:
@@ -93,9 +98,14 @@ def _found(request: httpx2.Request, k: int = 5) -> httpx2.Response:
     )
 
 
-async def _run(gold: GoldSet, handler: Handler, sections: set[str] | None = None) -> RunRecord:
+async def _run(
+    gold: GoldSet,
+    handler: Handler,
+    sections: set[str] | None = None,
+    texts: tuple[str, ...] = ("Testing finds defects.",),
+) -> RunRecord:
     """Run every case of ``gold`` against a fake app answering with ``handler``; the corpus holds the gold sections."""
-    corpus = _Corpus(sections if sections is not None else {case.gold_section for case in gold.cases})
+    corpus = _Corpus(sections if sections is not None else {case.gold_section for case in gold.cases}, texts)
     settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
     async with SutTransport(settings, transport=httpx2.MockTransport(handler)) as sut:
         return await run(
@@ -154,6 +164,28 @@ async def test_an_answer_section_missing_from_the_corpus_refuses_the_run() -> No
         await _run(gold, _found, sections={"1.1"})
 
     assert refused.value.code == "gold_section_missing", f"a missing answer section gave {refused.value.code}"
+
+
+@pytest.mark.covers("US-007", "AC-11")
+async def test_a_gold_question_reprinted_in_the_corpus_refuses_the_run() -> None:
+    """Stores a chunk that reprints a held-out gold question with other line breaks, capitals and a different ending.
+
+    Expects the refusal "gold_question_in_corpus". A pass means a source that contains the measured questions (a
+    textbook with the official sample exam) cannot raise recall by letting the search find the question itself.
+    A failure means such a corpus is measured silently: the number rises and looks like better retrieval. Only the
+    harness sees it, because it is the harness's questions that leak.
+    """
+    question = "Which of the following statements best describes the purpose of a test plan in an agile project?"
+    gold = _gold(_case("A-1", "1.1"), _case("D-1", "1.2").model_copy(update={"query": question}))
+    reprint = (
+        "Question 7\nWHICH of the following statements best describes the\npurpose of a test plan in Agile "
+        "teams? A. To list ... Answer: B"
+    )
+
+    with pytest.raises(RunRefused) as refused:
+        await _run(gold, _found, texts=("Testing finds defects.", reprint))
+
+    assert refused.value.code == "gold_question_in_corpus", f"a reprinted question gave {refused.value.code}"
 
 
 @pytest.mark.covers("US-007", "AC-9")

@@ -6,6 +6,7 @@ lowest score causes can be told apart from the misses of the search itself. A ru
 claims is refused before the first search.
 """
 
+import re
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
@@ -22,7 +23,9 @@ from evalharness.oracles.retrieval import CaseScore, Summary, score_case, summar
 from evalharness.transport import SutTransport
 
 # Why a run was refused; a caller can act on the code without parsing the message.
-type RunRefusedCode = Literal["course_mismatch", "unknown_set", "held_out_not_allowed", "gold_section_missing"]
+type RunRefusedCode = Literal[
+    "course_mismatch", "unknown_set", "held_out_not_allowed", "gold_section_missing", "gold_question_in_corpus"
+]
 
 
 class RunRefused(ValueError):
@@ -43,6 +46,10 @@ class Corpus(Protocol):
 
     def snapshot(self, course_id: str) -> str:
         """Name the course's current corpus."""
+        ...
+
+    def chunk_texts(self, course_id: str) -> list[str]:
+        """Return the text of every stored chunk of the course."""
         ...
 
 
@@ -123,6 +130,37 @@ def check_sections(gold: GoldSet, section_ids: set[str]) -> None:
         raise RunRefused("gold_section_missing", f"answer sections {missing} are not sections of the stored course")
 
 
+# How much of a question's start is looked for in the corpus: long enough to be that question and not a common
+# phrase ("Which of the following"), short enough to survive a different ending or answer options printed after it.
+_QUESTION_START_WORDS = 12
+# A question shorter than this says too little to tell a reprint from ordinary course text, so it is not checked.
+_SHORTEST_CHECKED_QUESTION = 6
+
+
+def check_questions_not_in_corpus(gold: GoldSet, chunk_texts: Sequence[str]) -> None:
+    """Refuse the run when the start of a gold question appears word for word in a stored chunk of the course.
+
+    A course source may reprint the very questions the gold set measures with, e.g. a textbook with the official
+    sample exam and its answers. The search would then find the question itself, not the passage that answers it,
+    and recall would rise without any better retrieval. Text is compared in lower case with punctuation and line
+    breaks reduced to single spaces, because the same words come out of a PDF with other breaks and capitals.
+    Every question is checked, held-out ones too: a reprint spoils them as well.
+    """
+    corpus = "\n".join(_words(text) for text in chunk_texts)
+    found = []
+    for case in gold.cases:
+        words = _words(case.query).split()
+        if len(words) >= _SHORTEST_CHECKED_QUESTION and " ".join(words[:_QUESTION_START_WORDS]) in corpus:
+            found.append(case.case_id)
+    if found:
+        raise RunRefused("gold_question_in_corpus", f"the stored chunks contain the questions {found}")
+
+
+def _words(text: str) -> str:
+    """Reduce text to its words in lower case, separated by single spaces."""
+    return " ".join(re.findall(r"\w+", text.lower()))
+
+
 async def run(
     gold: GoldSet,
     cases: Sequence[GoldCase],
@@ -134,7 +172,7 @@ async def run(
     harness_commit: str,
     harness_dirty: bool,
 ) -> RunRecord:
-    """Check the answer sections, make both passes over ``cases`` one search at a time, and return the run's record.
+    """Check the corpus, make both passes over ``cases`` one search at a time, and return the run's record.
 
     The diagnostic pass asks for the number of hits the app used in the primary pass, so both passes are scored over
     the same places; when no primary search succeeded, it asks for the declared number.
@@ -142,6 +180,7 @@ async def run(
     course_id = gold.declaration.course_id
     started_at = datetime.now(UTC)
     check_sections(gold, corpus.section_ids(course_id))
+    check_questions_not_in_corpus(gold, corpus.chunk_texts(course_id))
     snapshot = corpus.snapshot(course_id)
 
     primary = [await _search(sut, course_id, case.query, {}) for case in cases]

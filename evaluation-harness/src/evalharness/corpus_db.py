@@ -67,6 +67,13 @@ class CorpusReader:
         ).fetchall()
         return [row[0] for row in rows]
 
+    def chunk_texts(self, course_id: str) -> list[str]:
+        """Return the text of every stored chunk of a course, in reading order."""
+        rows = self._conn.execute(
+            "SELECT text FROM chunks WHERE course_id = %s ORDER BY source_file, position", (course_id,)
+        ).fetchall()
+        return [row[0] for row in rows]
+
     def section_ids(self, course_id: str) -> set[str]:
         """Return the ids of a course's headed sections, in the form search hits name them (e.g. "4.2")."""
         rows = self._conn.execute(

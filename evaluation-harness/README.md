@@ -114,8 +114,10 @@ poetry run python -m evalharness.evaluation datasets/istqb_ctfl/retrieval_gold_v
 
 Without `--sets` the run takes the sets the declaration's main result is measured on. Held-out sets run only
 with `--include-held-out`, and every such run is counted. A run is refused before the first search, with exit
-code 2, when the bank differs from the declared one, the stack serves another course, a set is unknown, or an
-answer section is not a section of the stored course. A completed run exits with 0, whatever its numbers.
+code 2, when the bank differs from the declared one, the stack serves another course, a set is unknown, an
+answer section is not a section of the stored course, or the start of a gold question appears word for word in the
+stored course text (a source that reprints the questions would let the search find the question itself). A
+completed run exits with 0, whatever its numbers.
 
 
 ## Running the tests
