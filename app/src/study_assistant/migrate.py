@@ -118,7 +118,7 @@ def apply_migrations(conn: psycopg.Connection, migrations: Sequence[Migration]) 
 
 
 def prepare_embedding_space(conn: psycopg.Connection, space: EmbeddingSpace, dimension: int) -> bool:
-    """Register the configured embedding space and create its vector table and index; return True if it was new.
+    """Register the configured embedding space and create its vector table; return True if it was new.
 
     A space that is already registered is left as it is, so a repeated run changes nothing. A space registered with
     another vector length stops the run: its table would refuse every vector of the configured length. Run before
@@ -149,12 +149,6 @@ def prepare_embedding_space(conn: psycopg.Connection, space: EmbeddingSpace, dim
                 " embedding vector({dimension}) NOT NULL,"
                 " FOREIGN KEY (chunk_id, course_id) REFERENCES chunks (chunk_id, course_id) ON DELETE CASCADE)"
             ).format(table=table, dimension=sql.Literal(dimension))
-        )
-        # Cosine distance, the measure the model's vectors are compared with.
-        conn.execute(
-            sql.SQL("CREATE INDEX {index} ON {table} USING hnsw (embedding vector_cosine_ops)").format(
-                index=sql.Identifier(f"{space.vector_table}_hnsw"), table=table
-            )
         )
     return True
 

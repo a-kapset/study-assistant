@@ -338,20 +338,6 @@ def test_vector_table_has_the_configured_length_and_follows_its_chunks() -> None
     ) in conn.executed
 
 
-def test_vector_table_gets_a_cosine_hnsw_index() -> None:
-    """Starts with an empty registry and expects an HNSW index with cosine distance on the space's table.
-
-    Catches another distance class: a search ordered by cosine distance would then not use the index and would read
-    every vector of the table.
-    """
-    conn = _FakeConnection(journal={})
-
-    _prepare_space(conn)
-
-    table = SPACE.vector_table
-    assert f'CREATE INDEX "{table}_hnsw" ON "{table}" USING hnsw (embedding vector_cosine_ops)' in conn.executed
-
-
 def test_registered_space_is_left_as_it_is() -> None:
     """Registers the space with the configured length first and expects the run to create and insert nothing.
 

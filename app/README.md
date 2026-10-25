@@ -241,10 +241,11 @@ SHA-256: an applied file must never be edited (the run stops and names it); a ch
 with the next number.
 
 Then the run prepares the configured embedding space (`APP_EMBEDDING__*`): it registers the space in
-`embedding_spaces` and creates its vector table `vectors_<space id>` with an HNSW index for cosine distance. A
-space that is already registered is left as it is; one registered with another vector length stops the run. A new
-model, revision or prefix is a new space with its own table, so vectors of two models are never mixed, and the
-tables of earlier spaces stay.
+`embedding_spaces` and creates its vector table `vectors_<space id>`. The table has no vector index: a search
+compares the question with every vector of the course, so its result is exact and does not change with the way
+PostgreSQL plans the query. A space that is already registered is left as it is; one registered with another vector
+length stops the run. A new model, revision or prefix is a new space with its own table, so vectors of two models
+are never mixed, and the tables of earlier spaces stay.
 
 After that, the run creates two roles or resets their passwords, each starting from no table rights:
 the app's role (`DB_APP_USER`) may select, insert, update and delete rows of every table and only read the
@@ -313,7 +314,7 @@ erDiagram
     vectors_space_id {
         text chunk_id PK
         text course_id "the chunk's course"
-        vector embedding "HNSW index, cosine distance"
+        vector embedding "compared by cosine distance, no index"
     }
 ```
 
