@@ -2,10 +2,12 @@
 
     poetry run python -m evalharness.evaluation datasets/<course>/<gold set>.toml
     poetry run python -m evalharness.evaluation <declaration> --sets D --include-held-out
+    poetry run python -m evalharness.evaluation <declaration> --require-target
 
 Run it from evaluation-harness/, like the tests. Without --sets the run takes the sets of the declared main result.
 The run is written to runs/ as a new JSON file and its summary is printed. Exit code 0 when the run completed,
-whatever its numbers; 2 when it was refused.
+whatever its numbers; 2 when it was refused. With --require-target (used in CI) a completed run whose main result
+is below its target exits with 1.
 """
 
 import argparse
@@ -15,6 +17,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
 import structlog
 
@@ -34,7 +37,12 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("declaration", type=Path, help="the gold set's declaration file")
     parser.add_argument("--sets", nargs="+", help="exam sets to run (default: the sets of the declared main result)")
     parser.add_argument("--include-held-out", action="store_true", help="allow held-out sets in --sets")
+    parser.add_argument(
+        "--require-target", action="store_true", help="exit with 1 unless the main result meets its target (for CI)"
+    )
     args = parser.parse_args(argv)
+    if args.require_target and args.sets:
+        parser.error("--require-target compares the declared sets with their target; leave out --sets")
 
     # One log line per request would bury the summary; failed requests still show as warnings.
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))
@@ -51,6 +59,10 @@ def main(argv: Sequence[str]) -> int:
         return 2
     path = write_record(record, RUNS_DIR)
     _print_summary(record, gold, path)
+    # Without a verdict (the app uses another k than the declared one) the target cannot be confirmed either.
+    if args.require_target and target_verdict(record, gold) != "met":
+        print("the main result does not meet its target", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -113,11 +125,22 @@ def _print_summary(record: RunRecord, gold: GoldSet, path: Path) -> None:
                 f"{hits:>6}{s.misses:>6}{s.empty:>6}{s.failed:>6}"
             )
     main_result = record.summaries["primary"]["all"]
-    if record.sets == tuple(sorted(primary.sets)) and record.k == primary.k:
-        verdict = "met" if main_result.recall >= primary.target else "below"
+    verdict = target_verdict(record, gold)
+    if verdict is not None:
         print(f"\nrecall@{record.k} = {main_result.recall:.3f} (n={main_result.n}), target {primary.target}: {verdict}")
     else:
         print(f"\nno target line: the target is for sets {' '.join(primary.sets)} at k={primary.k}")
+
+
+def target_verdict(record: RunRecord, gold: GoldSet) -> Literal["met", "below"] | None:
+    """Compare the main result with the declared target; None when the run is not the declared main result.
+
+    The target holds only for the declared sets at the declared k: recall at a larger k is easier to reach.
+    """
+    primary = gold.declaration.primary
+    if record.sets != tuple(sorted(primary.sets)) or record.k != primary.k:
+        return None
+    return "met" if record.summaries["primary"]["all"].recall >= primary.target else "below"
 
 
 if __name__ == "__main__":

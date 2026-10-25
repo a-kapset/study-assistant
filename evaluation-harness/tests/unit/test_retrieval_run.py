@@ -9,7 +9,7 @@ import pytest
 from pydantic import HttpUrl, JsonValue
 
 from evalharness.datasets.retrieval_gold import GoldCase, GoldDeclaration, GoldSet
-from evalharness.evaluation.__main__ import _print_summary
+from evalharness.evaluation.__main__ import _print_summary, target_verdict
 from evalharness.evaluation.record import RunRecord, recorded_held_out_uses
 from evalharness.evaluation.retrieval import RunRefused, run, select_cases, summaries
 from evalharness.oracles.retrieval import score_case
@@ -320,3 +320,34 @@ async def test_the_target_verdict_is_printed_only_for_the_declared_k(
 
     printed = any(line.startswith("recall@") for line in capsys.readouterr().out.splitlines())
     assert printed == verdict_printed, f"with k={app_k} the target verdict printed: {printed}"
+
+
+@pytest.mark.covers("US-008", "AC-2")
+@pytest.mark.parametrize(("found", "verdict"), [(4, "met"), (3, "below")])
+async def test_a_main_result_exactly_at_the_target_meets_it(found: int, verdict: str) -> None:
+    """Runs five questions of set A, answer section 1.1, target 0.8. In the primary pass the fake app finds section 1.1
+    for ``found`` of them and section 2.1 for the rest; in the diagnostic pass it finds 1.1 for all five.
+
+    Expects "met" at recall 0.8 (4 of 5) and "below" at 0.6 (3 of 5). This verdict decides whether the CI job fails,
+    so a pass means CI stops exactly when search, as a user gets it, drops under the declared target. A failure means
+    a strict comparison that fails CI at the target itself, a verdict that lets a lower result through, or a verdict
+    taken from the diagnostic pass, which has no lowest score and so hides the misses it causes.
+    """
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Find section 1.1 in the diagnostic pass always, in the primary pass for the first ``found`` questions."""
+        response = _found(request)
+        body = json.loads(request.content)
+        number = int(body["query"].removeprefix("Question A-").removesuffix("?"))
+        if "min_score" not in body and number > found:
+            content = json.loads(response.content)
+            content["hits"][0]["section_id"] = "2.1"
+            return httpx2.Response(200, json=content)
+        return response
+
+    gold = _gold(*(_case(f"A-{n}", "1.1") for n in range(1, 6)))
+    record = await _run(gold, handler, sections={"1.1", "2.1"})
+
+    actual = target_verdict(record, gold)
+
+    assert actual == verdict, f"{found} of 5 found with target 0.8 gave {actual!r}, expected {verdict!r}"

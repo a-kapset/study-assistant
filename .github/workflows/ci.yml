@@ -1,7 +1,8 @@
 # Runs on every push to main and on every pull request. The three jobs run side by side:
 # checks   - formatting, types, the course-name rule, a secret scan and the unit tests of both projects;
 # database - the app's SQL and its migration run against a throwaway PostgreSQL;
-# stack    - the whole stack from compose.yaml with the demo course, then the harness's api tests against it.
+# stack    - the whole stack from compose.yaml with the two invented courses, then the harness's api tests and
+#            a search measurement on the invented course's questions against it.
 name: ci
 
 on:
@@ -110,8 +111,8 @@ jobs:
       - uses: actions/checkout@v7.0.1
 
       - name: Stack configuration
-        # The example values are enough for a stack that lives only for this job. The demo course is the only
-        # enabled course, and its sources are committed.
+        # The example values are enough for a stack that lives only for this job. They enable the two invented
+        # courses, whose sources are committed.
         run: cp .env.example .env
 
       - name: Cache the model files
@@ -160,6 +161,12 @@ jobs:
       - name: Harness api tests
         working-directory: evaluation-harness
         run: poetry run pytest -m api
+
+      - name: Search measurement on the invented course
+        # Every question of the committed bank goes to the search; the job fails when the run is refused
+        # (exit 2) or recall falls below the declared target (exit 1). The summary is in the log.
+        working-directory: evaluation-harness
+        run: poetry run python -m evalharness.evaluation datasets/lumen_moths/retrieval_gold_v0.toml --require-target
 
       - name: Reference vectors from the embedding server
         working-directory: app

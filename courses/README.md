@@ -111,7 +111,7 @@ are not in the text: a question built on a diagram keeps only its words.
 
 1. Create `courses/<course_id>/course.yaml`; the app code does not change.
 2. Enable it with `APP_COURSES__ENABLED` in the root `.env`, a comma-separated list of course ids, e.g.
-   `APP_COURSES__ENABLED=demo,istqb_ctfl`; `.env.example` enables only `demo`.
+   `APP_COURSES__ENABLED=demo,istqb_ctfl`; `.env.example` enables only the invented `demo` and `lumen_moths`.
 3. Put its source files where the app finds them. The app reads `<source directory>/<course_id>/<file>`
    (`APP_COURSES__SOURCE_DIR`). In Docker, Compose mounts this folder (`courses/`, for the committed demo
    files) and one folder of a course whose material stays on this machine: set `LOCAL_COURSE_ID` to the

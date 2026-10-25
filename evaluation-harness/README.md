@@ -103,13 +103,16 @@ A run sends every question of a gold set to the app's search twice, with the app
 lowest score, scores each result against the question's answer section, writes a run record to `runs/` and
 prints the results per exam set, chapter and knowledge level. The metrics: [METRICS.md](METRICS.md).
 
-The gold set is built from the course's local question bank each time; only its declaration is committed
+The gold set is built from the course's question bank each time; only its declaration is committed
 (`datasets/<course>/`). The stack must serve that course: in the root `.env`, `LOCAL_COURSE_ID` names it and
-`LOCAL_COURSE_SOURCES` is the folder with its materials and question bank.
+`LOCAL_COURSE_SOURCES` is the folder with its materials and question bank. The values of `.env.example` mount the
+invented `lumen_moths` course, whose material and bank are committed, so its gold set runs without anything from
+outside the repository; a real course's bank stays on the local machine.
 
 ```powershell
-poetry run python -m evalharness.evaluation datasets/istqb_ctfl/retrieval_gold_v0.toml
+poetry run python -m evalharness.evaluation datasets/lumen_moths/retrieval_gold_v0.toml
 poetry run python -m evalharness.evaluation datasets/istqb_ctfl/retrieval_gold_v0.toml --sets D --include-held-out
+poetry run python -m evalharness.evaluation datasets/lumen_moths/retrieval_gold_v0.toml --require-target
 ```
 
 Without `--sets` the run takes the sets the declaration's main result is measured on. Held-out sets run only
@@ -117,7 +120,9 @@ with `--include-held-out`, and every such run is counted. A run is refused befor
 code 2, when the bank differs from the declared one, the stack serves another course, a set is unknown, an
 answer section is not a section of the stored course, or the start of a gold question appears word for word in the
 stored course text (a source that reprints the questions would let the search find the question itself). A
-completed run exits with 0, whatever its numbers.
+completed run exits with 0, whatever its numbers; with `--require-target` it exits with 1 when the main result is
+below the declared target. CI runs the `lumen_moths` gold set that way: its number is a regression signal for
+search, not the app's quality, because a language model wrote that course and its questions.
 
 
 ## Running the tests
@@ -144,8 +149,8 @@ poetry run mypy .
 ```
 
 CI (`.github/workflows/ci.yml`) runs the unit tests on every push to `main` and every pull request, and the api
-tests against a stack started from `compose.yaml` with the demo course, followed by
-`python -m evalharness.testdata check`.
+tests against a stack started from `compose.yaml` with the two invented courses, followed by the
+`lumen_moths` retrieval run with `--require-target` and `python -m evalharness.testdata check`.
 
 The same checks run as pre-commit hooks from the repository root. Run pre-commit from a terminal with
 no activated virtual environment: Poetry prefers an active one over this project's own.

@@ -1,0 +1,28 @@
+# Retrieval gold set v0 of the invented course: every question of its bank and the section its learning objective
+# belongs to. Course and bank are committed (courses/lumen_moths/), so this gold set runs in CI, where the real
+# courses' materials are not available. Its number is a regression signal for search, not the quality of the app:
+# the text and the questions were written by a language model.
+
+course_id = "lumen_moths"
+
+# The question bank in the course's folder. A run with a bank of another hash is refused: its numbers would not be
+# comparable with earlier runs.
+bank_file = "lumen_moths_bank.jsonl"
+bank_sha256 = "318a1091f4e5fd01fcf9d8d1b01745fe20d7437bc3f2ec596eb2906fd93782c9"
+
+# Same rule as the course manifest's objective_id: "LO-1.2.3" -> section "1.2" in chapter "1".
+objective_section = 'LO-(?P<section>(?P<chapter>\d+)\.\d+)\.\d+'
+
+# Nothing is tuned on these questions, so none are held out. Every question id starts with "Q-", so all of them
+# form one set "Q".
+held_out_sets = []
+
+[primary]
+metric = "recall"
+k = 5 # APP_SEARCH__DEFAULT_K=5 in .env.example
+sets = ["Q"]
+# CI fails below this value. The first run gave 0.980 (100 of 102; the two others are cut by the lowest score). The
+# search is exact, so a run repeats itself, but another machine may round scores a little differently and move a
+# question across the lowest score; 0.90 leaves room for eight such questions and still fails on a broken setting,
+# e.g. a lowest score of 0.88 instead of 0.83.
+target = 0.90

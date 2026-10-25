@@ -119,8 +119,9 @@ only when the volume is first created. The database port is published on `127.0.
 use `docker compose exec db psql -U study_assistant -d study_assistant` (the `DB_OWNER` and `DB_NAME` from `.env`).
 
 Compose mounts the repository's `courses/` folder read-only and enables the courses in
-`APP_COURSES__ENABLED` (`demo` in `.env.example`); check with `curl.exe http://127.0.0.1:8000/v1/courses`.
-Course sources are mounted read-only too: `courses/` (the demo course's PDF is committed) and one more folder
+`APP_COURSES__ENABLED` (`demo` and `lumen_moths` in `.env.example`); check with
+`curl.exe http://127.0.0.1:8000/v1/courses`.
+Course sources are mounted read-only too: `courses/` (the invented courses' PDFs are committed) and one more folder
 for a course whose material stays on this machine (`LOCAL_COURSE_ID`, `LOCAL_COURSE_SOURCES`). The `ingest`
 run stores them at startup; check with `curl.exe http://127.0.0.1:8000/v1/courses/demo`.
 A changed source file is picked up by the next start. The app reads the manifests only when it starts, so after
@@ -435,7 +436,7 @@ run only when asked for.
 
 CI (`.github/workflows/ci.yml`) runs all of them on every push to `main` and every pull request: the checks and
 unit tests, `pytest -m database`, and `pytest -m embedding_server` on a stack started from `compose.yaml` with the
-demo course. It downloads the model files of `models.sha256` once and keeps them in the Actions cache.
+two invented courses. It downloads the model files of `models.sha256` once and keeps them in the Actions cache.
 
 ### Database tests
 
