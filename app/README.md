@@ -332,9 +332,9 @@ flowchart LR
     C --> E["remote.py<br/>vectors from the embedding server"]
     E --> R["service.py + repository.py<br/>one transaction per course"]
     R --> DB[("PostgreSQL")]
-    M -. "sources: file, role, authority" .-> P
+    M -. "sources: file, role, authority, pages" .-> P
     M -. "noise_lines" .-> N
-    M -. "section_heading, objective_id, knowledge_level" .-> S
+    M -. "section_heading (course or source), objective_id, knowledge_level" .-> S
     M -. "language, content_sections" .-> C
 ```
 

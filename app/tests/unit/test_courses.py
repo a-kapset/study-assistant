@@ -159,6 +159,47 @@ def test_course_without_learning_objectives_is_loaded(tmp_path: Path) -> None:
             ),
             "no objective_id",
         ),
+        (
+            yaml.safe_dump(
+                _manifest(
+                    "alpha", sources=[{"file": "a.pdf", "role": "material", "authority": "primary", "pages": [[5, 3]]}]
+                )
+            ),
+            "pages must be ascending",
+        ),
+        (
+            yaml.safe_dump(
+                _manifest(
+                    "alpha",
+                    sources=[{"file": "a.pdf", "role": "material", "authority": "primary", "pages": [[1, 5], [5, 9]]}],
+                )
+            ),
+            "pages must be ascending",
+        ),
+        (
+            yaml.safe_dump(
+                _manifest(
+                    "alpha", sources=[{"file": "a.pdf", "role": "material", "authority": "primary", "pages": [[0, 2]]}]
+                )
+            ),
+            "pages must be ascending",
+        ),
+        (
+            yaml.safe_dump(
+                _manifest(
+                    "alpha",
+                    sources=[
+                        {
+                            "file": "a.pdf",
+                            "role": "material",
+                            "authority": "primary",
+                            "section_heading": r"^Chapter (\d+)$",
+                        }
+                    ],
+                )
+            ),
+            "section_heading needs the named group(s) id, title",
+        ),
     ],
     ids=[
         "missing",
@@ -170,6 +211,10 @@ def test_course_without_learning_objectives_is_loaded(tmp_path: Path) -> None:
         "heading-without-named-groups",
         "level-without-named-group",
         "level-without-objectives",
+        "pages-reversed",
+        "pages-overlapping",
+        "pages-from-zero",
+        "source-heading-without-named-groups",
     ],
 )
 def test_bad_manifest_error_names_the_course_the_file_and_the_reason(

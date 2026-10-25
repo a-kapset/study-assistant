@@ -351,6 +351,39 @@ def test_a_sources_content_sections_decide_which_text_is_chunked() -> None:
     assert sections == {"2"}, f"chunked sections: {sorted(sections, key=str)}"
 
 
+@pytest.mark.covers("US-004", "AC-18")
+def test_only_the_pages_a_source_names_are_read() -> None:
+    """Prepares the demo course reading only its page 3 and expects chunks, all of them from page 3.
+
+    Catches page ranges that are ignored (a textbook's practice exams and their answers would be searched, and a
+    gold question could be found word for word) and ranges applied with shifted page numbers (wrong citations).
+    """
+    demo = _demo()
+    source = demo.sources[0].model_copy(update={"pages": ((3, 3),)})
+
+    (document,) = prepare_course(_with_sources(demo, source), REPO_COURSES / "demo", SIZE)
+
+    pages = {(chunk.page_start, chunk.page_end) for chunk in document.chunks}
+    assert pages == {(3, 3)}, f"chunk pages: {sorted(pages)}"
+
+
+@pytest.mark.covers("US-004", "AC-18")
+def test_a_sources_own_heading_pattern_replaces_the_courses() -> None:
+    """Prepares the demo course with a heading pattern for its file that accepts units 1 and 2 only.
+
+    Expects sections 1 and 2 (and the text before the first heading) and no others. Catches a source pattern that is
+    read but not used, which would structure a book with the main material's heading rule and find wrong or no sections.
+    """
+    demo = _demo()
+    pattern = re.compile(r"^Unit (?P<id>[12])\. (?P<title>.+)$")
+    source = demo.sources[0].model_copy(update={"section_heading": pattern})
+
+    (document,) = prepare_course(_with_sources(demo, source), REPO_COURSES / "demo", SIZE)
+
+    sections = {section.id for section in document.structure.sections}
+    assert sections == {None, "1", "2"}, f"sections found: {sorted(sections, key=str)}"
+
+
 @pytest.mark.covers("US-004", "AC-3")
 def test_outcome_of_a_new_and_of_an_identical_document() -> None:
     """Guards the two simple cases: a new document is added, an identical one is kept."""
@@ -385,6 +418,11 @@ def _changed_rules(manifest: CourseManifest, change: str) -> CourseManifest:
             return _with_sources(manifest, source.model_copy(update={"noise_lines": lines}))
         case "content_sections":
             return _with_sources(manifest, source.model_copy(update={"content_sections": re.compile(r"\d+")}))
+        case "pages":
+            return _with_sources(manifest, source.model_copy(update={"pages": ((1, 1),)}))
+        case "source_section_heading":
+            heading = re.compile(r"^Part (?P<id>\d+)\. (?P<title>.+)$")
+            return _with_sources(manifest, source.model_copy(update={"section_heading": heading}))
         case "section_heading":
             rules = structure.model_copy(update={"section_heading": re.compile(r"^Part (?P<id>\d+)\. (?P<title>.+)$")})
         case "objective_id":
@@ -403,6 +441,8 @@ def _changed_rules(manifest: CourseManifest, change: str) -> CourseManifest:
         "authority",
         "noise_lines",
         "content_sections",
+        "pages",
+        "source_section_heading",
         "section_heading",
         "objective_id",
         "knowledge_level",

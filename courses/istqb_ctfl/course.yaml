@@ -36,6 +36,28 @@ sources:
     # heading, the introduction (0.x), the chapter pages that list keywords and objectives, the references,
     # the appendices and the index stay in the document's structure but get no chunks.
     content_sections: '[1-6](\.\d+)+'
+  # Stapp, Roman, Pilaeten: ISTQB Certified Tester Foundation Level (Springer, 2024). A primary source: its Part II
+  # discusses the syllabus chapter by chapter with the syllabus's own section numbers. Stays on this machine.
+  - file: ISTQB_Certified_Tester_Foundation_Level.pdf
+    role: material
+    authority: primary
+    # Running headers ("28 Chapter 1 Fundamentals of Testing", "1.1 What Is Testing? 27"), the bare page number,
+    # the copyright footer of a chapter's first page and the "(continued)" mark of split tables.
+    noise_lines:
+      - '\d+ Chapter \d+ .+'
+      - '\d+(\.\d+)+ .+ \d+'
+      - '\d+'
+      - '© The Author\(s\), under exclusive license to Springer Nature Switzerland AG 2024'
+      - 'L\. Stapp et al\., ISTQB® Certified Tester Foundation Level'
+      - '\(continued\)'
+    # "Chapter 1 Fundamentals of Testing" and "1.1 What Is Testing?": no dot after the number, unlike the syllabus.
+    section_heading: '^(?:Chapter )?(?P<id>(?<=Chapter )\d+|\d+\.\d+(?:\.\d+)?) (?P<title>[A-Z].*)$'
+    # Part II only, without the sample questions and exercises at the end of each chapter: Part III holds the
+    # answers, and Part IV reprints the official sample exam, whose questions are the questions this course's
+    # retrieval is measured with.
+    pages: [[36, 79], [85, 139], [143, 174], [179, 246], [260, 304], [315, 317]]
+    # The teaching sections only; a chapter's first pages hold its keywords and objectives.
+    content_sections: '[1-6](\.\d+)+'
   # Written by tools/convert_sample_exams.py from the four sample exam sets (questions and answers PDFs);
   # stays on this machine like the other sources.
   - file: sample_exams_bank.jsonl

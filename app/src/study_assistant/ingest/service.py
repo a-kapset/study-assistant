@@ -24,7 +24,7 @@ import json
 import re
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -34,7 +34,7 @@ from study_assistant.courses.models import CourseManifest, CourseSource
 from study_assistant.embed.base import Embedder, EmbeddingSpace
 from study_assistant.ingest.chunker import Chunk, ChunkSize, chunk_source, chunker_version
 from study_assistant.ingest.normalize import normalize_document
-from study_assistant.ingest.parser import ParserVersion, SourceParseError, parse_pdf
+from study_assistant.ingest.parser import ParsedDocument, ParserVersion, SourceParseError, parse_pdf
 from study_assistant.ingest.structure import CourseStructureError, DocumentStructure, extract_structure
 
 # Roles whose files are course text; a question bank has its own format and is loaded elsewhere.
@@ -282,7 +282,11 @@ def prepare_document(
         raise IngestError(f"{source.file}: only PDF sources can be ingested so far")
     try:
         parsed = parse_pdf(path)
-        structure = extract_structure(normalize_document(parsed, source.noise_lines), manifest.structure)
+        read = _read_pages(parsed, source.pages)
+        rules = manifest.structure
+        if source.section_heading is not None:
+            rules = rules.model_copy(update={"section_heading": source.section_heading})
+        structure = extract_structure(normalize_document(read, source.noise_lines), rules)
     except OSError as exc:
         raise IngestError(f"{source.file}: cannot read the file: {exc.strerror}") from exc
     except (SourceParseError, CourseStructureError) as exc:
@@ -313,11 +317,21 @@ def rules_hash(manifest: CourseManifest, source: CourseSource) -> str:
         "authority": source.authority,
         "noise_lines": [_pattern(line) for line in source.noise_lines],
         "content_sections": _pattern(source.content_sections) if source.content_sections else None,
+        "pages": [list(pages) for pages in source.pages],
+        "source_section_heading": _pattern(source.section_heading) if source.section_heading else None,
         "section_heading": _pattern(rules.section_heading),
         "objective_id": _pattern(rules.objective_id) if rules.objective_id else None,
         "knowledge_level": _pattern(rules.knowledge_level) if rules.knowledge_level else None,
     }
     return hashlib.sha256(json.dumps(shaping, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _read_pages(parsed: ParsedDocument, ranges: Sequence[tuple[int, int]]) -> ParsedDocument:
+    """Keep only the pages inside ``ranges`` (inclusive); no ranges keeps every page. Page numbers are unchanged."""
+    if not ranges:
+        return parsed
+    kept = tuple(page for page in parsed.pages if any(first <= page.number <= last for first, last in ranges))
+    return replace(parsed, pages=kept)
 
 
 def _pattern(pattern: re.Pattern[str]) -> list[object]:

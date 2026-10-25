@@ -76,6 +76,27 @@ class CourseSource(ManifestModel):
     # but gets no chunks, so it cannot push teaching text out of the results; text before the first heading has no
     # id and is never matched. Without a pattern every section is searched.
     content_sections: re.Pattern[str] | None = None
+    # The pages of the file that are read, as inclusive [first, last] ranges in ascending order, e.g. a textbook's
+    # teaching chapters without its practice exams and their answers. Other pages are left out before any text
+    # processing; page numbers stay those of the file, so citations still name the real page. Empty: every page.
+    pages: tuple[tuple[int, int], ...] = ()
+    # A heading pattern for this file only, when its headings are written differently from the course's main
+    # material (e.g. "Chapter 1 Basics" in a book, "1. Basics" in the main material). Same named groups as the course's.
+    section_heading: re.Pattern[str] | None = None
+
+    @model_validator(mode="after")
+    def _check_rules(self) -> Self:
+        """Reject page ranges that are empty, out of order or overlapping, and a heading pattern without its groups."""
+        previous = 0
+        for first, last in self.pages:
+            if not previous < first <= last:
+                raise ValueError(
+                    f"pages must be ascending, non-overlapping [first, last] ranges from 1, got {self.pages}"
+                )
+            previous = last
+        if self.section_heading is not None:
+            _require_groups("section_heading", self.section_heading, {"id", "title"})
+        return self
 
 
 class CourseManifest(ManifestModel):
