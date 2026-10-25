@@ -10,6 +10,7 @@ materials themselves (syllabi, books, exams) never are and stay on the local mac
 | Course | What it is |
 |---|---|
 | [`demo`](demo/course.yaml) | Synthetic course: the rules of an invented board game. Used by tests and local runs. |
+| [`lumen_moths`](lumen_moths/course.yaml) | Synthetic course: an invented handbook with the shape of an exam syllabus and a bank of 102 questions. Used to measure search where the real courses are not available, such as CI. |
 | [`istqb_ctfl`](istqb_ctfl/course.yaml) | ISTQB Certified Tester Foundation Level, syllabus v4.0.1, with a question bank from the four sample exam sets. |
 
 ## The manifest
@@ -34,7 +35,7 @@ names the course, the file and the problem.
 
 ## The demo course files
 
-The `demo` course is the only one whose material is committed, because its text is invented.
+The `demo` and `lumen_moths` courses are the only ones whose material is committed, because their text is invented.
 
 | File | Role |
 |---|---|
@@ -45,6 +46,17 @@ The `demo` course is the only one whose material is committed, because its text 
 The Markdown uses a small subset: `#` for the title, `##` for unit headings, paragraphs separated by
 blank lines, `&shy;` where a word may be split at a line end, and `<!-- figure page -->` for a page
 with a drawing and no text. Only ASCII text, because the PDF uses a built-in font.
+
+## The lumen_moths course files
+
+| File | Role |
+|---|---|
+| `lumen_moths/lumen_moths.pdf` | The handbook: 6 chapters, 30 sections, 12 of them split into subsections, 90 learning objectives with knowledge levels listed at the start of each chapter. |
+| `lumen_moths/lumen_moths_bank.jsonl` | 102 multiple-choice questions in the common bank format; each names its learning objective, and so its answer section. |
+
+The text and the questions were written once by a language model and are kept as they are; they are not
+rebuilt. The questions paraphrase the text instead of copying it, so a search cannot find a passage just by
+matching the question's wording.
 
 After editing the Markdown, rebuild the PDF and commit both files. From the repository root
 (Poetry runs the command inside `app/`):
@@ -122,7 +134,7 @@ description, structure rules, list of sources) lives in `courses/<course_id>/cou
   its structure is unlike ISTQB's, so tests exercise the generic code rather than code tuned
   to one course.
 - **Course materials stay out of the repository.** Only the manifest is committed; source
-  documents stay on the local machine. The invented `demo` text is the one exception.
+  documents stay on the local machine. The invented `demo` and `lumen_moths` texts are the exceptions.
 - **A broken manifest stops startup.** Manifests are validated when the app starts, and the
   error names the course and the file, instead of showing up later as wrong answers.
 

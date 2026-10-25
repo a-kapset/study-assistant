@@ -1,0 +1,37 @@
+# Synthetic course for measuring search in CI, where the real courses' materials are not available. The handbook
+# and its questions are invented and were written by a language model, so a model cannot answer them from what it
+# already knows. Its shape follows an exam syllabus: numbered chapters, sections and subsections, learning
+# objectives with knowledge levels listed at the start of each chapter, and a question bank whose objective ids
+# name the answer section.
+id: lumen_moths
+title: The Lumen Moth Keeper's Handbook
+description: >-
+  An invented handbook for keepers of lumen moths, glowing moths kept in glass houses for the light they give:
+  biology, glass house climate, feeding, the harvest, pests and diseases, and the keepers' guild.
+language: en
+
+# Regular expressions, applied to the source text line by line.
+structure:
+  # "1. Introduction to Lumen Moth Biology", "1.2. The Life Cycle: From Egg to Imago", "1.2.1. The Dormant Egg".
+  section_heading: '^(?P<id>\d+(?:\.\d+){0,2})\.\s+(?P<title>\S.*)$'
+  # "LO-1.2.3" -> learning objective 3 of section 1.2. Objectives are listed at the start of each chapter,
+  # not inside their sections, so the section comes from the id.
+  objective_id: 'LO-(?P<section>\d+\.\d+)\.\d+'
+  # "(K2)" -> the knowledge level, on the same line as the objective id.
+  knowledge_level: '\((?P<level>K[1-3])\)'
+
+# Paths are relative to the course's source directory.
+sources:
+  - file: lumen_moths.pdf
+    role: material
+    authority: primary
+    # The running header and the page footer of every page.
+    noise_lines:
+      - "The Lumen Moth Keeper's Handbook, first edition"
+      - 'Page \d+ of \d+'
+    # Only the teaching text is searched: sections 1.1 and below. The title page and the chapter pages that list
+    # the objectives get no chunks.
+    content_sections: '[1-6](\.\d+)+'
+  - file: lumen_moths_bank.jsonl
+    role: question_bank
+    authority: primary
