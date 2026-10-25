@@ -100,13 +100,17 @@ def _print_summary(record: RunRecord, gold: GoldSet, path: Path) -> None:
     }
     for name, label in labels.items():
         print(f"\n{name} pass (k={record.k}, {label})")
-        print(f"  {'slice':<12}{'n':>5}{'recall':>8}{'MRR':>7}{'P':>7}{'irrel':>7}{'miss':>6}{'empty':>6}{'fail':>6}")
+        print(
+            f"  {'slice':<12}{'questions':>10}{'recall':>8}{'MRR':>7}{'precision':>11}{'irrelevant':>12}"
+            f"{'hit':>6}{'miss':>6}{'empty':>6}{'fail':>6}"
+        )
         table = record.summaries[name]
         for key in ["all", *sorted(key for key in table if key != "all")]:
             s = table[key]
+            hits = s.n - s.misses - s.empty - s.failed
             print(
-                f"  {key:<12}{s.n:>5}{s.recall:>8.3f}{s.mrr:>7.3f}{s.precision:>7.3f}{s.irrelevant:>7.3f}"
-                f"{s.misses:>6}{s.empty:>6}{s.failed:>6}"
+                f"  {key:<12}{s.n:>10}{s.recall:>8.3f}{s.mrr:>7.3f}{s.precision:>11.3f}{s.irrelevant:>12.3f}"
+                f"{hits:>6}{s.misses:>6}{s.empty:>6}{s.failed:>6}"
             )
     main_result = record.summaries["primary"]["all"]
     if record.sets == tuple(sorted(primary.sets)) and record.k == primary.k:
