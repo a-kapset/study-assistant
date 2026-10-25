@@ -5,6 +5,9 @@ where the property actually lives, and the most precise about what broke. This f
 principles behind the checks, the levels, how a level is chosen, and every check that exists today
 with the reason for its level.
 
+How every metric the evaluation reports is computed, and how the metrics are read together:
+[evaluation-harness/METRICS.md](evaluation-harness/METRICS.md).
+
 > **Status: work in progress.** Both the app and the evaluation harness are under active development;
 > the READMEs of each part describe what already works.
 

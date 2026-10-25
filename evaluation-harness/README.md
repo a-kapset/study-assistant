@@ -4,6 +4,7 @@ Evaluates the study assistant from the outside: it calls the running app over HT
 exchange as an observation, so a failed request is data for a test, never an exception. Package: `evalharness`.
 
 How checks are split between the app's own tests and the harness: [TESTING.md](../TESTING.md).
+How every metric the harness reports is computed and how to read the metrics together: [METRICS.md](METRICS.md).
 
 > **Status: work in progress.** Both the app and the evaluation harness are under active development;
 > the READMEs of each part describe what already works.
@@ -24,6 +25,7 @@ How checks are split between the app's own tests and the harness: [TESTING.md](.
 evaluation-harness/
 ├── pyproject.toml          # project metadata, dependencies, ruff / mypy / pytest config
 ├── poetry.lock
+├── METRICS.md              # the formula and meaning of every metric the harness reports
 ├── src/evalharness/
 │   ├── settings.py         # where the system under test is (EVAL_*), and the values shared with the stack's .env
 │   ├── corpus_db.py        # direct reads of the app's stored corpus, as the read-only database role
