@@ -40,6 +40,8 @@ def test_config_never_shows_a_secret(settings: Settings, fake_db: Database) -> N
         db=settings.db,
         embedding=settings.embedding,
         embedding_service=settings.embedding_service,
+        llm=settings.llm,
+        openai=settings.openai,
         admin=settings.admin,
     )
 

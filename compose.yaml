@@ -138,6 +138,11 @@ services:
       # Where the embedding server is and how long one request to it may take.
       APP_EMBEDDING_SERVICE__URL: ${APP_EMBEDDING_SERVICE__URL:?set APP_EMBEDDING_SERVICE__URL in .env, see .env.example}
       APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS: ${APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS:?set APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS in .env, see .env.example}
+      # The model that answers questions, and how the app reaches its provider.
+      APP_LLM__ANSWER: ${APP_LLM__ANSWER:?set APP_LLM__ANSWER in .env, see .env.example}
+      APP_OPENAI__API_KEY: ${APP_OPENAI__API_KEY:?set APP_OPENAI__API_KEY in .env, see .env.example}
+      APP_OPENAI__BASE_URL: ${APP_OPENAI__BASE_URL:?set APP_OPENAI__BASE_URL in .env, see .env.example}
+      APP_OPENAI__TIMEOUT_SECONDS: ${APP_OPENAI__TIMEOUT_SECONDS:?set APP_OPENAI__TIMEOUT_SECONDS in .env, see .env.example}
       APP_ADMIN__API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env, see .env.example}
     volumes:
       # Course manifests are data, not part of the image; the app only reads them.

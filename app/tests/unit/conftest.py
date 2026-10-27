@@ -1,12 +1,16 @@
 """Shared unit-test setup: settings that do not depend on the shell, a database the tests can switch off,
-an embedder that needs no server, and an in-memory corpus store."""
+an embedder that needs no server, a chat model that needs no provider, and an in-memory corpus store."""
 
 import zlib
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import pytest
-from pydantic import HttpUrl, SecretStr
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import Field, HttpUrl, SecretStr
 
 from study_assistant.db import Connection, DatabaseUnavailableError
 from study_assistant.embed.base import EmbeddingSpace
@@ -17,6 +21,8 @@ from study_assistant.settings import (
     DbSettings,
     EmbeddingServiceSettings,
     EmbeddingSettings,
+    LlmSettings,
+    OpenAISettings,
     Settings,
 )
 
@@ -31,6 +37,9 @@ EMBEDDING = EmbeddingSettings(
 )
 # An address nothing listens on; unit tests never call the embedding server.
 EMBEDDING_SERVICE = EmbeddingServiceSettings(url=HttpUrl("http://embedder.invalid"))
+# A valid answer model and an address nothing listens on; unit tests reach the provider only through a mock transport.
+LLM = LlmSettings(answer="openai/gpt-5.4-mini")
+OPENAI = OpenAISettings(api_key=SecretStr("unit-test-openai-key"), base_url=HttpUrl("http://llm.invalid/v1"))
 
 
 class FakeDatabase:
@@ -92,6 +101,59 @@ class FakeEmbedder:
         """Answer while up; otherwise fail the way the real client does when the server cannot be reached."""
         if not self.up:
             raise EmbeddingServiceUnavailableError("ConnectError")
+
+
+def responses_api_reply(content: list[dict[str, object]]) -> dict[str, object]:
+    """Return the body the OpenAI Responses API sends back for one assistant message with these content blocks,
+    e.g. ``[{"type": "output_text", "text": "...", "annotations": []}]`` or ``[{"type": "refusal", "refusal": "..."}]``.
+    """
+    return {
+        "id": "resp_unit",
+        "object": "response",
+        "created_at": 0,
+        "status": "completed",
+        "model": "gpt-5.4-mini",
+        "output": [
+            {"type": "message", "id": "msg_unit", "role": "assistant", "status": "completed", "content": content}
+        ],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {
+            "input_tokens": 5,
+            "output_tokens": 3,
+            "total_tokens": 8,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+
+
+class FakeChatModel(BaseChatModel):
+    """Stands in for the answer model: records the messages of every call and replies with ``reply``, or raises
+    ``error`` instead when it is set."""
+
+    reply: str = "Roll two dice."
+    error: Exception | None = None
+    calls: list[list[BaseMessage]] = Field(default_factory=list)
+
+    @property
+    def _llm_type(self) -> str:
+        """Name this model in LangChain's own records."""
+        return "fake-chat-model"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: object,
+    ) -> ChatResult:
+        """Record the messages, then raise ``error`` or reply with ``reply``."""
+        self.calls.append(list(messages))
+        if self.error is not None:
+            raise self.error
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(self.reply))])
 
 
 class FakeCourseWriter:
@@ -229,6 +291,8 @@ def settings() -> Settings:
         db=DbSettings(password=SecretStr("unit-test-password")),
         embedding=EMBEDDING,
         embedding_service=EMBEDDING_SERVICE,
+        llm=LLM,
+        openai=OPENAI,
         admin=AdminSettings(api_key=SecretStr(ADMIN_KEY)),
     )
 
@@ -243,6 +307,12 @@ def fake_db() -> FakeDatabase:
 def fake_embedder() -> FakeEmbedder:
     """A fresh, reachable fake embedder for one test."""
     return FakeEmbedder()
+
+
+@pytest.fixture
+def fake_chat_model() -> FakeChatModel:
+    """A fresh fake answer model for one test, replying with a fixed text."""
+    return FakeChatModel()
 
 
 @pytest.fixture

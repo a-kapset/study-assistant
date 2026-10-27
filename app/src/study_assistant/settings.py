@@ -26,6 +26,10 @@ MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
 # they came from the same model.
 MODEL_REVISION_PATTERN = r"^[0-9a-f]{40}$"
 
+# A chat model of one role, "provider/model", e.g. "openai/gpt-5.4-mini": a provider name the app knows, a slash,
+# and the model name as the provider writes it. The provider is checked when the app starts.
+MODEL_REF_PATTERN = r"^[a-z][a-z0-9_]*/[A-Za-z0-9][A-Za-z0-9._:-]*$"
+
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 type CourseId = Annotated[str, Field(pattern=COURSE_ID_PATTERN)]
@@ -186,6 +190,34 @@ class EmbeddingServiceSettings(BaseModel):
     timeout_seconds: float = Field(default=30, gt=0, le=300)
 
 
+class LlmSettings(BaseModel):
+    """Which chat model plays each role of the app; set as APP_LLM__<ROLE>.
+
+    Each role is written as "provider/model". There are no defaults, so a model is always chosen on purpose,
+    and changing it is a change of configuration only.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # The model that writes the answers to learners' questions, e.g. "openai/gpt-5.4-mini".
+    answer: str = Field(pattern=MODEL_REF_PATTERN)
+
+
+class OpenAISettings(BaseModel):
+    """How the app reaches the OpenAI API; set as APP_OPENAI__<FIELD>."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # No default: without a key the app does not start, instead of failing on the first question.
+    api_key: SecretStr = Field(min_length=1)
+    # Base address of the API. Given here, not taken from OPENAI_* variables, so only this configuration decides
+    # where the calls go; a proxy that records them can be put in front of the provider by changing this value.
+    base_url: HttpUrl = HttpUrl("https://api.openai.com/v1")
+    # Longest wait for one call, in seconds. The client library waits up to ten minutes by default, so a provider
+    # that hangs would hold a learner's request for that long.
+    timeout_seconds: float = Field(default=60, gt=0, le=600)
+
+
 class AdminSettings(BaseModel):
     """Access to the admin endpoints; set as APP_ADMIN__<FIELD>."""
 
@@ -324,6 +356,12 @@ class Settings(BaseSettings):
 
     # APP_EMBEDDING_SERVICE__*: the server that computes the vectors.
     embedding_service: EmbeddingServiceSettings
+
+    # APP_LLM__*: the chat model of each role.
+    llm: LlmSettings
+
+    # APP_OPENAI__*: access to the OpenAI API.
+    openai: OpenAISettings
 
     # APP_ADMIN__*: access to the admin endpoints.
     admin: AdminSettings

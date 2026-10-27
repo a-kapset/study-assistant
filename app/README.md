@@ -63,6 +63,10 @@ app/
 │   │   ├── models.py       # the search result: hits with score and rank, status ok / empty, the values used
 │   │   ├── repository.py   # the two search statements: a course's coverage by vectors, its closest passages
 │   │   └── service.py      # vector search in one course: refuse a course not fully embedded, keep hits above the lowest score
+│   ├── llm/                # chat models
+│   │   └── providers.py    # the only module that knows a model provider: builds each role's model from "provider/model", turns provider failures into typed errors
+│   ├── answer/             # answers to learners' questions
+│   │   └── service.py      # asks the answer model a question about a course; a reply without text is an error
 │   ├── exams/              # a course's question bank
 │   │   └── bank.py         # the common bank format (one question per JSON line) and its reader; a bad line names its number and a reason code
 │   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
@@ -70,6 +74,7 @@ app/
 │       ├── health.py
 │       ├── courses.py
 │       ├── search.py       # POST /v1/search
+│       ├── ask.py          # POST /v1/ask
 │       ├── admin.py        # endpoints behind the admin key: course ingestion
 │       └── config.py
 ├── tools/
@@ -221,7 +226,8 @@ none. `GET /v1/config` shows the effective values with every secret masked.
 The migration run (`python -m study_assistant.migrate`) reads the same database variables with the owner's
 user and password, plus `APP_SERVER_ROLE__NAME` / `APP_SERVER_ROLE__PASSWORD` for the app's role and
 `APP_READER_ROLE__NAME` / `APP_READER_ROLE__PASSWORD` for the read-only role; the app server refuses these.
-The app server needs `APP_ADMIN__API_KEY` (at least 16 characters) and does not start without it.
+The app server needs `APP_ADMIN__API_KEY` (at least 16 characters) and does not start without it, and the same
+holds for the model provider's key `APP_OPENAI__API_KEY`.
 
 In PowerShell, set a variable for the current window before starting the server:
 
@@ -384,6 +390,26 @@ curl.exe -X POST -H "Content-Type: application/json" --data-binary "@search.json
 The JSON goes through a file because Windows PowerShell 5.1 removes the inner double quotes of a JSON argument
 to `curl.exe`. Its `Invoke-RestMethod` also shows non-ASCII course text garbled, although the answer is UTF-8.
 
+## Ask
+
+`POST /v1/ask` with `course_id` and `question` returns `{"answer": "..."}`, written by the answer model. For now
+the model answers from what it knows, without course passages; the course's title and description from its
+manifest tell it which course the question is about, and the question goes to it as the learner's own message,
+never inside the instructions. The model is set as `provider/model` in `APP_LLM__ANSWER` (only `openai` is known;
+another provider stops startup). OpenAI is reached at `APP_OPENAI__BASE_URL` with `APP_OPENAI__API_KEY`, through
+the Responses API with nothing stored by the provider, waiting at most `APP_OPENAI__TIMEOUT_SECONDS` per call and
+repeating a failed call twice.
+
+A course not served is a 404 and the model is not called. A provider that cannot be reached or does not answer
+in time is a 503 `llm_unavailable`; one that answers with an error (a wrong key gives 401, too many calls 429),
+or a reply without any text, such as a refusal, is a 502 `llm_failed`. With the placeholder key of
+`.env.example` every question is a 502. Each question is a paid call to the provider.
+
+```powershell
+'{"course_id": "demo", "question": "How many barges does each player receive?"}' | Set-Content ask.json
+curl.exe -X POST -H "Content-Type: application/json" --data-binary "@ask.json" http://127.0.0.1:8000/v1/ask
+```
+
 ## API
 
 | Method | Path | Purpose |
@@ -394,6 +420,7 @@ to `curl.exe`. Its `Invoke-RestMethod` also shows non-ASCII course text garbled,
 | `GET` | `/v1/courses` | The enabled courses in the configured order: `id`, `title`, `description`, `language` |
 | `GET` | `/v1/courses/{course_id}` | One course, its stored `corpus` counts (documents, sections, learning objectives, chunks), the configured `embedding_space` and the number of the course's `vectors` in it (0 after a change of model until the next ingestion); 404 for a course not served |
 | `POST` | `/v1/search` | The passages of a course closest to a question: `status` (`ok` / `empty`), `hits` with score and rank, the `k`, `min_score` and `embedding_space` used; 404 for a course not served, 409 for a course not fully embedded (see "Search") |
+| `POST` | `/v1/ask` | An answer to a question about a course: `answer`; 404 for a course not served, 503 / 502 when the model provider cannot be reached or fails (see "Ask") |
 | `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count |
 
 

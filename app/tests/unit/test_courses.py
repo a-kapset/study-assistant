@@ -73,6 +73,8 @@ def test_enabled_courses_are_read_as_a_comma_list(settings: Settings, monkeypatc
         db=settings.db,
         embedding=settings.embedding,
         embedding_service=settings.embedding_service,
+        llm=settings.llm,
+        openai=settings.openai,
         admin=settings.admin,
     )
 

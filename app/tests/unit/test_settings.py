@@ -11,7 +11,9 @@ from study_assistant.settings import (
     DbSettings,
     EmbeddingServiceSettings,
     EmbeddingSettings,
+    LlmSettings,
     MigrationSettings,
+    OpenAISettings,
     ReaderRoleSettings,
     ServerRoleSettings,
     Settings,
@@ -31,6 +33,7 @@ EMBEDDING_ENV = {
     "APP_EMBEDDING__QUERY_PREFIX": "query: ",
 }
 EMBEDDING_SERVICE_URL = "http://embedder:8080"
+ANSWER_MODEL = "openai/gpt-5.4-mini"
 # A value that must never appear in an error message.
 CANARY = "canary-value-7f3a"
 
@@ -42,11 +45,14 @@ def _set_embedding_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _set_app_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set every variable the app server needs and nothing more: password, admin key, model and embedding server."""
+    """Set every variable the app server needs and nothing more: password, admin key, embedding model and server,
+    answer model and the model provider's key."""
     monkeypatch.setenv("APP_DB__PASSWORD", "from-env")
     monkeypatch.setenv("APP_ADMIN__API_KEY", "admin-key-from-env")
     _set_embedding_env(monkeypatch)
     monkeypatch.setenv("APP_EMBEDDING_SERVICE__URL", EMBEDDING_SERVICE_URL)
+    monkeypatch.setenv("APP_LLM__ANSWER", ANSWER_MODEL)
+    monkeypatch.setenv("APP_OPENAI__API_KEY", "openai-key-from-env")
 
 
 def _embedding(**changes: object) -> dict[str, object]:
@@ -75,6 +81,10 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     _set_embedding_env(monkeypatch)
     monkeypatch.setenv("APP_EMBEDDING_SERVICE__URL", EMBEDDING_SERVICE_URL)
     monkeypatch.setenv("APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS", "5")
+    monkeypatch.setenv("APP_LLM__ANSWER", ANSWER_MODEL)
+    monkeypatch.setenv("APP_OPENAI__API_KEY", "openai-key-from-env")
+    monkeypatch.setenv("APP_OPENAI__BASE_URL", "http://llm-proxy:8090/v1")
+    monkeypatch.setenv("APP_OPENAI__TIMEOUT_SECONDS", "20")
 
     settings = load_settings()
 
@@ -87,6 +97,10 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     assert (settings.ingest.chunk_size, settings.ingest.chunk_overlap) == (800, 80)
     assert settings.embedding == EmbeddingSettings.model_validate(_embedding())
     assert settings.embedding_service == EmbeddingServiceSettings(url=HttpUrl(EMBEDDING_SERVICE_URL), timeout_seconds=5)
+    assert settings.llm.answer == ANSWER_MODEL
+    assert settings.openai == OpenAISettings(
+        api_key=SecretStr("openai-key-from-env"), base_url=HttpUrl("http://llm-proxy:8090/v1"), timeout_seconds=20
+    )
 
 
 @pytest.mark.covers("US-001", "AC-3")
@@ -358,6 +372,37 @@ def test_embedding_service_timeout_must_be_positive_and_at_most_five_minutes(tim
     """
     with pytest.raises(ValidationError, match="timeout_seconds"):
         EmbeddingServiceSettings.model_validate({"url": EMBEDDING_SERVICE_URL, "timeout_seconds": timeout})
+
+
+@pytest.mark.covers("US-009", "AC-2")
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "openai/", "/gpt-5.4-mini", "OpenAI/gpt-5.4-mini", "openai/gpt 5"])
+def test_answer_model_must_be_provider_slash_model(model: str) -> None:
+    """Gives answer models without a provider, without a model name, with a capital in the provider or with a space,
+    and expects each to be refused at startup.
+
+    Catches a looser format: a model name without "openai/" would leave the provider to be guessed, and a value
+    with a space would reach the provider and fail only at the first question.
+    """
+    with pytest.raises(ValidationError, match="answer") as error:
+        LlmSettings.model_validate({"answer": model})
+
+    assert error.value.error_count() == 1, f"{model!r} should be refused only for its format: {error.value}"
+
+
+@pytest.mark.covers("US-001", "AC-3")
+def test_missing_openai_key_stops_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sets everything the app server needs, and the provider's address, but not the provider's key, and expects
+    startup to stop with an error naming the key.
+
+    Catches a default key: with one, the app would start and fail every question with an error from the provider
+    instead of naming the missing setting.
+    """
+    _set_app_server_env(monkeypatch)
+    monkeypatch.delenv("APP_OPENAI__API_KEY")
+    monkeypatch.setenv("APP_OPENAI__BASE_URL", "http://llm-proxy:8090/v1")
+
+    with pytest.raises(ValidationError, match=r"openai\.api_key"):
+        load_settings()
 
 
 @pytest.mark.covers("US-001", "AC-3")
