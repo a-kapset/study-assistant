@@ -18,6 +18,8 @@ from study_assistant.settings import (
     DbSettings,
     EmbeddingServiceSettings,
     EmbeddingSettings,
+    LlmSettings,
+    OpenAISettings,
     Settings,
 )
 
@@ -60,6 +62,11 @@ def client() -> Iterator[TestClient]:
         ),
         # Nothing listens there; these tests never reach the embedding server.
         embedding_service=EmbeddingServiceSettings(url=HttpUrl("http://embedder.invalid")),
+        # Nor is the model provider called: no test here asks a question.
+        llm=LlmSettings(answer="openai/gpt-5.4-mini"),
+        openai=OpenAISettings(
+            api_key=SecretStr("integration-test-openai-key"), base_url=HttpUrl("http://llm.invalid/v1")
+        ),
         admin=AdminSettings(api_key=SecretStr("integration-test-admin-key")),
     )
     with TestClient(build_app(settings), backend_options={"loop_factory": asyncio.SelectorEventLoop}) as test_client:
