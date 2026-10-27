@@ -4,18 +4,21 @@ an embedder that needs no server, a chat model that needs no provider, and an in
 import zlib
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import replace
 
 import pytest
 from langchain_core.callbacks import CallbackManagerForLLMRun
-from langchain_core.language_models import BaseChatModel
+from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from pydantic import Field, HttpUrl, SecretStr
+from langchain_core.runnables import Runnable, RunnableLambda
+from pydantic import BaseModel, Field, HttpUrl, SecretStr
 
 from study_assistant.db import Connection, DatabaseUnavailableError
 from study_assistant.embed.base import EmbeddingSpace
 from study_assistant.embed.remote import EmbeddingServiceUnavailableError
 from study_assistant.ingest.service import CorpusCounts, PreparedDocument, StoredCourse
+from study_assistant.retrieval.repository import Coverage, Passage
 from study_assistant.settings import (
     AdminSettings,
     DbSettings,
@@ -103,6 +106,38 @@ class FakeEmbedder:
             raise EmbeddingServiceUnavailableError("ConnectError")
 
 
+# The coverage of a course whose 12 chunks all have a vector in the configured space.
+EMBEDDED = Coverage(chunks=12, vectors=12)
+PASSAGE = Passage(
+    chunk_id="c1", section_id="1", source_file="rules.pdf", page_start=1, page_end=1, text="Roll two dice.", score=0.9
+)
+
+
+class FakeSearchStore:
+    """Stands in for the database: a fully embedded course whose passages are given closest first, as the real
+    store returns them, and a record of the number of hits each search asked for."""
+
+    def __init__(self, passages: list[Passage], coverage: Coverage = EMBEDDED) -> None:
+        """Hold the passages every search returns and the coverage every course has."""
+        self.passages = passages
+        self.course_coverage = coverage
+        self.asked_k: list[int] = []
+
+    async def coverage(self, course_id: str, space: EmbeddingSpace) -> Coverage:
+        """Return the coverage set for this test, whatever the course."""
+        return self.course_coverage
+
+    async def nearest(self, course_id: str, space: EmbeddingSpace, vector: list[float], k: int) -> list[Passage]:
+        """Record ``k`` and return the first ``k`` passages."""
+        self.asked_k.append(k)
+        return self.passages[:k]
+
+
+def scored_passages(*scores: float) -> list[Passage]:
+    """Passages with the given scores, closest first, each with its own chunk id."""
+    return [replace(PASSAGE, chunk_id=f"c{i}", score=score) for i, score in enumerate(scores, start=1)]
+
+
 def responses_api_reply(content: list[dict[str, object]]) -> dict[str, object]:
     """Return the body the OpenAI Responses API sends back for one assistant message with these content blocks,
     e.g. ``[{"type": "output_text", "text": "...", "annotations": []}]`` or ``[{"type": "refusal", "refusal": "..."}]``.
@@ -141,6 +176,19 @@ class FakeChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         """Name this model in LangChain's own records."""
         return "fake-chat-model"
+
+    def with_structured_output(
+        self, schema: dict[str, object] | type, *, include_raw: bool = False, **kwargs: object
+    ) -> Runnable[LanguageModelInput, dict[str, object] | BaseModel]:
+        """Return a runnable that fails when called: this fake replies with plain text only, so a test of structured
+        replies uses the real client with a mock transport instead. The app builds its structured runnable at
+        startup, so this method must work even when the test never asks a grounded question."""
+
+        def refuse(_messages: LanguageModelInput) -> dict[str, object] | BaseModel:
+            """Fail loudly, naming the fake, instead of answering in a form it cannot honour."""
+            raise AssertionError("FakeChatModel gives plain text only; test structured replies on the real client")
+
+        return RunnableLambda(refuse)
 
     def _generate(
         self,

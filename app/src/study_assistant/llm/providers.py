@@ -1,6 +1,6 @@
 """Builds the chat model of each role from configuration; the only module that knows about any model provider.
 
-The rest of the app sees LangChain's provider-neutral chat model and the two error types below. A role names its
+The rest of the app sees LangChain's provider-neutral chat model and the error types below. A role names its
 model as "provider/model", and this module picks the builder for that provider, so changing the model or the
 provider is a change of configuration only.
 """
@@ -12,6 +12,7 @@ import openai
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
+from langchain_openai.chat_models.base import OpenAIRefusalError
 
 from study_assistant.settings import Settings
 
@@ -38,6 +39,14 @@ class LlmRequestError(LlmError):
         """Keep the status the provider answered with; it is the only detail the message shows."""
         super().__init__(f"the model provider answered with status {status_code}")
         self.status_code = status_code
+
+
+class LlmRefusedError(LlmError):
+    """The model refused to give the structured reply it was asked for."""
+
+    def __init__(self) -> None:
+        """Say that the model refused; its own words are not shown."""
+        super().__init__("the model refused to answer")
 
 
 class UnknownProviderError(ValueError):
@@ -86,7 +95,8 @@ async def ainvoke[Input, Output](runnable: Runnable[Input, Output], value: Input
     """Call a chat model, or a runnable built on one, and turn a provider's failure into an ``LlmError``.
 
     No connection or no answer in time raises ``LlmUnavailableError`` with the error's type; an error status from
-    the provider raises ``LlmRequestError``. The provider's own exception stays attached as the cause.
+    the provider raises ``LlmRequestError``; a refusal of a structured reply raises ``LlmRefusedError``. The
+    provider's own exception stays attached as the cause.
     """
     try:
         return await runnable.ainvoke(value)
@@ -95,3 +105,5 @@ async def ainvoke[Input, Output](runnable: Runnable[Input, Output], value: Input
         raise LlmUnavailableError(type(error).__name__) from error
     except openai.APIStatusError as error:
         raise LlmRequestError(error.status_code) from error
+    except OpenAIRefusalError as error:
+        raise LlmRefusedError from error

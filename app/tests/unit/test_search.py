@@ -1,7 +1,6 @@
 """The rules of a search, on an in-memory store: the lowest score, the status, which courses can be searched, the
 values a request may leave out, and how each failure is answered."""
 
-from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -10,11 +9,12 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from study_assistant.composition import build_app
-from study_assistant.embed.base import EmbeddingSpace
 from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
-from study_assistant.retrieval.repository import Coverage, Passage
+from study_assistant.retrieval.repository import Coverage
 from study_assistant.retrieval.service import CourseNotSearchableError, VectorSearch
 from study_assistant.settings import CoursesSettings, SearchSettings, Settings
+
+from .conftest import FakeSearchStore, scored_passages
 
 if TYPE_CHECKING:
     from .conftest import FakeCorpusStore, FakeDatabase, FakeEmbedder
@@ -24,36 +24,6 @@ pytestmark = pytest.mark.anyio
 # The repository's own course folder: app/tests/unit/<this file> -> repository root.
 REPO_COURSES = Path(__file__).resolve().parents[3] / "courses"
 SEARCH = "/v1/search"
-# The coverage of a course whose 12 chunks all have a vector in the configured space.
-EMBEDDED = Coverage(chunks=12, vectors=12)
-PASSAGE = Passage(
-    chunk_id="c1", section_id="1", source_file="rules.pdf", page_start=1, page_end=1, text="Roll two dice.", score=0.9
-)
-
-
-class FakeSearchStore:
-    """Stands in for the database: a fully embedded course whose passages are given closest first, as the real
-    store returns them, and a record of the number of hits each search asked for."""
-
-    def __init__(self, passages: list[Passage], coverage: Coverage = EMBEDDED) -> None:
-        """Hold the passages every search returns and the coverage every course has."""
-        self.passages = passages
-        self.course_coverage = coverage
-        self.asked_k: list[int] = []
-
-    async def coverage(self, course_id: str, space: EmbeddingSpace) -> Coverage:
-        """Return the coverage set for this test, whatever the course."""
-        return self.course_coverage
-
-    async def nearest(self, course_id: str, space: EmbeddingSpace, vector: list[float], k: int) -> list[Passage]:
-        """Record ``k`` and return the first ``k`` passages."""
-        self.asked_k.append(k)
-        return self.passages[:k]
-
-
-def _scored(*scores: float) -> list[Passage]:
-    """Passages with the given scores, closest first, each with its own chunk id."""
-    return [replace(PASSAGE, chunk_id=f"c{i}", score=score) for i, score in enumerate(scores, start=1)]
 
 
 def _client(
@@ -75,7 +45,7 @@ async def test_passages_below_the_lowest_score_are_left_out_and_the_kept_ones_ar
     Expects the first three, a score equal to the lowest one included, ranked 1, 2 and 3. Catches a search that
     keeps every passage, one that drops a passage exactly at the lowest score, and ranks that start at 0.
     """
-    store = FakeSearchStore(_scored(0.9, 0.85, 0.85, 0.8))
+    store = FakeSearchStore(scored_passages(0.9, 0.85, 0.85, 0.8))
 
     result = await VectorSearch(store, fake_embedder).search("demo", "How many dice?", k=4, min_score=0.85)
 
@@ -90,7 +60,7 @@ async def test_search_where_no_passage_reaches_the_lowest_score_is_empty(fake_em
     Expects the status "empty" and no hits. Catches a result that says "ok" with an empty list, which a caller
     could not tell from a search that found the answer missing for another reason.
     """
-    store = FakeSearchStore(_scored(0.8, 0.7))
+    store = FakeSearchStore(scored_passages(0.8, 0.7))
 
     result = await VectorSearch(store, fake_embedder).search("demo", "Bake bread", k=5, min_score=0.85)
 
@@ -112,7 +82,7 @@ async def test_course_not_fully_embedded_in_the_space_is_refused(
     Expects ``CourseNotSearchableError`` in each. Catches a search that answers from part of a course, or from
     nothing, as if it had searched all of it.
     """
-    store = FakeSearchStore(_scored(0.9), coverage=coverage)
+    store = FakeSearchStore(scored_passages(0.9), coverage=coverage)
 
     with pytest.raises(CourseNotSearchableError):
         await VectorSearch(store, fake_embedder).search("demo", "How many dice?", k=5, min_score=0.85)
@@ -139,7 +109,7 @@ def test_values_left_out_come_from_the_settings_and_given_values_win(
     score really applied. Catches a request value that is ignored, and a result that reports the configured value
     when another one was used, which would make a client record the wrong setting with its numbers.
     """
-    store = FakeSearchStore(_scored(0.9))
+    store = FakeSearchStore(scored_passages(0.9))
     with _client(settings, fake_db, fake_store, fake_embedder, store) as client:
         response = client.post(SEARCH, json={"course_id": "demo", "query": "How many dice?", **body})
 
@@ -158,7 +128,7 @@ def test_more_hits_than_the_configured_maximum_are_refused(
     Expects a 422 in the error envelope that points at ``k``, and no search. Catches a missing check, which would
     let one request read a whole course.
     """
-    store = FakeSearchStore(_scored(0.9))
+    store = FakeSearchStore(scored_passages(0.9))
     with _client(settings, fake_db, fake_store, fake_embedder, store) as client:
         response = client.post(SEARCH, json={"course_id": "demo", "query": "How many dice?", "k": 11})
 
@@ -197,7 +167,7 @@ def test_each_failure_is_answered_with_its_status_and_code(
     status, and an unknown course that reaches the store, where it would look like a course without vectors.
     """
     fake_embedder.error = error
-    store = FakeSearchStore(_scored(0.9), coverage=coverage)
+    store = FakeSearchStore(scored_passages(0.9), coverage=coverage)
     with _client(settings, fake_db, fake_store, fake_embedder, store) as client:
         response = client.post(SEARCH, json={"course_id": course_id, "query": "How many dice?"})
 

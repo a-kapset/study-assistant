@@ -218,6 +218,17 @@ class OpenAISettings(BaseModel):
     timeout_seconds: float = Field(default=60, gt=0, le=600)
 
 
+class AskSettings(BaseModel):
+    """How the ask endpoint answers; set as APP_ASK__<FIELD>."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # "grounded": the model answers only from the course passages a search finds, and cites them; with no passage
+    # close enough it is not called at all. "ungrounded": the model answers from what it knows, without a search;
+    # kept as the comparison that shows how much the passages add.
+    mode: Literal["grounded", "ungrounded"] = "grounded"
+
+
 class AdminSettings(BaseModel):
     """Access to the admin endpoints; set as APP_ADMIN__<FIELD>."""
 
@@ -350,6 +361,9 @@ class Settings(BaseSettings):
 
     # APP_SEARCH__*: what a search returns by default.
     search: SearchSettings = Field(default_factory=SearchSettings)
+
+    # APP_ASK__*: how questions are answered.
+    ask: AskSettings = Field(default_factory=AskSettings)
 
     # APP_EMBEDDING__*: the embedding model.
     embedding: EmbeddingSettings

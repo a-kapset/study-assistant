@@ -66,7 +66,9 @@ def build_app(
     size = ChunkSize(size=settings.ingest.chunk_size, overlap=settings.ingest.chunk_overlap)
     ingestor = CourseIngestor(corpus, embedder, settings.courses.source_dir, size)
     search = VectorSearch(search_store if search_store is not None else PostgresSearchStore(db), embedder)
-    answerer = Answerer(chat_model)
+    # The grounded mode searches with the same search that serves /v1/search, so its passages are those the search
+    # quality is measured on.
+    answerer = Answerer(chat_model, search, settings.ask, settings.search)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:

@@ -129,6 +129,7 @@ services:
       APP_SEARCH__DEFAULT_K: ${APP_SEARCH__DEFAULT_K:?set APP_SEARCH__DEFAULT_K in .env, see .env.example}
       APP_SEARCH__MAX_K: ${APP_SEARCH__MAX_K:?set APP_SEARCH__MAX_K in .env, see .env.example}
       APP_SEARCH__MIN_SCORE: ${APP_SEARCH__MIN_SCORE:?set APP_SEARCH__MIN_SCORE in .env, see .env.example}
+      APP_ASK__MODE: ${APP_ASK__MODE:?set APP_ASK__MODE in .env, see .env.example}
       # The embedding model; the vectors' space is named after it.
       APP_EMBEDDING__MODEL: ${APP_EMBEDDING__MODEL}
       APP_EMBEDDING__REVISION: ${APP_EMBEDDING__REVISION}
