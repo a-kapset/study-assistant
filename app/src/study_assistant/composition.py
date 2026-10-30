@@ -15,7 +15,7 @@ from study_assistant.api.ask import ask_router
 from study_assistant.api.config import config_router
 from study_assistant.api.courses import courses_router
 from study_assistant.api.health import health_router
-from study_assistant.api.middleware import RequestIdMiddleware
+from study_assistant.api.middleware import RequestIdMiddleware, add_request_id
 from study_assistant.api.search import search_router
 from study_assistant.courses.registry import load_courses
 from study_assistant.db import Database, PostgresDatabase
@@ -58,7 +58,7 @@ def build_app(
     corpus = store if store is not None else PostgresCorpusStore(db)
     # The connections to the embedding server and the model provider belong to the app, which closes them when the
     # server stops. A client nobody uses opens no connection, so it is made even when tests pass both models.
-    http_client = httpx2.AsyncClient()
+    http_client = httpx2.AsyncClient(event_hooks={"request": [add_request_id]})
     if embedder is None:
         embedder = RemoteEmbedder.from_settings(settings.embedding, settings.embedding_service, http_client)
     if chat_model is None:

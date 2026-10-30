@@ -3,6 +3,7 @@
 import re
 import uuid
 
+import httpx2
 import structlog
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -21,6 +22,11 @@ def accept_or_generate(incoming: str | None) -> str:
     if incoming is not None and _VALID_REQUEST_ID.fullmatch(incoming):
         return incoming
     return str(uuid.uuid4())
+
+
+async def add_request_id(request: httpx2.Request) -> None:
+    """Put the id of the request being handled on an outgoing call, so the called service can be joined to it."""
+    request.headers[REQUEST_ID_HEADER] = structlog.contextvars.get_contextvars()["request_id"]
 
 
 class RequestIdMiddleware:

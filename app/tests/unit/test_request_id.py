@@ -1,9 +1,12 @@
 import json
 import uuid
 
+import httpx2
 import pytest
+import structlog
 from fastapi.testclient import TestClient
 
+from study_assistant.api.middleware import add_request_id
 from study_assistant.composition import build_app
 from study_assistant.db import Database
 from study_assistant.settings import Settings
@@ -65,3 +68,26 @@ def test_unhandled_exception_is_logged_once_as_json_with_the_request_id(
     assert errors[0]["request_id"] == "case-500"
     assert errors[0]["level"] == "error"
     assert errors[0]["exception"][0]["exc_type"] == "RuntimeError"
+
+
+@pytest.mark.anyio
+@pytest.mark.covers("US-002", "AC-7")
+async def test_outgoing_call_carries_the_id_of_the_request_being_handled() -> None:
+    """Sends a call while a request id is bound and expects that id on it.
+
+    Guards the join with the called service: a wrong header name or a value read from elsewhere would leave a model
+    call that cannot be matched to the question that caused it.
+    """
+    calls: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        """Remember the call and answer it."""
+        calls.append(request)
+        return httpx2.Response(200)
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(answer), event_hooks={"request": [add_request_id]})
+    with structlog.contextvars.bound_contextvars(request_id="case-042"):
+        await client.get("http://service.test/call")
+    await client.aclose()
+
+    assert calls[0].headers["X-Request-ID"] == "case-042", f"the call went out with {calls[0].headers}"

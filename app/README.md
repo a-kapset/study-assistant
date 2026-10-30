@@ -448,7 +448,8 @@ curl.exe -X POST -H "Content-Type: application/json" --data-binary "@ask.json" h
 
 Every response carries an `X-Request-ID` header. A client may send its own id (letters, digits,
 `.`, `_`, `-`, up to 128 characters) and gets it back; otherwise the app generates a UUID. The same
-id is in every log line written while the request is handled, so a response can be matched with its
+id goes with every call the app makes to another service while handling the request, and it is in
+every log line written meanwhile, so a response can be matched with its
 logs.
 
 Every error has the status code that fits it and one body format:
