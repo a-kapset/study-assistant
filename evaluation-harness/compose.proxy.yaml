@@ -1,0 +1,31 @@
+# Puts the LLM proxy between the app and its model provider. Used on top of the main file:
+#   docker compose -f compose.yaml -f evaluation-harness/compose.proxy.yaml up -d --build --wait
+# The main file stays free of the harness, so the app can run without it.
+
+services:
+  llm-proxy:
+    build: ./evaluation-harness
+    environment:
+      EVAL_PROXY_MODE: ${EVAL_PROXY_MODE:?set EVAL_PROXY_MODE in .env, see .env.example}
+      # The real key stays here; the app below gets a placeholder.
+      EVAL_PROXY_UPSTREAM_API_KEY: ${APP_OPENAI__API_KEY:?set APP_OPENAI__API_KEY in .env, see .env.example}
+      EVAL_PROXY_CASSETTE_DIR: /proxy/data/cassettes
+      EVAL_PROXY_LEDGER_FILE: /proxy/data/runs/proxy_ledger.jsonl
+    volumes:
+      # On this machine, so a recording can be committed and the tests can read the ledger.
+      - ${EVAL_PROXY_CASSETTES:?set EVAL_PROXY_CASSETTES in .env, see .env.example}:/proxy/data/cassettes
+      - ./evaluation-harness/runs:/proxy/data/runs
+    healthcheck:
+      # The image has no curl; Python's standard library is enough.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  app:
+    environment:
+      APP_OPENAI__BASE_URL: http://llm-proxy:8100/v1
+      APP_OPENAI__API_KEY: key-held-by-the-proxy
+    depends_on:
+      llm-proxy:
+        condition: service_healthy

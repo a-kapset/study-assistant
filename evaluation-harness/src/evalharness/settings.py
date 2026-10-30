@@ -1,8 +1,9 @@
 """Harness configuration: EVAL_* environment variables, plus the values it shares with the stack's .env file."""
 
 from pathlib import Path
+from typing import Literal, Self
 
-from pydantic import Field, HttpUrl, SecretStr
+from pydantic import Field, HttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +28,45 @@ class HarnessSettings(BaseSettings):
 
     # EVAL_DB_HOST: the host on which the stack publishes its database port.
     db_host: str = "127.0.0.1"
+
+    # EVAL_PROXY_LEDGER_FILE: the ledger of the LLM proxy, as the stack writes it to this machine; relative paths
+    # start from the working directory, and the default fits a run from evaluation-harness/.
+    proxy_ledger_file: Path = Path("runs/proxy_ledger.jsonl")
+
+
+class ProxySettings(BaseSettings):
+    """How the LLM proxy runs: its mode, the real provider behind it and where it keeps what it sees.
+
+    Nothing creates an instance at import time: the proxy's entry point builds it when the process starts.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="EVAL_PROXY_", extra="forbid", frozen=True)
+
+    # EVAL_PROXY_MODE: "replay" answers only from recordings and never pays; "record" answers from a recording
+    # when there is one and sends only new calls to the provider, which keeps their replies.
+    mode: Literal["record", "replay"] = "replay"
+
+    # EVAL_PROXY_UPSTREAM_URL: address of the real provider API.
+    upstream_url: HttpUrl = HttpUrl("https://api.openai.com/v1")
+
+    # EVAL_PROXY_UPSTREAM_API_KEY: the real key; only the proxy holds it, and the app runs with a placeholder.
+    upstream_api_key: SecretStr = SecretStr("")
+
+    # EVAL_PROXY_UPSTREAM_TIMEOUT_S: longest wait for one provider reply, in seconds.
+    upstream_timeout_s: float = Field(default=60.0, gt=0)
+
+    # EVAL_PROXY_CASSETTE_DIR: folder of the recordings; a local course uses a folder that is not committed.
+    cassette_dir: Path = Path("cassettes")
+
+    # EVAL_PROXY_LEDGER_FILE: the file that gets one JSON line per call.
+    ledger_file: Path = Path("runs/proxy_ledger.jsonl")
+
+    @model_validator(mode="after")
+    def _record_needs_a_key(self) -> Self:
+        """Stop at start when ``record`` has no key: every new call would fail and nothing would be recorded."""
+        if self.mode == "record" and not self.upstream_api_key.get_secret_value():
+            raise ValueError("EVAL_PROXY_UPSTREAM_API_KEY is required in record mode")
+        return self
 
 
 class StackSettings(BaseSettings):

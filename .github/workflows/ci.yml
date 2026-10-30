@@ -107,6 +107,8 @@ jobs:
     env:
       # Shown by /v1/config; a value in the environment wins over the one in .env.
       GIT_COMMIT: ${{ github.sha }}
+      # Every docker compose command of this job uses both files.
+      COMPOSE_FILE: compose.yaml:evaluation-harness/compose.proxy.yaml
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -136,9 +138,12 @@ jobs:
           done
 
       - name: Start the stack
-        # "up --wait" does not wait for the ingestion run, which nothing depends on, and returns 0 even when it
-        # fails; "wait ingest" returns that run's exit code.
+        # With the LLM proxy in front of the model. The proxy runs as its own user, so its two folders must be
+        # writable for it. "up --wait" does not wait for the ingestion run, which nothing depends on, and returns
+        # 0 even when it fails; "wait ingest" returns that run's exit code.
         run: |
+          mkdir -p evaluation-harness/runs evaluation-harness/cassettes
+          chmod a+rwx evaluation-harness/runs evaluation-harness/cassettes
           docker compose up -d --build --wait
           docker compose wait ingest
 

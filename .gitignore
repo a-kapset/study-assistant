@@ -38,3 +38,6 @@ backups/
 
 # Evaluation run records: results measured on local course materials, kept on the machine that ran them
 evaluation-harness/runs/
+
+# Recordings of a course whose material is not committed: replies quote the course
+evaluation-harness/cassettes_local/
