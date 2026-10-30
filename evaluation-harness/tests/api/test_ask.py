@@ -19,6 +19,8 @@ OFF_TOPIC_QUESTION = "Who wrote the novel War and Peace?"
 APP_DECLINE = "The course material has no passage close enough to this question, so it is not answered."
 # A question the demo course answers: its best passage scored 0.852 on 2026-10-28, so the app calls the model.
 ON_TOPIC_QUESTION = "How many barges does each player receive?"
+# The passage the recorded reply to that question cites; a passage id comes from its text, so it stays the same.
+RECORDED_CITATION = "7f172213d26adc5cd3a132bb78bd6f3ec667520f8b627d7664aa22023facd372"
 # The address of the proxy inside the stack (evaluation-harness/compose.proxy.yaml).
 PROXY_URL = "http://llm-proxy:8100/v1"
 
@@ -89,3 +91,29 @@ async def test_a_call_without_a_recording_leaves_one_ledger_line_and_a_failed_an
     assert observation.status_code == 502, f"expected the failed answer of a miss: {observation.body_text}"
     lines = _ledger_lines(settings, observation.request_id)
     assert [line.source for line in lines] == ["miss"], f"expected one miss for this request id, got {lines}"
+
+
+@pytest.mark.covers("US-010", "AC-2")
+async def test_a_recorded_question_is_answered_from_the_recording(sut: SutTransport, settings: HarnessSettings) -> None:
+    """Asks the demo question whose real reply is recorded and expects that reply, without a model call.
+
+    What it checks: the ledger has one line for this request, served from the recording, and the app turns the
+    recorded reply into a successful answer that cites the passage the model chose.
+    What a result tells: a pass means the request the app sends today is the one that was recorded, and the app
+    still reads a real reply of the provider. A miss in the ledger means the request changed (prompt, reply schema,
+    passages found, or a library update): a defect if nobody meant it, otherwise the recording is out of date. A
+    wrong citation points to how the app maps the model's passage numbers to passages.
+    Why it is worth having: the proxy's unit tests use a reply built by hand, so only this test runs a real reply
+    through the app, at no cost and on every push. Without it a recording could go out of date and nobody would know.
+    It says nothing about how good the answer is: the reply is fixed.
+    """
+    await _require_the_proxy(sut)
+
+    observation = await sut.request("POST", "/v1/ask", json={"course_id": "demo", "question": ON_TOPIC_QUESTION})
+
+    lines = _ledger_lines(settings, observation.request_id)
+    assert [line.source for line in lines] == ["cassette"], f"the request no longer matches its recording: {lines}"
+    assert observation.status_code == 200, f"the app could not use the recorded reply: {observation.body_text}"
+    result = cast(dict[str, JsonValue], observation.body_json)
+    citations = cast(list[dict[str, JsonValue]], result["citations"])
+    assert [citation["chunk_id"] for citation in citations] == [RECORDED_CITATION], f"wrong passage cited: {citations}"
