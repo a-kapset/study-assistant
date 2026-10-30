@@ -34,7 +34,7 @@ class CassetteStore:
         """Write the recording through a temporary file, so a stopped proxy cannot leave half a recording."""
         path = self._path(key)
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(cassette.model_dump_json(indent=2), encoding="utf-8")
+        temporary.write_text(cassette.model_dump_json(indent=2) + "\n", encoding="utf-8")
         temporary.replace(path)
 
     def _path(self, key: str) -> Path:
