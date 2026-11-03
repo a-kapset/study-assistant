@@ -1,15 +1,17 @@
-"""Build the demo course PDF from its Markdown source.
+"""Build an invented course's PDF from its Markdown source.
 
 The Markdown file is the known text of the course; the PDF built from it is what the app ingests, so the
 PDF path (pages, running header and footer, words broken at line ends) is exercised with a text whose every
 word is known. The output is byte-for-byte the same on every run, so the committed PDF only changes when
-the Markdown or this script changes.
+the Markdown or this script changes. The PDF is written next to the Markdown file, with the same name.
 
-Run from the repository root (Poetry runs the command inside app/):
+Run from the repository root (Poetry runs the command inside app/); the commands for each course are in
+courses/README.md:
     poetry -C app install --with tools
-    poetry -C app run python ../courses/demo/tools/build_pdf.py
+    poetry -C app run python ../courses/tools/build_pdf.py <markdown file> --header "<running header>"
 """
 
+import argparse
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,12 +19,8 @@ from typing import Literal
 
 from fpdf import FPDF
 
-COURSE_DIR = Path(__file__).resolve().parent.parent
-SOURCE = COURSE_DIR / "vardolin_rules.md"
-TARGET = COURSE_DIR / "vardolin_rules.pdf"
-
-# Repeated on every page; the course manifest holds the patterns that remove these lines again.
-RUNNING_HEADER = "The Rules of Vardolin, edition 1"
+# The running header is repeated on every page, like the footer; the course manifest holds the patterns that
+# remove both lines again.
 FOOTER_TEMPLATE = "Page {page} of {{nb}}"
 
 # A fixed creation date: without it every build would differ by its timestamp.
@@ -62,13 +60,18 @@ def parse_blocks(markdown: str) -> list[Block]:
     return blocks
 
 
-class RulesPdf(FPDF):
+class CoursePdf(FPDF):
     """An A4 document with the running header and the page footer on every page."""
+
+    def __init__(self, running_header: str) -> None:
+        """Keep the running header that every page starts with."""
+        super().__init__()
+        self.running_header = running_header
 
     def header(self) -> None:
         """Write the running header at the top of the page."""
         self.set_font("helvetica", size=9)
-        self.cell(0, 8, RUNNING_HEADER, new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 8, self.running_header, new_x="LMARGIN", new_y="NEXT")
         self.ln(4)
 
     def footer(self) -> None:
@@ -79,7 +82,7 @@ class RulesPdf(FPDF):
 
 
 def draw_board(pdf: FPDF) -> None:
-    """Draw the river board with shapes only, so the page carries no text of its own."""
+    """Draw a board of shapes only (the demo course's river board), so the page carries no text of its own."""
     centre_x, centre_y = 105.0, 140.0
     pdf.circle(centre_x, centre_y, 20, style="D")
     for column in range(4):
@@ -89,9 +92,9 @@ def draw_board(pdf: FPDF) -> None:
             pdf.rect(60 + column * 24, 95 + row * 24, 20, 20, style="D")
 
 
-def render(blocks: list[Block]) -> bytes:
-    """Lay the blocks out on pages and return the PDF bytes."""
-    pdf = RulesPdf()
+def render(blocks: list[Block], running_header: str) -> bytes:
+    """Lay the blocks out on pages under ``running_header`` and return the PDF bytes."""
+    pdf = CoursePdf(running_header)
     pdf.set_creation_date(CREATION_DATE)
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
@@ -116,10 +119,16 @@ def render(blocks: list[Block]) -> bytes:
 
 
 def main() -> None:
-    """Build the PDF next to its Markdown source and report the result."""
-    data = render(parse_blocks(SOURCE.read_text(encoding="utf-8")))
-    TARGET.write_bytes(data)
-    print(f"Wrote {TARGET.name}: {len(data)} bytes")
+    """Build the PDF next to the Markdown source named on the command line and report the result."""
+    parser = argparse.ArgumentParser(description="Build an invented course's PDF from its Markdown source.")
+    parser.add_argument("source", type=Path, help="the course's Markdown file; the PDF is written next to it")
+    parser.add_argument("--header", required=True, help="the running header printed on every page")
+    args = parser.parse_args()
+    source: Path = args.source
+    target = source.with_suffix(".pdf")
+    data = render(parse_blocks(source.read_text(encoding="utf-8")), args.header)
+    target.write_bytes(data)
+    print(f"Wrote {target.name}: {len(data)} bytes")
 
 
 if __name__ == "__main__":

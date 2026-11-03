@@ -126,7 +126,7 @@ only when the volume is first created. The database port is published on `127.0.
 use `docker compose exec db psql -U study_assistant -d study_assistant` (the `DB_OWNER` and `DB_NAME` from `.env`).
 
 Compose mounts the repository's `courses/` folder read-only and enables the courses in
-`APP_COURSES__ENABLED` (`demo` and `lumen_moths` in `.env.example`); check with
+`APP_COURSES__ENABLED` (`demo`, `lumen_moths` and `brimlake_ferry` in `.env.example`); check with
 `curl.exe http://127.0.0.1:8000/v1/courses`.
 Course sources are mounted read-only too: `courses/` (the invented courses' PDFs are committed) and one more folder
 for a course whose material stays on this machine (`LOCAL_COURSE_ID`, `LOCAL_COURSE_SOURCES`). The `ingest`
