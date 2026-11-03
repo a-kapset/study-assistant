@@ -13,10 +13,6 @@ from evalharness.transport import SutTransport
 # A question the demo course (a board game) has nothing about. Its closest demo passage scored 0.737 on 2026-10-28,
 # well below the stack's lowest accepted score of 0.83, so search finds nothing close enough.
 OFF_TOPIC_QUESTION = "Who wrote the novel War and Peace?"
-# The fixed text the app answers with when search finds nothing. The model writes its own words, so this text shows
-# that the app declined before any model call, even when the model would have declined too.
-# (NO_PASSAGES_ANSWER in app/src/study_assistant/answer/service.py)
-APP_DECLINE = "The course material has no passage close enough to this question, so it is not answered."
 # A question the demo course answers: its best passage scored 0.852 on 2026-10-28, so the app calls the model.
 ON_TOPIC_QUESTION = "How many barges does each player receive?"
 # The passage the recorded reply to that question cites; a passage id comes from its text, so it stays the same.
@@ -44,8 +40,8 @@ async def test_question_outside_the_course_is_declined_without_a_model_call(
 ) -> None:
     """Asks the demo course a question it has nothing about and expects no model call and the app's own decline.
 
-    What it checks: on the running stack, the ledger of the proxy has no line for this request, and the app answers
-    with its fixed decline text.
+    What it checks: on the running stack, the ledger of the proxy has no line for this request, and the app answers with
+    its own reason, no passages found.
     What a result tells: a pass means the real embedding server, the stored vectors, the stack's lowest score and
     the grounded mode work together so that such a question never reaches the model. A ledger line means a call was
     made: look at the stack's search settings (lowest score, embedding model) or the ask mode.
@@ -62,8 +58,8 @@ async def test_question_outside_the_course_is_declined_without_a_model_call(
     assert lines == [], f"the model was called for a question the app must decline: {lines}"
     assert observation.status_code == 200, f"ask failed: {observation.body_text}"
     result = cast(dict[str, JsonValue], observation.body_json)
-    assert (result["abstained"], result["answer"]) == (True, APP_DECLINE), (
-        f"expected the app's own decline, which it gives without a model call, got {result}"
+    assert result["abstain_reason"] == "no_passages", (
+        f"expected the app's own decline for lack of passages, which it gives without a model call, got {result}"
     )
 
 

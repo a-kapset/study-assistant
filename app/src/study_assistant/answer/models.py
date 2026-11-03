@@ -1,7 +1,13 @@
-"""What an answer to a learner's question holds: the text, whether it is a refusal to answer, and the course
-passages it rests on."""
+"""What an answer to a learner's question holds: the text, why it declines when it does, and the course passages it
+rests on."""
+
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+# Why an answer declines: no course passage was close enough, so the model was not called ("no_passages"), or the
+# model read the passages found and said they do not answer the question ("model_declined").
+AbstainReason = Literal["no_passages", "model_declined"]
 
 
 class Citation(BaseModel):
@@ -24,9 +30,8 @@ class Answer(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     answer: str
-    # True when no course passage was close enough to the question, or the passages found do not answer it; the
-    # answer then says so instead of answering.
-    abstained: bool
+    # Why the answer declines instead of answering; None when it answers. The answer text then says so.
+    abstain_reason: AbstainReason | None
     # The passages the answer cites, each once, in the order the model first cited them.
     citations: list[Citation]
     # Citations the model gave to passages it was not shown; they are left out of ``citations``.

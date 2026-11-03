@@ -158,18 +158,19 @@ async def test_ungrounded_mode_runs_no_search_and_cites_nothing(
     """
     answer = await _ungrounded(fake_chat_model, fake_embedder).answer(_demo(), QUESTION)
 
-    expected = Answer(answer="Roll two dice.", abstained=False, citations=[], invalid_citations=0)
+    expected = Answer(answer="Roll two dice.", abstain_reason=None, citations=[], invalid_citations=0)
     assert answer == expected, f"the ungrounded answer is {answer}"
     assert fake_embedder.calls == [], f"the question was embedded for a search: {fake_embedder.calls}"
 
 
 @pytest.mark.covers("US-009", "AC-5")
 async def test_empty_search_declines_without_calling_the_model(settings: Settings, fake_embedder: FakeEmbedder) -> None:
-    """Gives the grounded mode a course whose passages all score below the lowest score, and expects a declined
-    answer without citations and without any request to the model provider.
+    """Gives the grounded mode a course whose passages all score below the lowest score, and expects an answer
+    declined for lack of passages, without citations and without any request to the model provider.
 
     Catches a model call with nothing to ground it: the model would answer from what it knows, confidently and
-    possibly wrong, and the call would be paid for.
+    possibly wrong, and the call would be paid for. Also catches this decline being reported as the model's, which
+    would blame the answer step for what the search decided.
     """
     provider = Provider.replying({"answer": "Two barges.", "citations": [], "abstained": False})
     answerer = _grounded(settings, fake_embedder, provider, scored_passages(0.8, 0.7))
@@ -177,7 +178,9 @@ async def test_empty_search_declines_without_calling_the_model(settings: Setting
     answer = await answerer.answer(_demo(), QUESTION)
 
     assert provider.requests == [], f"the model was called {len(provider.requests)} time(s) with nothing found"
-    assert answer.abstained and answer.citations == [], f"the answer does not decline: {answer}"
+    assert (answer.abstain_reason, answer.citations) == ("no_passages", []), (
+        f"not declined for lack of passages: {answer}"
+    )
 
 
 @pytest.mark.covers("US-009", "AC-4", "AC-9")
@@ -246,18 +249,22 @@ async def test_citations_name_found_passages_once_and_invalid_numbers_are_counte
 
 
 @pytest.mark.covers("US-009", "AC-7")
-async def test_models_decline_reaches_the_learner(settings: Settings, fake_embedder: FakeEmbedder) -> None:
-    """Lets the model decline because the passages found do not answer the question, and expects the answer to be
-    marked as declined.
+@pytest.mark.parametrize(("declined", "reason"), [(True, "model_declined"), (False, None)])
+async def test_models_decision_to_decline_reaches_the_learner(
+    settings: Settings, fake_embedder: FakeEmbedder, declined: bool, reason: str | None
+) -> None:
+    """Lets the model reply over the passages found, once declining because they do not answer the question and
+    once answering, and expects the answer's reason to be "model_declined" in the first case and None in the second.
 
     Catches the model's decline being lost on the way: its "the material does not cover this" would reach the
-    learner as an ordinary answer, and no one could count how often the course has no answer.
+    learner as an ordinary answer, and no one could count how often the course has no answer. Also catches the
+    flag read the wrong way round, which would mark every real answer as declined.
     """
-    reply = {"answer": "The course material found does not cover this.", "citations": [], "abstained": True}
+    reply = {"answer": "The course material found does not cover this.", "citations": [], "abstained": declined}
 
     answer = await _grounded(settings, fake_embedder, Provider.replying(reply), _passages()).answer(_demo(), QUESTION)
 
-    assert answer.abstained, f"the model declined, but the answer is not marked so: {answer}"
+    assert answer.abstain_reason == reason, f"the model set abstained={declined}, the answer says {answer}"
 
 
 @pytest.mark.covers("US-009", "AC-3")

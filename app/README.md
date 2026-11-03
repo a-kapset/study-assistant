@@ -397,21 +397,22 @@ to `curl.exe`. Its `Invoke-RestMethod` also shows non-ASCII course text garbled,
 `POST /v1/ask` with `course_id` and `question` returns an answer written by the answer model:
 
 ```json
-{"answer": "...", "abstained": false,
+{"answer": "...", "abstain_reason": null,
  "citations": [{"chunk_id": "...", "section_id": "1.2", "source_file": "rules.pdf", "page_start": 3, "page_end": 4}],
  "invalid_citations": 0}
 ```
 
 `APP_ASK__MODE` chooses how. In the default `grounded` mode the app first searches the course with the search
 settings (`APP_SEARCH__DEFAULT_K`, `APP_SEARCH__MIN_SCORE`). When no passage is close enough, the question is
-declined (`abstained` true, no citations) and the model is not called. Otherwise the model gets the passages,
-numbered and marked as course text in a message of their own, answers only from them and cites them by number;
-the app turns the numbers back into `citations` with section, file and pages, each passage once. A number that
-names no passage given to the model is left out and counted in `invalid_citations`. When the passages do not
-answer the question, the model declines and `abstained` is true. In the `ungrounded` mode no search runs and the
-model answers from what it knows (`abstained` false, no citations): the comparison that shows what the passages
-add. In both modes the course's title and description from its manifest tell the model which course the
-question is about, and the question goes to it as the learner's own message, never inside the instructions.
+declined (`abstain_reason` `no_passages`, no citations) and the model is not called. Otherwise the model gets the
+passages, numbered and marked as course text in a message of their own, answers only from them and cites them by
+number; the app turns the numbers back into `citations` with section, file and pages, each passage once. A number
+that names no passage given to the model is left out and counted in `invalid_citations`. When the passages do not
+answer the question, the model declines and `abstain_reason` is `model_declined`; an answer that answers has
+`abstain_reason` null. In the `ungrounded` mode no search runs and the model answers from what it knows
+(`abstain_reason` null, no citations): the comparison that shows what the passages add. In both modes the course's
+title and description from its manifest tell the model which course the question is about, and the question goes to
+it as the learner's own message, never inside the instructions.
 
 The model is set as `provider/model` in `APP_LLM__ANSWER` (only `openai` is known; another provider stops
 startup). OpenAI is reached at `APP_OPENAI__BASE_URL` with `APP_OPENAI__API_KEY`, through the Responses API with
@@ -440,7 +441,7 @@ curl.exe -X POST -H "Content-Type: application/json" --data-binary "@ask.json" h
 | `GET` | `/v1/courses` | The enabled courses in the configured order: `id`, `title`, `description`, `language` |
 | `GET` | `/v1/courses/{course_id}` | One course, its stored `corpus` counts (documents, sections, learning objectives, chunks), the configured `embedding_space` and the number of the course's `vectors` in it (0 after a change of model until the next ingestion); 404 for a course not served |
 | `POST` | `/v1/search` | The passages of a course closest to a question: `status` (`ok` / `empty`), `hits` with score and rank, the `k`, `min_score` and `embedding_space` used; 404 for a course not served, 409 for a course not fully embedded (see "Search") |
-| `POST` | `/v1/ask` | An answer to a question about a course: `answer`, `abstained`, `citations` (passage, section, file, pages), `invalid_citations`; grounded on the course's passages or not by `APP_ASK__MODE`; 404 for a course not served, 409 / 502 / 503 when the search or the model provider cannot run (see "Ask") |
+| `POST` | `/v1/ask` | An answer to a question about a course: `answer`, `abstain_reason`, `citations` (passage, section, file, pages), `invalid_citations`; grounded on the course's passages or not by `APP_ASK__MODE`; 404 for a course not served, 409 / 502 / 503 when the search or the model provider cannot run (see "Ask") |
 | `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count |
 
 

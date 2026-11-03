@@ -72,7 +72,7 @@ def ask_router(courses: Mapping[str, CourseManifest], answerer: Answerer) -> API
         log.info(
             "ask_done",
             course_id=body.course_id,
-            abstained=answer.abstained,
+            abstain_reason=answer.abstain_reason,
             citations=len(answer.citations),
             invalid_citations=answer.invalid_citations,
         )

@@ -11,7 +11,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from study_assistant.answer.models import Answer, Citation
+from study_assistant.answer.models import AbstainReason, Answer, Citation
 from study_assistant.answer.prompts import grounded_instructions, passages_block, tutor_instructions
 from study_assistant.courses.models import CourseManifest
 from study_assistant.llm.providers import LlmError, ainvoke
@@ -46,6 +46,7 @@ class _GroundedReply(BaseModel):
     answer: str
     # Numbers of the passages the answer uses, as given in the passages block.
     citations: list[int]
+    # True when the model says the passages do not answer the question; the answer then says so.
     abstained: bool
 
 
@@ -71,7 +72,7 @@ class Answerer:
         """
         if self._mode == "ungrounded":
             text = await self._answer_from_memory(course, question)
-            return Answer(answer=text, abstained=False, citations=[], invalid_citations=0)
+            return Answer(answer=text, abstain_reason=None, citations=[], invalid_citations=0)
         return await self._answer_from_passages(course, question)
 
     async def _answer_from_memory(self, course: CourseManifest, question: str) -> str:
@@ -96,7 +97,7 @@ class Answerer:
         result = await self._search.search(course.id, question, self._k, self._min_score)
         if result.status != "ok":
             # Nothing close enough was found: the model is not called, so it cannot answer from what it knows.
-            return Answer(answer=NO_PASSAGES_ANSWER, abstained=True, citations=[], invalid_citations=0)
+            return Answer(answer=NO_PASSAGES_ANSWER, abstain_reason="no_passages", citations=[], invalid_citations=0)
         messages: list[BaseMessage] = [
             SystemMessage(grounded_instructions(course)),
             HumanMessage(passages_block(result.hits)),
@@ -112,7 +113,8 @@ class Answerer:
         if not text:
             raise EmptyAnswerError
         citations, invalid = _cite(reply.citations, result.hits)
-        return Answer(answer=text, abstained=reply.abstained, citations=citations, invalid_citations=invalid)
+        reason: AbstainReason | None = "model_declined" if reply.abstained else None
+        return Answer(answer=text, abstain_reason=reason, citations=citations, invalid_citations=invalid)
 
 
 def _cite(numbers: Sequence[int], hits: Sequence[SearchHit]) -> tuple[list[Citation], int]:

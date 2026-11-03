@@ -45,7 +45,12 @@ def test_ask_returns_the_models_answer(
     response = _client(settings, fake_db, fake_chat_model).post(ASK, json={"course_id": "demo", "question": "Dice?"})
 
     assert response.status_code == 200, f"expected 200, got {response.status_code}: {response.text}"
-    expected = {"answer": "Roll two dice.", "abstained": False, "citations": [], "invalid_citations": 0}
+    expected: dict[str, object] = {
+        "answer": "Roll two dice.",
+        "abstain_reason": None,
+        "citations": [],
+        "invalid_citations": 0,
+    }
     assert response.json() == expected, f"the answer is not the model's: {response.json()}"
 
 
