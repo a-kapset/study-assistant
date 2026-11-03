@@ -27,17 +27,17 @@ evaluation-harness/
 ├── pyproject.toml          # project metadata, dependencies, ruff / mypy / pytest config
 ├── poetry.lock
 ├── METRICS.md              # the formula and meaning of every metric the harness reports
-├── datasets/               # gold set declarations, one folder per course (the questions stay local)
-├── runs/                   # run records and the proxy's ledger (not committed)
+├── datasets/               # per course: retrieval gold set declarations (questions stay local) and Q&A sets
+├── runs/                   # the proxy's ledger and, per kind of run, its records, e.g. runs/retrieval/ (not committed)
 ├── cassettes/              # recorded replies of invented courses (committed)
 ├── Dockerfile              # the image of the LLM proxy
 ├── compose.proxy.yaml      # puts the proxy between the app and its model provider
 ├── src/evalharness/
 │   ├── settings.py         # where the system under test is (EVAL_*), and the values shared with the stack's .env
 │   ├── corpus_db.py        # direct reads of the app's stored corpus, as the read-only database role
-│   ├── datasets/           # builds a gold set from a course's local question bank under its declaration
-│   ├── oracles/            # scores one search against the answer section, and summarises a group of questions
-│   ├── evaluation/         # a retrieval run: checks, two passes over the search, the run record, the command
+│   ├── datasets/           # the retrieval gold set (built from a local question bank) and the Q&A set file
+│   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run
+│   ├── evaluation/         # the retrieval run and the answer run: checks, requests, run records, commands
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices; one module per provider API in surfaces/
 │   ├── testdata/           # test data written into the app's stores: created and removed in one place
 │   │   ├── __init__.py     # the name prefix every piece of test data carries
@@ -106,7 +106,7 @@ $env:EVAL_SUT_BASE_URL = "http://127.0.0.1:8001"   # only if the app is not on t
 ## Retrieval evaluation
 
 A run sends every question of a gold set to the app's search twice, with the app's own settings and with no
-lowest score, scores each result against the question's answer section, writes a run record to `runs/` and
+lowest score, scores each result against the question's answer section, writes a run record to `runs/retrieval/` and
 prints the results per exam set, chapter and knowledge level. The metrics: [METRICS.md](METRICS.md).
 
 The gold set is built from the course's question bank each time; only its declaration is committed
@@ -129,6 +129,30 @@ stored course text (a source that reprints the questions would let the search fi
 completed run exits with 0, whatever its numbers; with `--require-target` it exits with 1 when the main result is
 below the declared target. CI runs the `lumen_moths` gold set that way: its number is a regression signal for
 search, not the app's quality, because a language model wrote that course and its questions.
+
+## Answer evaluation
+
+A run asks every question of a course's Q&A set through `/v1/ask`, first searching for it with the app's own
+settings, and scores facts of each answer: whether the app answered or declined and why, and whether the
+citations include the question's gold section. Questions without a gold section are ones the course does not
+answer; an answer to one of them is a blocker. The answer text itself is not scored. The run writes a record to
+`runs/answers/` and prints where the answerable questions went wrong (split by whether search found the gold
+section), how the others were declined, the cost, and the results against the targets in the set's file. The
+metrics: [METRICS.md](METRICS.md).
+
+The set is committed (`datasets/<course>/qa_v0.toml`): its questions are written for it, not taken from course
+material. Run it on the stack started with the LLM proxy, serving that course. The replies quote course passages,
+so for a course whose material is not committed set `EVAL_PROXY_CASSETTES=./evaluation-harness/cassettes_local`
+in the root `.env`; record once with `EVAL_PROXY_MODE=record` (paid), then run in `replay` for free.
+
+```powershell
+poetry run python -m evalharness.evaluation.answer_run datasets/istqb_ctfl/qa_v0.toml
+```
+
+A run is refused before the first question, with exit code 2, when a gold section is not a section of the stored
+course. A completed run exits with 0, whatever its numbers. A question that got no answer at all (for example a
+recording that no longer matches the request, after a change of the prompt, the passages or the model) makes the
+run invalid: it is reported with the reasons and gets no target verdict; record again and compare.
 
 
 ## Running the tests

@@ -5,7 +5,7 @@
     poetry run python -m evalharness.evaluation <declaration> --require-target
 
 Run it from evaluation-harness/, like the tests. Without --sets the run takes the sets of the declared main result.
-The run is written to runs/ as a new JSON file and its summary is printed. Exit code 0 when the run completed,
+The run is written to runs/retrieval/ as a new JSON file and its summary is printed. Exit code 0 when the run completed,
 whatever its numbers; 2 when it was refused. With --require-target (used in CI) a completed run whose main result
 is below its target exits with 1.
 """
@@ -28,7 +28,8 @@ from evalharness.evaluation.retrieval import RunRefused, bank_folder, run, selec
 from evalharness.settings import HarnessSettings, StackSettings, load_stack_settings
 from evalharness.transport import SutTransport
 
-RUNS_DIR = Path("runs")
+# Retrieval records only: the held-out uses are counted over every record in this folder.
+RUNS_DIR = Path("runs/retrieval")
 
 
 def main(argv: Sequence[str]) -> int:

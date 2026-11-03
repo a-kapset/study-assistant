@@ -253,6 +253,131 @@ The verdict is printed only when the run took exactly the declared sets and the 
 without a verdict. "below" is the reason to improve retrieval next. With about 150 questions $R$ is precise only
 to a few points, so a result just above or just below $\tau$ is not a real difference.
 
+## Answers
+
+Code: [`src/evalharness/oracles/answer.py`](src/evalharness/oracles/answer.py) (scores),
+[`src/evalharness/evaluation/answer_run.py`](src/evalharness/evaluation/answer_run.py) (the run and the target
+verdict).
+
+A Q&A set lists questions a learner could ask. An **answerable** question has a **gold section**, the course
+section that answers it; an **unanswerable** question has none: the course does not answer it, and the app must
+decline. The harness asks every question through `/v1/ask` and scores facts of the response only: whether the
+app declined and why, and which sections the cited passages come from. Whether the answer text is right is not
+scored here: that needs a judge.
+
+### Per question
+
+**Verdict**, $v_q$ — what the app did with question $q$, one of six:
+
+| Verdict | When | Good for |
+|---|---|---|
+| `cited_gold` | the app answered and a cited passage counts for $g_q$ | answerable |
+| `cited_other` | the app answered and no cited passage counts for $g_q$ | — |
+| `answered_unsupported` | the app answered a question without a gold section | — (a blocker) |
+| `declined_no_passages` | the app declined because search found nothing close enough; the model was not called | unanswerable |
+| `declined_by_model` | the app declined because the model said the passages do not answer the question | unanswerable |
+| `failed` | `/v1/ask` gave no answer (an error response, a timeout, a recording that no longer matches) | — |
+
+where
+
+- $q$ — one question of the set;
+- $g_q$ — the gold section of question $q$, for example `4.2`; a cited passage counts for it by the same rule
+  $\mathrm{rel}$ as a search hit (the section itself or one of its subsections, see Retrieval above).
+
+**Gold section found by search**, $f_q$ — the stage of question $q$: whether a search for the same question, with
+the app's own settings, returns a passage that counts for $g_q$:
+
+```math
+f_q = \max_{i} \mathrm{rel}(s_i, g_q)
+```
+
+where
+
+- $s_i$ — the section of the passage at position $i$ of that search's result;
+- $\mathrm{rel}(s_i, g_q)$ — 1 when $s_i$ counts for the gold section $g_q$ of question $q$, otherwise 0;
+- $f_q = 0$ when the search found nothing; $f_q$ does not exist for an unanswerable question or a failed search.
+
+The search runs with the same number of hits and the same lowest score as `/v1/ask`, and it is exact, so it
+returns the passages the answer step saw. A wrong verdict with $f_q = 0$ points to retrieval; one with $f_q = 1$
+points to the answer step (the prompt or the model).
+
+### Per run
+
+**Answered share**, $\alpha$ — the share of the answerable questions that were answered instead of declined:
+
+```math
+\alpha = \frac{|A_{\text{ans}}|}{|A^{*}|}
+```
+
+where
+
+- $A$ — the answerable questions of the set;
+- $A^{*}$ — the questions of $A$ whose verdict $v_q$ is not `failed`;
+- $A_{\text{ans}}$ — the questions of $A^{*}$ whose verdict $v_q$ is `cited_gold` or `cited_other`;
+- $|\dots|$ — the number of questions in a set.
+
+**Gold cited share**, $\gamma$ — among the answered answerable questions, the share whose citations include the
+gold section:
+
+```math
+\gamma = \frac{1}{|A_{\text{ans}}|} \sum_{q \in A_{\text{ans}}} \mathbf{1}[\, v_q = \text{cited\_gold} \,]
+```
+
+where
+
+- $A_{\text{ans}}$ — the answerable questions that were answered (see $\alpha$); $|A_{\text{ans}}|$ — their number;
+- $v_q$ — the verdict of question $q$;
+- $\mathbf{1}[\dots]$ — 1 when the condition in the brackets is true, otherwise 0.
+
+$\gamma$ is counted over answered questions only, so it says how well the answers the app gave are supported,
+apart from how often it declines ($\alpha$). It is an approximation of support: a passage of another section may
+support an answer too, and a cited gold passage does not prove that every claim of the answer is in it.
+
+**Unsupported answers**, $u$ — the number of unanswerable questions the app answered:
+
+```math
+u = \sum_{q \in U} \mathbf{1}[\, v_q = \text{answered\_unsupported} \,]
+```
+
+where
+
+- $U$ — the unanswerable questions of the set;
+- $v_q$ — the verdict of question $q$;
+- $\mathbf{1}[\dots]$ — 1 when the condition in the brackets is true, otherwise 0.
+
+A count, not a share: one answer that the course does not support is a blocker whatever $\alpha$ and $\gamma$
+are.
+
+A `failed` question stays out of every share and count above: it measured nothing about the answer. When
+$A^{*}$ or $A_{\text{ans}}$ is empty, $\alpha$ or $\gamma$ does not exist and is shown as `n/a`.
+
+Also reported, without a target: the **invalid citations**, the sum over all questions of the citations the
+model gave to passages it was not shown (the app drops them, the learner does not see them), and the **cost**,
+the sum of the listed price of every model call of the run, from the proxy's ledger (a replayed call shows the
+cost of the reply it replays; a miss costs nothing).
+
+### Validity and the target verdict
+
+A run is **valid** when no question is `failed`. An invalid run gets no target verdict: it is reported with the
+reasons of its failed questions (for example `llm_failed` after a recording no longer matches the request).
+
+A valid run meets its targets when all three hold:
+
+```math
+\alpha \ge \alpha_{\min}, \qquad \gamma \ge \gamma_{\min}, \qquad u \le u_{\max}
+```
+
+where
+
+- $\alpha$, $\gamma$, $u$ — the answered share, the gold cited share and the unsupported answers of the run;
+- $\alpha_{\min}$, $\gamma_{\min}$, $u_{\max}$ — `answered_min`, `gold_cited_min` and `unsupported_answers_max`
+  in the `[targets]` table of the set's file (0.85, 0.75 and 0 for the first course), written before the first
+  run;
+- a share that does not exist (`n/a`) does not meet its minimum.
+
+With 20 answerable and 10 unanswerable questions a share is precise only to about ±20 points, so the targets
+tell a working answer step from a broken one, not small differences.
+
 ## Changes
 
 None yet.

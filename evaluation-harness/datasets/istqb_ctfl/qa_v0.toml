@@ -1,0 +1,180 @@
+# Q&A set v0 of the first course: questions a learner could ask in the "study / ask" mode, each with the course
+# section that answers it, and questions the course does not answer. The questions were written for this set (not
+# taken from exams or course materials), so the file may be public; the answers the app gives quote the course and
+# stay on the local machine.
+#
+# Gold sections were checked against the stored passages of the course on 2026-11-03: the key term of every
+# answerable question occurs in the syllabus passages of its section. For every unanswerable question the key
+# terms occur in no passage of the course (syllabus and Stapp et al. Part II); the course does mention nearby
+# topics, so search may still find passages, and the model has to see that they do not answer.
+# The questions were not chosen or changed by looking at search or answer results.
+
+course_id = "istqb_ctfl"
+
+# What the run reports and which results count as good enough, fixed before the first run. With 20 and 10 cases
+# a rate is precise only to about +-20 points, so the targets are round values that tell a working answer step
+# from a broken one, not small differences.
+[targets]
+# Share of answerable questions the app answers instead of declining. Search alone already loses about one
+# question in twelve under the lowest score (retrieval recall@5 0.918), so a perfect value is not expected.
+answered_min = 0.85
+# Share of answered answerable questions whose citations include a passage of the gold section or a subsection.
+gold_cited_min = 0.75
+# Unanswerable questions the app answers instead of declining. An answer without support in the course is a
+# blocker whatever the other numbers are.
+unsupported_answers_max = 0
+
+# Answerable: gold_section is the second-level section that answers the question; a citation of that section or
+# of one of its subsections counts.
+[[cases]]
+id = "QA-01"
+question = "What is the difference between verification and validation in testing?"
+gold_section = "1.1"
+
+[[cases]]
+id = "QA-02"
+question = "How do an error, a defect and a failure differ, and what is a root cause?"
+gold_section = "1.2"
+
+[[cases]]
+id = "QA-03"
+question = "Why do tests become less effective when the same tests are run again and again?"
+gold_section = "1.3"
+
+[[cases]]
+id = "QA-04"
+question = "What is traceability between the test basis and the testware good for?"
+gold_section = "1.4"
+
+[[cases]]
+id = "QA-05"
+question = "What does the whole team approach mean for testers?"
+gold_section = "1.5"
+
+[[cases]]
+id = "QA-06"
+question = "What does shift left mean, and what are good practices for it?"
+gold_section = "2.1"
+
+[[cases]]
+id = "QA-07"
+question = "What is the difference between confirmation testing and regression testing?"
+gold_section = "2.2"
+
+[[cases]]
+id = "QA-08"
+question = "What events can trigger maintenance testing?"
+gold_section = "2.3"
+
+[[cases]]
+id = "QA-09"
+question = "Which kinds of defects are easier to find with static testing than with dynamic testing?"
+gold_section = "3.1"
+
+[[cases]]
+id = "QA-10"
+question = "Which roles take part in a review, and what does each role do?"
+gold_section = "3.2"
+
+[[cases]]
+id = "QA-11"
+question = "How do I choose test values with boundary value analysis?"
+gold_section = "4.2"
+
+[[cases]]
+id = "QA-12"
+question = "What is the difference between statement coverage and branch coverage?"
+gold_section = "4.3"
+
+[[cases]]
+id = "QA-13"
+question = "What is exploratory testing and when is it useful?"
+gold_section = "4.4"
+
+[[cases]]
+id = "QA-14"
+question = "In which formats can the acceptance criteria of a user story be written?"
+gold_section = "4.5"
+
+[[cases]]
+id = "QA-15"
+question = "What are entry criteria and exit criteria used for?"
+gold_section = "5.1"
+
+[[cases]]
+id = "QA-16"
+question = "What does the test pyramid show?"
+gold_section = "5.1"
+
+[[cases]]
+id = "QA-17"
+question = "How is the level of a product risk determined?"
+gold_section = "5.2"
+
+[[cases]]
+id = "QA-18"
+question = "Which metrics are used to monitor testing?"
+gold_section = "5.3"
+
+[[cases]]
+id = "QA-19"
+question = "What information should a defect report contain?"
+gold_section = "5.5"
+
+[[cases]]
+id = "QA-20"
+question = "What are the risks of introducing test automation?"
+gold_section = "6.2"
+
+# Unanswerable: no gold_section. The comment says what the course has nearby, so a reader sees why search may
+# still find passages.
+[[cases]]
+id = "QA-U01"
+question = "How is the mutation score calculated in mutation testing?"
+# Nearby: coverage measures (4.3). No passage mentions mutation testing.
+
+[[cases]]
+id = "QA-U02"
+question = "How do I build an orthogonal array for pairwise testing?"
+# Nearby: black-box techniques (4.2). No passage mentions pairwise testing or orthogonal arrays.
+
+[[cases]]
+id = "QA-U03"
+question = "What are the five maturity levels of TMMi?"
+# Nearby: process improvement through retrospectives (2.1.6) and reviews (3.2.5). No passage mentions TMMi.
+
+[[cases]]
+id = "QA-U04"
+question = "How do I set up a Jenkins job that runs my automated tests on every commit?"
+# Nearby: DevOps delivery pipeline and CI (2.1.4, 6.1). No passage mentions Jenkins or how to configure a job.
+
+[[cases]]
+id = "QA-U05"
+question = "What is the Page Object pattern in UI test automation?"
+# Nearby: benefits and risks of test automation (6.2). No passage mentions Page Object.
+
+[[cases]]
+id = "QA-U06"
+question = "How much does it cost to take the CTFL exam?"
+# Nearby: the course is about this exam, but the exam chapter of the syllabus is not part of the course passages.
+
+[[cases]]
+id = "QA-U07"
+question = "How long should a soak test run?"
+# Nearby: performance efficiency as a non-functional characteristic (2.2.2). No passage mentions soak, endurance
+# or load tests.
+
+[[cases]]
+id = "QA-U08"
+question = "How does consumer-driven contract testing with Pact work?"
+# Nearby: integration testing (2.2). No passage mentions contract testing or Pact.
+
+[[cases]]
+id = "QA-U09"
+question = "How should flaky automated tests be quarantined?"
+# Nearby: test automation (6.2). No passage mentions flaky, intermittent or quarantined tests.
+
+[[cases]]
+id = "QA-U10"
+question = "What are the categories of the OWASP Top 10?"
+# Nearby: security as a quality characteristic (2.2). No passage mentions OWASP.
