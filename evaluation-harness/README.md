@@ -181,7 +181,37 @@ chooses the mode:
 
 To record again, delete the recording: its file name is the `key` in the ledger. Replies quote the course, so a
 course whose material is not committed uses `EVAL_PROXY_CASSETTES=./evaluation-harness/cassettes_local`.
-Replay shows that our code handles a known reply; it says nothing about how good or stable the model is.
+
+### What a recording is for
+
+Only `POST /v1/ask` calls the model, so only its checks use recordings. `POST /v1/search` calls no model: the
+embedding server and the exact search give the same result every time, and its checks run against it directly.
+
+A recording replaces the model with a fixed reply. Everything else on the path of a question runs for real:
+
+```text
+question → search → request to the model → [model = recording] → reading the reply → citations, abstain reason
+         → API response → harness oracle
+```
+
+The key of a recording is the SHA-256 of the whole request body (instructions, passages, question, model, reply
+format), so a replay catches three kinds of change:
+
+- **before the model** — the request is no longer the recorded one (a changed prompt, other passages found, another
+  model): the proxy answers `replay_miss`, the run is invalid, and the recording has to be made again;
+- **after the model** — our handling of a known reply broke: for example citation numbers mapped to the wrong
+  passage, the decline reason lost, a field missing from the response;
+- **in the harness** — the same replies must give the same scores; other numbers mean the scoring changed.
+
+A `replay_miss` also follows when the question was never recorded, or when the stack mounts another recordings
+folder than the one the run was recorded into (`EVAL_PROXY_CASSETTES`).
+
+A recording run measures the model and the app together, at the time of recording. A replay checks only our code
+around the model: it says nothing about how good or stable the model is, or how it answers a new request.
+
+Recordings are used by the api test that answers a recorded demo question (committed in `cassettes/`, run in CI)
+and by the answer evaluation of a course (for a course whose material is not committed, in `cassettes_local/`,
+run locally).
 
 ## Development checks
 
