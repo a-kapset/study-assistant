@@ -23,7 +23,6 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 
 import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -37,6 +36,7 @@ from evalharness.oracles.answer import AbstainReason, AnswerSummary, AskReply, s
 from evalharness.proxy.ledger import LedgerLine
 from evalharness.proxy.ledger import read_ledger as read_ledger_file
 from evalharness.settings import HarnessSettings, StackSettings, load_stack_settings
+from evalharness.stats.intervals import TargetVerdict, share_interval, share_verdict
 from evalharness.transport import SutTransport
 
 # Answer records only, apart from the retrieval records, whose folder is counted for held-out uses.
@@ -245,23 +245,40 @@ def _harness_version() -> tuple[str, bool]:
     return commit, bool(status.stdout.strip())
 
 
-def target_verdict(summary: AnswerSummary, targets: QaTargets) -> dict[str, Literal["met", "below"]] | None:
+def target_verdict(summary: AnswerSummary, targets: QaTargets) -> dict[str, TargetVerdict] | None:
     """Compare the run with each target; None when a case failed, so the run measured less than it claims.
 
-    A share that could not be computed (no case to compute it over) does not meet its target.
+    A share is judged by its 95 % interval: "met" only when even the lower end reaches the minimum. A share that
+    could not be computed (no case to compute it over) does not meet its target. Unsupported answers are judged by
+    their count, not by an interval: each one is a blocker.
     """
     if summary.failed:
         return None
-
-    def at_least(value: float | None, minimum: float) -> Literal["met", "below"]:
-        """Say whether a share reaches its minimum."""
-        return "met" if value is not None and value >= minimum else "below"
-
+    answered = _answered(summary)
     return {
-        "answered": at_least(summary.answered, targets.answered_min),
-        "gold_cited": at_least(summary.gold_cited, targets.gold_cited_min),
+        "answered": (
+            share_verdict(answered, summary.answerable, targets.answered_min) if summary.answerable else "below"
+        ),
+        "gold_cited": (
+            share_verdict(summary.verdicts.get("cited_gold", 0), answered, targets.gold_cited_min)
+            if answered
+            else "below"
+        ),
         "unsupported_answers": "met" if summary.unsupported_answers <= targets.unsupported_answers_max else "below",
     }
+
+
+def _answered(summary: AnswerSummary) -> int:
+    """Count the answerable questions the app answered, with or without the gold section among the citations."""
+    return summary.verdicts.get("cited_gold", 0) + summary.verdicts.get("cited_other", 0)
+
+
+def _range(successes: int, n: int) -> str:
+    """Write the Wilson interval of ``successes`` out of ``n`` as "low-high", or "n/a" when there is no question."""
+    if n == 0:
+        return "n/a"
+    interval = share_interval(successes, n)
+    return f"{interval.low:.3f}-{interval.high:.3f}"
 
 
 def _print_summary(record: AnswerRunRecord, targets: QaTargets, path: Path) -> None:
@@ -296,13 +313,18 @@ def _print_summary(record: AnswerRunRecord, targets: QaTargets, path: Path) -> N
         return
     answered = "n/a" if s.answered is None else f"{s.answered:.3f}"
     gold_cited = "n/a" if s.gold_cited is None else f"{s.gold_cited:.3f}"
-    print(f"\nanswered     {answered:>6}  target >= {targets.answered_min}: {verdicts['answered']}")
-    print(f"gold cited   {gold_cited:>6}  target >= {targets.gold_cited_min}: {verdicts['gold_cited']}")
+    answered_ci = _range(_answered(s), s.answerable)
+    gold_cited_ci = _range(s.verdicts.get("cited_gold", 0), _answered(s))
+    unsupported_ci = _range(s.unsupported_answers, s.unanswerable)
+    print(f"\n{'':<13}{'value':>6}{'95% CI':>14}  target")
+    print(f"answered     {answered:>6}{answered_ci:>14}  >= {targets.answered_min}: {verdicts['answered']}")
+    print(f"gold cited   {gold_cited:>6}{gold_cited_ci:>14}  >= {targets.gold_cited_min}: {verdicts['gold_cited']}")
     print(
-        f"unsupported  {s.unsupported_answers:>6}  target <= {targets.unsupported_answers_max}: "
-        f"{verdicts['unsupported_answers']}"
+        f"unsupported  {s.unsupported_answers:>6}{unsupported_ci:>14}  <= {targets.unsupported_answers_max}: "
+        f"{verdicts['unsupported_answers']}  (count; the interval is of their share of {s.unanswerable})"
     )
-    overall = "met" if all(v == "met" for v in verdicts.values()) else "below"
+    values = verdicts.values()
+    overall = "below" if "below" in values else ("not_confirmed" if "not_confirmed" in values else "met")
     print(f"all targets: {overall}")
 
 

@@ -6,8 +6,8 @@
 
 Run it from evaluation-harness/, like the tests. Without --sets the run takes the sets of the declared main result.
 The run is written to runs/retrieval/ as a new JSON file and its summary is printed. Exit code 0 when the run completed,
-whatever its numbers; 2 when it was refused. With --require-target (used in CI) a completed run whose main result
-is below its target exits with 1.
+whatever its numbers; 2 when it was refused. With --require-target (used in CI) a completed run exits with 1 unless
+even the lower end of its main result's 95 % interval reaches the target.
 """
 
 import argparse
@@ -17,7 +17,6 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
 
 import structlog
 
@@ -25,7 +24,9 @@ from evalharness.corpus_db import CorpusReader
 from evalharness.datasets.retrieval_gold import GoldCase, GoldSet, GoldSetError, build_gold_set, load_declaration
 from evalharness.evaluation.record import PassName, RunRecord, recorded_held_out_uses, write_record
 from evalharness.evaluation.retrieval import RunRefused, bank_folder, run, select_cases
+from evalharness.oracles.retrieval import Summary
 from evalharness.settings import HarnessSettings, StackSettings, load_stack_settings
+from evalharness.stats.intervals import Interval, TargetVerdict, mean_interval, share_interval, share_verdict
 from evalharness.transport import SutTransport
 
 # Retrieval records only: the held-out uses are counted over every record in this folder.
@@ -61,8 +62,9 @@ def main(argv: Sequence[str]) -> int:
     path = write_record(record, RUNS_DIR)
     _print_summary(record, gold, path)
     # Without a verdict (the app uses another k than the declared one) the target cannot be confirmed either.
-    if args.require_target and target_verdict(record, gold) != "met":
-        print("the main result does not meet its target", file=sys.stderr)
+    verdict = target_verdict(record, gold)
+    if args.require_target and verdict != "met":
+        print(f"the main result's target verdict is {verdict}, not met", file=sys.stderr)
         return 1
     return 0
 
@@ -114,34 +116,54 @@ def _print_summary(record: RunRecord, gold: GoldSet, path: Path) -> None:
     for name, label in labels.items():
         print(f"\n{name} pass (k={record.k}, {label})")
         print(
-            f"  {'slice':<12}{'questions':>10}{'recall':>8}{'MRR':>7}{'precision':>11}{'irrelevant':>12}"
+            f"  {'slice':<12}{'questions':>10}{'recall':>8}{'95% CI':>14}{'MRR':>7}{'precision':>11}{'irrelevant':>12}"
             f"{'hit':>6}{'miss':>6}{'empty':>6}{'fail':>6}"
         )
         table = record.summaries[name]
         for key in ["all", *sorted(key for key in table if key != "all")]:
             s = table[key]
-            hits = s.n - s.misses - s.empty - s.failed
+            interval = _range(share_interval(_hits(s), s.n))
             print(
-                f"  {key:<12}{s.n:>10}{s.recall:>8.3f}{s.mrr:>7.3f}{s.precision:>11.3f}{s.irrelevant:>12.3f}"
-                f"{hits:>6}{s.misses:>6}{s.empty:>6}{s.failed:>6}"
+                f"  {key:<12}{s.n:>10}{s.recall:>8.3f}{interval:>14}{s.mrr:>7.3f}{s.precision:>11.3f}"
+                f"{s.irrelevant:>12.3f}{_hits(s):>6}{s.misses:>6}{s.empty:>6}{s.failed:>6}"
             )
     main_result = record.summaries["primary"]["all"]
+    ranks = [case.passes["primary"].score.reciprocal_rank for case in record.cases]
+    mrr_interval = mean_interval(ranks)
+    mrr_range = _range(mrr_interval) if mrr_interval is not None else "none (every question scored the same)"
+    print(f"\nMRR = {main_result.mrr:.3f}, 95% CI {mrr_range} (bootstrap over questions)")
     verdict = target_verdict(record, gold)
     if verdict is not None:
-        print(f"\nrecall@{record.k} = {main_result.recall:.3f} (n={main_result.n}), target {primary.target}: {verdict}")
+        recall_range = _range(share_interval(_hits(main_result), main_result.n))
+        print(
+            f"recall@{record.k} = {main_result.recall:.3f}, 95% CI {recall_range} (Wilson, n={main_result.n}), "
+            f"target {primary.target}: {verdict}"
+        )
     else:
-        print(f"\nno target line: the target is for sets {' '.join(primary.sets)} at k={primary.k}")
+        print(f"no target line: the target is for sets {' '.join(primary.sets)} at k={primary.k}")
 
 
-def target_verdict(record: RunRecord, gold: GoldSet) -> Literal["met", "below"] | None:
-    """Compare the main result with the declared target; None when the run is not the declared main result.
+def target_verdict(record: RunRecord, gold: GoldSet) -> TargetVerdict | None:
+    """Judge the main result against the declared target by its 95 % interval; None when the run is not the
+    declared main result.
 
     The target holds only for the declared sets at the declared k: recall at a larger k is easier to reach.
     """
     primary = gold.declaration.primary
     if record.sets != tuple(sorted(primary.sets)) or record.k != primary.k:
         return None
-    return "met" if record.summaries["primary"]["all"].recall >= primary.target else "below"
+    main_result = record.summaries["primary"]["all"]
+    return share_verdict(_hits(main_result), main_result.n, primary.target)
+
+
+def _hits(summary: Summary) -> int:
+    """Count the questions of a group whose answer section was found: the ones that ended in no kind of failure."""
+    return summary.n - summary.misses - summary.empty - summary.failed
+
+
+def _range(interval: Interval) -> str:
+    """Write an interval as "low-high" with three decimals, like the other numbers of the summary."""
+    return f"{interval.low:.3f}-{interval.high:.3f}"
 
 
 if __name__ == "__main__":

@@ -15,6 +15,8 @@ How every metric the harness reports is computed and how to read the metrics tog
   [pydantic](https://docs.pydantic.dev/) and pydantic-settings, [structlog](https://www.structlog.org/) (JSON logs),
   [psycopg 3](https://www.psycopg.org/psycopg3/) for reading the app's database directly
 - [Starlette](https://www.starlette.io/) and [uvicorn](https://www.uvicorn.org/) for the LLM proxy
+- [SciPy](https://scipy.org/) for the confidence intervals of the evaluation runs (dependency group `eval`, so the
+  proxy image does not carry it); `scipy-stubs` for its types
 - [Poetry 2](https://python-poetry.org/) for dependencies and the virtual environment
 - Development: [pytest](https://docs.pytest.org/) with [pytest-asyncio](https://pytest-asyncio.readthedocs.io/),
   [ruff](https://docs.astral.sh/ruff/) (format and lint), [mypy](https://mypy.readthedocs.io/) (strict),
@@ -38,6 +40,7 @@ evaluation-harness/
 │   ├── datasets/           # the retrieval gold set (built from a local question bank) and the Q&A set file
 │   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run
 │   ├── evaluation/         # the retrieval run and the answer run: checks, requests, run records, commands
+│   ├── stats/              # confidence intervals of a run's numbers and target verdicts read from them
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices; one module per provider API in surfaces/
 │   ├── testdata/           # test data written into the app's stores: created and removed in one place
 │   │   ├── __init__.py     # the name prefix every piece of test data carries
@@ -107,7 +110,8 @@ $env:EVAL_SUT_BASE_URL = "http://127.0.0.1:8001"   # only if the app is not on t
 
 A run sends every question of a gold set to the app's search twice, with the app's own settings and with no
 lowest score, scores each result against the question's answer section, writes a run record to `runs/retrieval/` and
-prints the results per exam set, chapter and knowledge level. The metrics: [METRICS.md](METRICS.md).
+prints the results per exam set, chapter and knowledge level, each recall with its 95 % interval. The metrics
+and the intervals: [METRICS.md](METRICS.md).
 
 The gold set is built from the course's question bank each time; only its declaration is committed
 (`datasets/<course>/`). The stack must serve that course: in the root `.env`, `LOCAL_COURSE_ID` names it and
@@ -126,8 +130,9 @@ with `--include-held-out`, and every such run is counted. A run is refused befor
 code 2, when the bank differs from the declared one, the stack serves another course, a set is unknown, an
 answer section is not a section of the stored course, or the start of a gold question appears word for word in the
 stored course text (a source that reprints the questions would let the search find the question itself). A
-completed run exits with 0, whatever its numbers; with `--require-target` it exits with 1 when the main result is
-below the declared target. CI runs the `lumen_moths` gold set that way: its number is a regression signal for
+completed run exits with 0, whatever its numbers. The target verdict reads the interval: "met" when even its lower
+end reaches the target, "not confirmed" when only the measured value does, "below" otherwise; with
+`--require-target` the run exits with 1 unless the verdict is "met". CI runs the `lumen_moths` gold set that way: its number is a regression signal for
 search, not the app's quality, because a language model wrote that course and its questions.
 
 ## Answer evaluation
@@ -137,8 +142,8 @@ settings, and scores facts of each answer: whether the app answered or declined 
 citations include the question's gold section. Questions without a gold section are ones the course does not
 answer; an answer to one of them is a blocker. The answer text itself is not scored. The run writes a record to
 `runs/answers/` and prints where the answerable questions went wrong (split by whether search found the gold
-section), how the others were declined, the cost, and the results against the targets in the set's file. The
-metrics: [METRICS.md](METRICS.md).
+section), how the others were declined, the cost, and the results against the targets in the set's file, each
+share with its 95 % interval and judged by it, like the retrieval target. The metrics: [METRICS.md](METRICS.md).
 
 The set is committed (`datasets/<course>/qa_v0.toml`): its questions are written for it, not taken from course
 material. Run it on the stack started with the LLM proxy, serving that course. The replies quote course passages,

@@ -36,8 +36,9 @@ def _case(case_id: str, gold_section: str, knowledge_level: str = "K2") -> GoldC
     )
 
 
-def _gold(*cases: GoldCase) -> GoldSet:
-    """Build a gold set of ``cases`` under a declaration with set D held out and recall at 5 on set A as main result."""
+def _gold(*cases: GoldCase, target: float = 0.8) -> GoldSet:
+    """Build a gold set of ``cases`` under a declaration with set D held out and recall at 5 on set A, with
+    ``target``, as main result."""
     declaration = GoldDeclaration.model_validate(
         {
             "course_id": COURSE,
@@ -45,7 +46,7 @@ def _gold(*cases: GoldCase) -> GoldSet:
             "bank_sha256": "0" * 64,
             "objective_section": r"FL-(?P<section>(?P<chapter>\d+)\.\d+)\.\d+",
             "held_out_sets": ["D"],
-            "primary": {"metric": "recall", "k": 5, "sets": ["A"], "target": 0.8},
+            "primary": {"metric": "recall", "k": 5, "sets": ["A"], "target": target},
         }
     )
     return GoldSet(declaration=declaration, cases=cases, sha256="1" * 64)
@@ -323,15 +324,16 @@ async def test_the_target_verdict_is_printed_only_for_the_declared_k(
 
 
 @pytest.mark.covers("US-008", "AC-2")
-@pytest.mark.parametrize(("found", "verdict"), [(4, "met"), (3, "below")])
-async def test_a_main_result_exactly_at_the_target_meets_it(found: int, verdict: str) -> None:
-    """Runs five questions of set A, answer section 1.1, target 0.8. In the primary pass the fake app finds section 1.1
+@pytest.mark.parametrize(("found", "verdict"), [(5, "met"), (3, "not_confirmed"), (2, "below")])
+async def test_the_ci_verdict_reads_the_interval_of_the_primary_pass(found: int, verdict: str) -> None:
+    """Runs five questions of set A, answer section 1.1, target 0.5. In the primary pass the fake app finds section 1.1
     for ``found`` of them and section 2.1 for the rest; in the diagnostic pass it finds 1.1 for all five.
 
-    Expects "met" at recall 0.8 (4 of 5) and "below" at 0.6 (3 of 5). This verdict decides whether the CI job fails,
-    so a pass means CI stops exactly when search, as a user gets it, drops under the declared target. A failure means
-    a strict comparison that fails CI at the target itself, a verdict that lets a lower result through, or a verdict
-    taken from the diagnostic pass, which has no lowest score and so hides the misses it causes.
+    Expects "met" for 5 of 5 (interval 0.57-1.00), "not confirmed" for 3 of 5 (0.6, but the interval starts at 0.23)
+    and "below" for 2 of 5. This verdict decides whether the CI job fails, so a pass means CI stops unless search, as
+    a user gets it, reaches the target even at the lower end of its interval. A failure means the verdict counts
+    misses as found questions, or is taken from the diagnostic pass, which has no lowest score and so hides the
+    misses it causes: 3 of 5 would then pass as 5 of 5.
     """
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -345,9 +347,9 @@ async def test_a_main_result_exactly_at_the_target_meets_it(found: int, verdict:
             return httpx2.Response(200, json=content)
         return response
 
-    gold = _gold(*(_case(f"A-{n}", "1.1") for n in range(1, 6)))
+    gold = _gold(*(_case(f"A-{n}", "1.1") for n in range(1, 6)), target=0.5)
     record = await _run(gold, handler, sections={"1.1", "2.1"})
 
     actual = target_verdict(record, gold)
 
-    assert actual == verdict, f"{found} of 5 found with target 0.8 gave {actual!r}, expected {verdict!r}"
+    assert actual == verdict, f"{found} of 5 found with target 0.5 gave {actual!r}, expected {verdict!r}"

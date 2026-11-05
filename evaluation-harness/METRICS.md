@@ -233,25 +233,27 @@ where
 - $\mathrm{recall@}k$ — the share of questions whose answer section was found among the first $k$ passages
   (formula above).
 
-**Target verdict** — whether the main result reaches the target fixed in the declaration before the first run:
+**Target verdict** — whether the main result reaches the target fixed in the declaration before the first run,
+judged by its interval (see [Intervals and target verdicts](#intervals-and-target-verdicts)):
 
 ```math
-\text{verdict} =
-\begin{cases}
-\text{met} & \text{if } R \ge \tau \\
-\text{below} & \text{if } R < \tau
-\end{cases}
+\text{verdict} = V(h, n, \tau)
 ```
 
 where
 
-- $R$ — the main result;
+- $V$ — the target verdict of a share (met, not confirmed or below), defined under Intervals;
+- $h$ — the questions of $Q_{\text{main}}$ whose verdict $v_q$ in the primary pass is `hit`, so $R = h / n$;
+- $n$ — the number of questions in $Q_{\text{main}}$;
 - $\tau$ — `primary.target` in the declaration (0.80 for the first course).
 
 The verdict is printed only when the run took exactly the declared sets and the app used the declared $k$
 (`primary.k`). With another $k$ the result is a different metric (recall@10 is not recall@5), so it is shown
-without a verdict. "below" is the reason to improve retrieval next. With about 150 questions $R$ is precise only
-to a few points, so a result just above or just below $\tau$ is not a real difference.
+without a verdict. With `--require-target` (CI) the command fails unless the verdict is "met". "below" is the
+reason to improve retrieval next; "not confirmed" says the gold set is too small to tell.
+
+Every row of the printed summary shows recall@k with its Wilson interval, and the main result's MRR is printed
+with its bootstrap interval.
 
 ## Answers
 
@@ -361,23 +363,102 @@ cost of the reply it replays; a miss costs nothing).
 A run is **valid** when no question is `failed`. An invalid run gets no target verdict: it is reported with the
 reasons of its failed questions (for example `llm_failed` after a recording no longer matches the request).
 
-A valid run meets its targets when all three hold:
+A valid run gets one verdict per target; the two shares are judged by their intervals (see
+[Intervals and target verdicts](#intervals-and-target-verdicts)), the unsupported answers by their count:
 
 ```math
-\alpha \ge \alpha_{\min}, \qquad \gamma \ge \gamma_{\min}, \qquad u \le u_{\max}
+V\bigl(|A_{\text{ans}}|,\ |A^{*}|,\ \alpha_{\min}\bigr), \qquad
+V\bigl(c,\ |A_{\text{ans}}|,\ \gamma_{\min}\bigr), \qquad
+\begin{cases}
+\text{met} & \text{if } u \le u_{\max} \\
+\text{below} & \text{if } u > u_{\max}
+\end{cases}
 ```
 
 where
 
-- $\alpha$, $\gamma$, $u$ — the answered share, the gold cited share and the unsupported answers of the run;
+- $V$ — the target verdict of a share (met, not confirmed or below), defined under Intervals;
+- $A^{*}$, $A_{\text{ans}}$ — the scored and the answered answerable questions (see $\alpha$); $|\dots|$ — their
+  number;
+- $c$ — the questions of $A_{\text{ans}}$ whose verdict $v_q$ is `cited_gold`, so $\gamma = c / |A_{\text{ans}}|$;
+- $u$ — the unsupported answers of the run;
 - $\alpha_{\min}$, $\gamma_{\min}$, $u_{\max}$ — `answered_min`, `gold_cited_min` and `unsupported_answers_max`
   in the `[targets]` table of the set's file (0.85, 0.75 and 0 for the first course), written before the first
   run;
-- a share that does not exist (`n/a`) does not meet its minimum.
+- a share that does not exist (`n/a`) is "below" its minimum.
 
-With 20 answerable and 10 unanswerable questions a share is precise only to about ±20 points, so the targets
-tell a working answer step from a broken one, not small differences.
+"all targets" in the printed summary is the worst of the three: "below" if any is below, else "not confirmed"
+if any is not confirmed, else "met". The unsupported answers are printed with the Wilson interval of their share
+of $U$: no unsupported answer among 10 unanswerable questions still allows a true share of up to 0.28.
+
+## Intervals and target verdicts
+
+Code: [`src/evalharness/stats/intervals.py`](src/evalharness/stats/intervals.py) (computed with scipy).
+
+A run measures a sample of questions. Another sample of similar questions would give a somewhat different
+number, so every share and mean is reported with a 95 % confidence interval: the range in which the value over
+all such questions plausibly lies. The intervals are not stored in run records; they are computed from the
+per-question scores a record holds, so any record can be printed again with them.
+
+**Wilson interval of a share**, $\mathrm{CI}_W(x, n)$ — used for every share of yes / no outcomes: recall@k,
+$\alpha$, $\gamma$ and the share of unsupported answers:
+
+```math
+\mathrm{CI}_W(x, n) =
+\frac{\hat p + \frac{z^2}{2n}}{1 + \frac{z^2}{n}}
+\pm \frac{z}{1 + \frac{z^2}{n}} \sqrt{\frac{\hat p\,(1 - \hat p)}{n} + \frac{z^2}{4n^2}},
+\qquad \hat p = \frac{x}{n}
+```
+
+where
+
+- $x$ — the questions with the outcome counted (e.g. `hit`); $n$ — all questions of the share;
+- $\hat p$ — the measured share;
+- $z$ — 1.96, the multiplier of a 95 % interval.
+
+It stays inside 0..1 and is usable at 0 of $n$ and $n$ of $n$, where the simpler $\hat p \pm z\sqrt{\hat p(1-\hat
+p)/n}$ breaks. Example: 19 of 20 gives 0.764–0.991.
+
+**Bootstrap interval of a mean**, $\mathrm{CI}_B$ — used for MRR, whose values per question are not yes / no:
+
+```math
+\overline{\mathrm{RR}}^{(b)} = \frac{1}{n} \sum_{j=1}^{n} \mathrm{RR}_{q_j^{(b)}}, \qquad b = 1, \dots, B
+```
+
+where
+
+- $\mathrm{RR}_q$ — the reciprocal rank of question $q$ (see Per question above); $n$ — the questions of the group;
+- $q_j^{(b)}$ — the $j$-th question of resample $b$, drawn with replacement from the $n$ questions;
+- $B$ — 9 999 resamples, with a fixed seed, so the same record always prints the same interval;
+- $\mathrm{CI}_B$ — the BCa interval (bias-corrected and accelerated percentiles, scipy's default) of the $B$
+  means $\overline{\mathrm{RR}}^{(b)}$.
+
+There is no interval when $n < 2$ or every $\mathrm{RR}_q$ is the same: resampling cannot change the mean then.
+
+**Target verdict of a share**, $V(x, n, \tau)$ — whether a share reaches a minimum fixed before the run:
+
+```math
+V(x, n, \tau) =
+\begin{cases}
+\text{met} & \text{if } \ell \ge \tau \\
+\text{not confirmed} & \text{if } \ell < \tau \le x / n \\
+\text{below} & \text{if } x / n < \tau
+\end{cases}
+```
+
+where
+
+- $x$, $n$ — the questions with the outcome counted and all questions of the share;
+- $\ell$ — the lower end of $\mathrm{CI}_W(x, n)$;
+- $\tau$ — the minimum the share must reach.
+
+"met" means even the lower end reaches the target; "not confirmed" means the measured share does, but the sample
+is too small to tell it from a value under the target.
 
 ## Changes
 
-None yet.
+- **2026-11-05 — target verdicts read the interval.** Before, a share met its target when the measured value
+  reached it ($R \ge \tau$; $\alpha \ge \alpha_{\min}$, $\gamma \ge \gamma_{\min}$), with only "met" and "below".
+  Reason: with 20 answerable questions, 19 of 20 (0.95) was "met" against 0.85 although its interval starts at
+  0.764. Results reported before this date used the old rule; the answer run of 2026-11-03 ("all targets met")
+  is "not confirmed" under the new one, the retrieval main results stay "met".

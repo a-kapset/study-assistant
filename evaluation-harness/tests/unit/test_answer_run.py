@@ -141,20 +141,37 @@ def test_gold_cited_is_counted_over_the_answered_questions_only() -> None:
 
 @pytest.mark.covers("US-011", "AC-5")
 def test_one_unsupported_answer_fails_the_targets_whatever_the_shares() -> None:
-    """Sums up a run where every answerable question cites the gold section and one unanswerable one is answered;
-    expects the unsupported-answers target to be missed while both shares are met.
+    """Sums up a run where all 25 answerable questions cite the gold section and one unanswerable one is answered;
+    expects the unsupported-answers target to be missed while both shares are met. 25 questions are needed for
+    "met": with fewer, even a perfect share has an interval whose lower end is under the 0.85 target.
 
-    A pass means one answer without support in the course is enough to miss the targets. A failure means such an
-    answer hides behind good averages: the app would pass while it answers from the model's memory.
+    A pass means one answer without support in the course is enough to miss the targets, even when both shares are
+    confirmed by their intervals. A failure means such an answer hides behind good shares: the app would pass while
+    it answers from the model's memory.
     """
-    summary = summarise(
-        [GOLD, GOLD, None], [_score("cited_gold"), _score("cited_gold"), _score("answered_unsupported")]
-    )
+    summary = summarise([GOLD] * 25 + [None], [_score("cited_gold")] * 25 + [_score("answered_unsupported")])
 
     verdicts = target_verdict(summary, TARGETS)
 
     expected = {"answered": "met", "gold_cited": "met", "unsupported_answers": "below"}
-    assert verdicts == expected, f"one unsupported answer among perfect shares gave {verdicts}"
+    assert verdicts == expected, f"one unsupported answer among confirmed shares gave {verdicts}"
+
+
+@pytest.mark.covers("US-011", "AC-4")
+def test_gold_cited_is_judged_over_the_answered_questions() -> None:
+    """Sums up 30 answerable questions: 25 answered citing the gold section, 5 declined; expects the gold-cited
+    target to be met (25 of 25, interval from 0.87).
+
+    A pass means the verdict on citations counts only the answers the app gave, as the printed share does. A
+    failure means the verdict counts the declined questions too (25 of 30, which is not confirmed against 0.75):
+    declines would then pull the citation verdict down, and the two targets would judge the same thing.
+    """
+    summary = summarise([GOLD] * 30, [_score("cited_gold")] * 25 + [_score("declined_by_model")] * 5)
+
+    verdicts = target_verdict(summary, TARGETS)
+
+    assert verdicts is not None, "a run without failed questions got no verdict"
+    assert verdicts["gold_cited"] == "met", f"25 of 25 answers citing the gold section gave {verdicts['gold_cited']!r}"
 
 
 @pytest.mark.covers("US-011", "AC-6")
