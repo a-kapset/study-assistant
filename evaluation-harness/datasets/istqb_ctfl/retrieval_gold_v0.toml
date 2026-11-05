@@ -31,3 +31,10 @@ sets = ["A", "B", "C"]
 # Higher is better. A result below this value is the reason to improve retrieval next; with about 150 questions
 # the result is only precise to a few points, so a round value is used.
 target = 0.80
+
+# How two runs of this gold set are compared (written 2026-11-05, before the command that compares them existed).
+# A change of recall@5 smaller than this is not worth acting on: 0.05 is about 7 of the 146 questions, the size of
+# change that would make us keep or undo a change of the corpus or of the search settings. Not part of the gold-set
+# hash, so runs recorded before this table stay comparable.
+[comparison]
+min_meaningful_change = 0.05

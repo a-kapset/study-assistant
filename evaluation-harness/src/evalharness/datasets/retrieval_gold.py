@@ -42,6 +42,14 @@ class PrimaryMetric(_Strict):
     target: float = Field(gt=0, le=1)
 
 
+class Comparison(_Strict):
+    """How two runs of this gold set are compared, fixed before any comparison is looked at."""
+
+    # The smallest change of the main result's recall that would make us act, e.g. keep or undo a corpus change.
+    # A change whose interval stays inside this distance of zero counts as no meaningful change.
+    min_meaningful_change: float = Field(gt=0, lt=1)
+
+
 class GoldDeclaration(_Strict):
     """The committed part of a gold set: its bank, how a question finds its section, and what a run measures."""
 
@@ -55,6 +63,8 @@ class GoldDeclaration(_Strict):
     held_out_uses_before_records: int = Field(default=0, ge=0)
 
     primary: PrimaryMetric
+    # None when no comparison rule was declared; two runs of this gold set are then not compared.
+    comparison: Comparison | None = None
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -124,7 +134,10 @@ def build_gold_set(declaration: GoldDeclaration, sources_dir: Path) -> GoldSet:
         for number, line in enumerate(content.decode("utf-8").splitlines(), start=1)
         if line.strip()
     )
-    named = {"declaration": declaration.model_dump(mode="json"), "cases": [case.model_dump() for case in cases]}
+    # The comparison rule says how two runs are judged, not what a run measures: leaving it out of the hash keeps the
+    # runs recorded before the rule was written comparable with the runs after it.
+    measured = declaration.model_dump(mode="json", exclude={"comparison"})
+    named = {"declaration": measured, "cases": [case.model_dump() for case in cases]}
     digest = hashlib.sha256(json.dumps(named, sort_keys=True).encode("utf-8")).hexdigest()
     return GoldSet(declaration=declaration, cases=cases, sha256=digest)
 

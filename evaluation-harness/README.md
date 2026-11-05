@@ -40,7 +40,7 @@ evaluation-harness/
 │   ├── datasets/           # the retrieval gold set (built from a local question bank) and the Q&A set file
 │   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run
 │   ├── evaluation/         # the retrieval run and the answer run: checks, requests, run records, commands
-│   ├── stats/              # confidence intervals of a run's numbers and target verdicts read from them
+│   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices; one module per provider API in surfaces/
 │   ├── testdata/           # test data written into the app's stores: created and removed in one place
 │   │   ├── __init__.py     # the name prefix every piece of test data carries
@@ -134,6 +134,21 @@ completed run exits with 0, whatever its numbers. The target verdict reads the i
 end reaches the target, "not confirmed" when only the measured value does, "below" otherwise; with
 `--require-target` the run exits with 1 unless the verdict is "met". CI runs the `lumen_moths` gold set that way: its number is a regression signal for
 search, not the app's quality, because a language model wrote that course and its questions.
+
+Two recorded runs of the same gold set are compared question by question, for example before and after a source
+was added to the corpus:
+
+```powershell
+poetry run python -m evalharness.evaluation.compare runs/retrieval/<before>.json runs/retrieval/<after>.json --factor corpus
+poetry run python -m evalharness.evaluation.compare runs/retrieval/<before>.json runs/retrieval/<after>.json
+```
+
+`--factor` (`corpus`, `embedding_space`, `k`, `min_score`) names the one recorded value changed on purpose; leave it
+out for a repeated run or a change of the app's code, which a record does not hold. The comparison is refused, with
+exit code 2, when the runs measured other questions, when any other recorded value differs as well, or when the gold
+declaration has no `[comparison] min_meaningful_change`. It prints the change of recall with its interval, the
+questions gained and lost, McNemar's exact p and a verdict (better, worse, no meaningful change, underpowered,
+unchanged), and the change of MRR with its interval: [METRICS.md](METRICS.md#comparison-of-two-runs).
 
 ## Answer evaluation
 

@@ -191,13 +191,79 @@ The last three as a group: $n = 3$, recall@5 = 1/3, MRR = 1/3, one `empty`, one 
 - **Precision has a low ceiling here.** An answer section may hold fewer than $k$ passages, so $\bar{P}$ well
   below 1 is normal; compare it between runs, not with 1.
 
-### A run: two passes and the main result
+## Intervals and target verdicts
+
+Code: [`src/evalharness/stats/intervals.py`](src/evalharness/stats/intervals.py) (computed with scipy).
+
+A run measures a sample of questions. Another sample of similar questions would give a somewhat different
+number, so every share and mean is reported with a 95 % confidence interval: the range in which the value over
+all such questions plausibly lies. The intervals are not stored in run records; they are computed from the
+per-question scores a record holds, so any record can be printed again with them.
+
+**Wilson interval of a share**, $\mathrm{CI}_W(x, n)$ — used for every share of yes / no outcomes in this file:
+recall@k, and the shares of the answer run below:
+
+```math
+\mathrm{CI}_W(x, n) =
+\frac{\hat p + \frac{z^2}{2n}}{1 + \frac{z^2}{n}}
+\pm \frac{z}{1 + \frac{z^2}{n}} \sqrt{\frac{\hat p\,(1 - \hat p)}{n} + \frac{z^2}{4n^2}},
+\qquad \hat p = \frac{x}{n}
+```
+
+where
+
+- $x$ — the questions with the outcome counted (e.g. `hit`); $n$ — all questions of the share;
+- $\hat p$ — the measured share;
+- $z$ — 1.96, the multiplier of a 95 % interval.
+
+It stays inside 0..1 and is usable at 0 of $n$ and $n$ of $n$, where the simpler $\hat p \pm z\sqrt{\hat p(1-\hat
+p)/n}$ breaks. Example: 19 of 20 gives 0.764–0.991.
+
+**Bootstrap interval of a mean**, $\mathrm{CI}_B$ — used for MRR, whose values per question are not yes / no:
+
+```math
+\mathrm{CI}_B = \mathrm{BCa}_{95\%}\big(\overline{\mathrm{RR}}^{(1)}, \dots, \overline{\mathrm{RR}}^{(B)}\big),
+\qquad \overline{\mathrm{RR}}^{(b)} = \frac{1}{n} \sum_{j=1}^{n} \mathrm{RR}_{q_j^{(b)}}
+```
+
+where
+
+- $\mathrm{RR}_q$ — the reciprocal rank of question $q$ (see Per question above); $n$ — the questions of the group;
+- $q_j^{(b)}$ — the $j$-th question of resample $b$, drawn with replacement from the $n$ questions;
+- $B$ — 9 999 resamples, with a fixed seed, so the same record always prints the same interval;
+- $\overline{\mathrm{RR}}^{(b)}$ — the mean reciprocal rank recomputed on resample $b$;
+- $\mathrm{BCa}_{95\%}$ — the range that holds the middle 95 % of the $B$ values, with percentiles corrected for
+  bias and skew (bias-corrected and accelerated, scipy's default method).
+
+There is no interval when $n < 2$ or every $\mathrm{RR}_q$ is the same: resampling cannot change the mean then.
+
+**Target verdict of a share**, $V(x, n, \tau)$ — whether a share reaches a minimum fixed before the run:
+
+```math
+V(x, n, \tau) =
+\begin{cases}
+\text{met} & \text{if } \ell \ge \tau \\
+\text{not confirmed} & \text{if } \ell < \tau \le x / n \\
+\text{below} & \text{if } x / n < \tau
+\end{cases}
+```
+
+where
+
+- $x$, $n$ — the questions with the outcome counted and all questions of the share;
+- $\ell$ — the lower end of $\mathrm{CI}_W(x, n)$;
+- $\tau$ — the minimum the share must reach.
+
+"met" means even the lower end reaches the target; "not confirmed" means the measured share does, but the sample
+is too small to tell it from a value under the target.
+
+## A retrieval run: two passes and the main result
 
 Code: [`src/evalharness/evaluation/retrieval.py`](src/evalharness/evaluation/retrieval.py) (the run),
 [`src/evalharness/evaluation/__main__.py`](src/evalharness/evaluation/__main__.py) (the printed summary).
 
 A run sends every chosen question of the gold set to the search twice and scores both results with the
-formulas above:
+formulas of [Retrieval](#retrieval):
 
 - **primary pass** — the question is sent as a user sends it, so the app's own $k$ and threshold
   (`min_score`) apply; this is the result a user gets;
@@ -231,10 +297,10 @@ where
   declaration;
 - $k$ — the number of places the app used, as its response reports it;
 - $\mathrm{recall@}k$ — the share of questions whose answer section was found among the first $k$ passages
-  (formula above).
+  (see Per group of questions).
 
 **Target verdict** — whether the main result reaches the target fixed in the declaration before the first run,
-judged by its interval (see [Intervals and target verdicts](#intervals-and-target-verdicts)):
+judged by its interval (see [Intervals and target verdicts](#intervals-and-target-verdicts) above):
 
 ```math
 \text{verdict} = V(h, n, \tau)
@@ -242,7 +308,7 @@ judged by its interval (see [Intervals and target verdicts](#intervals-and-targe
 
 where
 
-- $V$ — the target verdict of a share (met, not confirmed or below), defined under Intervals;
+- $V$ — the target verdict of a share (met, not confirmed or below), defined under Intervals above;
 - $h$ — the questions of $Q_{\text{main}}$ whose verdict $v_q$ in the primary pass is `hit`, so $R = h / n$;
 - $n$ — the number of questions in $Q_{\text{main}}$;
 - $\tau$ — `primary.target` in the declaration (0.80 for the first course).
@@ -364,7 +430,7 @@ A run is **valid** when no question is `failed`. An invalid run gets no target v
 reasons of its failed questions (for example `llm_failed` after a recording no longer matches the request).
 
 A valid run gets one verdict per target; the two shares are judged by their intervals (see
-[Intervals and target verdicts](#intervals-and-target-verdicts)), the unsupported answers by their count:
+[Intervals and target verdicts](#intervals-and-target-verdicts) above), the unsupported answers by their count:
 
 ```math
 V\bigl(|A_{\text{ans}}|,\ |A^{*}|,\ \alpha_{\min}\bigr), \qquad
@@ -377,7 +443,7 @@ V\bigl(c,\ |A_{\text{ans}}|,\ \gamma_{\min}\bigr), \qquad
 
 where
 
-- $V$ — the target verdict of a share (met, not confirmed or below), defined under Intervals;
+- $V$ — the target verdict of a share (met, not confirmed or below), defined under Intervals above;
 - $A^{*}$, $A_{\text{ans}}$ — the scored and the answered answerable questions (see $\alpha$); $|\dots|$ — their
   number;
 - $c$ — the questions of $A_{\text{ans}}$ whose verdict $v_q$ is `cited_gold`, so $\gamma = c / |A_{\text{ans}}|$;
@@ -391,69 +457,108 @@ where
 if any is not confirmed, else "met". The unsupported answers are printed with the Wilson interval of their share
 of $U$: no unsupported answer among 10 unanswerable questions still allows a true share of up to 0.28.
 
-## Intervals and target verdicts
+## Comparison of two runs
 
-Code: [`src/evalharness/stats/intervals.py`](src/evalharness/stats/intervals.py) (computed with scipy).
+Code: [`src/evalharness/stats/paired.py`](src/evalharness/stats/paired.py),
+[`src/evalharness/evaluation/compare.py`](src/evalharness/evaluation/compare.py).
 
-A run measures a sample of questions. Another sample of similar questions would give a somewhat different
-number, so every share and mean is reported with a 95 % confidence interval: the range in which the value over
-all such questions plausibly lies. The intervals are not stored in run records; they are computed from the
-per-question scores a record holds, so any record can be printed again with them.
+Two retrieval runs are compared only when they measured the same questions (same gold-set hash, course and exam
+sets) and their recorded corpus snapshot, embedding space, k and lowest score differ in exactly the one factor
+declared for the comparison, or in nothing when none is declared. Both runs answered the same questions, so the
+comparison is made question by question, on the primary pass: a hard question is hard in both runs, and the
+per-question differences carry much less noise than two separately measured numbers.
 
-**Wilson interval of a share**, $\mathrm{CI}_W(x, n)$ — used for every share of yes / no outcomes: recall@k,
-$\alpha$, $\gamma$ and the share of unsupported answers:
+**Change of a metric**, $\Delta$ — the mean of the per-question differences, after minus before:
 
 ```math
-\mathrm{CI}_W(x, n) =
-\frac{\hat p + \frac{z^2}{2n}}{1 + \frac{z^2}{n}}
-\pm \frac{z}{1 + \frac{z^2}{n}} \sqrt{\frac{\hat p\,(1 - \hat p)}{n} + \frac{z^2}{4n^2}},
-\qquad \hat p = \frac{x}{n}
+\Delta = \frac{1}{n} \sum_{q=1}^{n} d_q, \qquad d_q = s_q^{\text{after}} - s_q^{\text{before}}
 ```
 
 where
 
-- $x$ — the questions with the outcome counted (e.g. `hit`); $n$ — all questions of the share;
-- $\hat p$ — the measured share;
-- $z$ — 1.96, the multiplier of a 95 % interval.
+- $n$ — the questions of the comparison (the same in both runs);
+- $s_q^{\text{before}}$, $s_q^{\text{after}}$ — the score of question $q$ in the run before and after the change:
+  for recall 1 when the question is a `hit` and 0 otherwise, for MRR its reciprocal rank $\mathrm{RR}_q$;
+- $d_q$ — the difference for question $q$; for recall it is $+1$ (gained), $-1$ (lost) or 0.
 
-It stays inside 0..1 and is usable at 0 of $n$ and $n$ of $n$, where the simpler $\hat p \pm z\sqrt{\hat p(1-\hat
-p)/n}$ breaks. Example: 19 of 20 gives 0.764–0.991.
+For recall, $\Delta$ equals $R^{\text{after}} - R^{\text{before}}$, where $R^{\text{before}}$ and $R^{\text{after}}$
+are the recall@k of the primary pass of each run over these $n$ questions.
 
-**Bootstrap interval of a mean**, $\mathrm{CI}_B$ — used for MRR, whose values per question are not yes / no:
+**Interval of the change**, $\mathrm{CI}_B(\Delta)$ — the bootstrap interval of a mean (see Intervals above), computed over the
+$n$ differences $d_q$ instead of the scores:
 
 ```math
-\overline{\mathrm{RR}}^{(b)} = \frac{1}{n} \sum_{j=1}^{n} \mathrm{RR}_{q_j^{(b)}}, \qquad b = 1, \dots, B
+\mathrm{CI}_B(\Delta) = [\,\ell_\Delta,\ h_\Delta\,] = \mathrm{BCa}_{95\%}\big(\Delta^{(1)}, \dots, \Delta^{(B)}\big),
+\qquad \Delta^{(b)} = \frac{1}{n} \sum_{j=1}^{n} d_{q_j^{(b)}}
 ```
 
 where
 
-- $\mathrm{RR}_q$ — the reciprocal rank of question $q$ (see Per question above); $n$ — the questions of the group;
+- $d_q$ — the difference for question $q$ (see the change above); $n$ — the questions of the comparison;
 - $q_j^{(b)}$ — the $j$-th question of resample $b$, drawn with replacement from the $n$ questions;
-- $B$ — 9 999 resamples, with a fixed seed, so the same record always prints the same interval;
-- $\mathrm{CI}_B$ — the BCa interval (bias-corrected and accelerated percentiles, scipy's default) of the $B$
-  means $\overline{\mathrm{RR}}^{(b)}$.
+- $B$ — 9 999 resamples, with a fixed seed, so the same two records always give the same interval;
+- $\Delta^{(b)}$ — the change recomputed on resample $b$;
+- $\mathrm{BCa}_{95\%}$ — the middle 95 % of the $B$ values, as for the bootstrap interval of a mean above;
+- $\ell_\Delta$, $h_\Delta$ — the lower and upper end of that range.
 
-There is no interval when $n < 2$ or every $\mathrm{RR}_q$ is the same: resampling cannot change the mean then.
+There is no interval when every $d_q$ is the same (in practice: no question changed).
 
-**Target verdict of a share**, $V(x, n, \tau)$ — whether a share reaches a minimum fixed before the run:
+**McNemar's exact test**, $p$ — printed for recall next to the counts of flipped questions:
 
 ```math
-V(x, n, \tau) =
+p = P\big(\, |X - \tfrac{m}{2}| \ge |g - \tfrac{m}{2}| \,\big), \qquad X \sim \mathrm{Binomial}(m, \tfrac{1}{2}), \qquad m = g + l
+```
+
+where
+
+- $g$ — the questions gained (not a hit before, a hit after); $l$ — the questions lost (the other way round);
+- $m$ — the questions that flipped; the $n - m$ unchanged questions say nothing about which run is better;
+- $X$ — the number of gains among $m$ flips if the change did nothing and each flip went either way with equal
+  chance (the null hypothesis);
+- $p$ — the chance of a split at least as uneven as the one seen, under that hypothesis. None when $m = 0$.
+
+Example: the second primary source of the first course, $g = 4$, $l = 7$, $p = 0.549$; the course sections, $g = 6$,
+$l = 0$, $p = 2 \cdot (1/2)^6 = 0.031$. A large $p$ does not show that nothing changed: it only fails to show a
+change. The verdict therefore reads the interval, not $p$; near $p = 0.05$ the two can disagree, and then the
+interval decides.
+
+**Verdict of a change**, $W(\Delta)$ — given for recall, which has a target; MRR gets $\Delta$ and its interval only:
+
+```math
+W(\Delta) =
 \begin{cases}
-\text{met} & \text{if } \ell \ge \tau \\
-\text{not confirmed} & \text{if } \ell < \tau \le x / n \\
-\text{below} & \text{if } x / n < \tau
+\text{unchanged} & \text{if every } d_q = 0 \\
+\text{better} & \text{if } \ell_\Delta > 0 \\
+\text{worse} & \text{if } h_\Delta < 0 \\
+\text{no meaningful change} & \text{if } -\delta < \ell_\Delta \le 0 \le h_\Delta < \delta \\
+\text{underpowered} & \text{otherwise}
 \end{cases}
 ```
 
 where
 
-- $x$, $n$ — the questions with the outcome counted and all questions of the share;
-- $\ell$ — the lower end of $\mathrm{CI}_W(x, n)$;
-- $\tau$ — the minimum the share must reach.
+- $d_q$ — the per-question differences of recall;
+- $\ell_\Delta$, $h_\Delta$ — the lower and upper end of $\mathrm{CI}_B(\Delta)$; $\Delta$ itself is printed next to
+  them, but the verdict reads only the two ends;
+- $\delta$ — the smallest change worth acting on, written in the gold declaration before comparing
+  (`[comparison] min_meaningful_change`; 0.05 for the first course, about 7 of 146 questions); it is not part of
+  the gold-set hash, so it can be added without making earlier runs incomparable.
 
-"met" means even the lower end reaches the target; "not confirmed" means the measured share does, but the sample
-is too small to tell it from a value under the target.
+"underpowered" means the interval includes zero but also a change of at least $\delta$: these questions cannot
+tell whether the change mattered. Example: the second primary source, $\Delta = -0.021$, interval $-0.068$ to
+$+0.021$ with $\delta = 0.05$, is underpowered: a loss of up to 7 points is not ruled out.
+
+**Reading a comparison.** Recall says whether more or fewer questions find their answer section; MRR adds how high
+it stands. Read together, by their intervals:
+
+- **Recall unchanged or no meaningful change, MRR interval wholly above zero:** the same questions are found, but
+  the answer section stands higher among the first $k$ — a ranking gain, not a coverage gain.
+- **Both intervals above zero:** more questions are found, and found ones stand higher. Example: the course
+  sections of the first course, recall $+0.041$ ($+0.014$ to $+0.082$), MRR $+0.043$ ($+0.024$ to $+0.070$).
+- **MRR interval includes zero:** no change of ranking is shown, whatever the mean moved. Example: the second
+  primary source, MRR $+0.006$ ($-0.032$ to $+0.047$).
+- **Recall better, MRR interval includes zero or lies below it:** a newly found question adds its
+  $\mathrm{RR}_q > 0$ to MRR, so an MRR that does not rise with it means questions found before moved down.
 
 ## Changes
 
