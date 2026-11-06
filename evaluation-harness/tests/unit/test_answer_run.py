@@ -13,7 +13,16 @@ from evalharness.datasets.qa_set import QaCase, QaSet, QaTargets
 from evalharness.evaluation.answer_record import AnswerRunRecord
 from evalharness.evaluation.answer_run import run, target_verdict
 from evalharness.evaluation.retrieval import RunRefused
-from evalharness.oracles.answer import AbstainReason, AnswerCaseScore, AnswerVerdict, AskReply, score_case, summarise
+from evalharness.oracles.answer import (
+    AbstainReason,
+    AnswerCaseScore,
+    AnswerVerdict,
+    AskReply,
+    flipped_cases,
+    score_case,
+    summarise,
+)
+from evalharness.proxy.keys import repetition_of
 from evalharness.proxy.ledger import LedgerLine
 from evalharness.settings import HarnessSettings
 from evalharness.transport import REQUEST_ID_HEADER, SutTransport
@@ -240,24 +249,39 @@ def _line(request_id: str, model: str | None, cost: float | None, source: str = 
 
 class _App:
     """A fake app: search finds one passage of section 4.2, ask answers citing it; every ask is written to a ledger
-    as one model call answered from a recording, the way the proxy writes it."""
+    as one model call answered from a recording, the way the proxy writes it. Asks of the repetition named in
+    ``declines_in`` are declined by the model instead. Every request is remembered as (path, repetition)."""
 
-    def __init__(self, ledger: list[LedgerLine]) -> None:
-        """Keep the ledger the asks are written to."""
+    def __init__(self, ledger: list[LedgerLine], declines_in: int | None = None) -> None:
+        """Keep the ledger the asks are written to and the repetition whose asks are declined."""
         self._ledger = ledger
+        self._declines_in = declines_in
+        self.requests: list[tuple[str, int]] = []
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
         """Answer a search or an ask of the fake course."""
+        request_id = request.headers[REQUEST_ID_HEADER]
+        repetition = repetition_of(request_id)
+        self.requests.append((request.url.path, repetition))
         body: dict[str, JsonValue] = {"hits": [{"section_id": GOLD}]}
         if request.url.path == "/v1/ask":
             body = {"abstain_reason": None, "citations": [{"section_id": GOLD}], "invalid_citations": 0}
-            request_id = request.headers[REQUEST_ID_HEADER]
+            if repetition == self._declines_in:
+                body = {"abstain_reason": "model_declined", "citations": [], "invalid_citations": 0}
             self._ledger.append(_line(request_id, "evalharness_model-2026", 0.001))
         return httpx2.Response(200, content=json.dumps(body))
 
 
-async def _run(qa: QaSet, ledger: list[LedgerLine], sections: set[str] | None = None) -> AnswerRunRecord:
-    """Run ``qa`` against the fake app; the corpus holds the gold sections unless ``sections`` says otherwise."""
+async def _run(
+    qa: QaSet,
+    ledger: list[LedgerLine],
+    sections: set[str] | None = None,
+    *,
+    app: _App | None = None,
+    repetitions: int = 1,
+) -> AnswerRunRecord:
+    """Run ``qa`` against the fake app (a new one unless ``app`` is given) ``repetitions`` times; the corpus holds
+    the gold sections unless ``sections`` says otherwise."""
     gold = {case.gold_section for case in qa.cases if case.gold_section is not None}
     settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
 
@@ -265,7 +289,7 @@ async def _run(qa: QaSet, ledger: list[LedgerLine], sections: set[str] | None = 
         """Return the ledger as it is after the last question."""
         return ledger
 
-    async with SutTransport(settings, transport=httpx2.MockTransport(_App(ledger))) as sut:
+    async with SutTransport(settings, transport=httpx2.MockTransport(app or _App(ledger))) as sut:
         return await run(
             qa,
             sut,
@@ -275,6 +299,7 @@ async def _run(qa: QaSet, ledger: list[LedgerLine], sections: set[str] | None = 
             qa_bytes=b"evalharness",
             harness_commit="evalharness_commit",
             harness_dirty=False,
+            repetitions=repetitions,
         )
 
 
@@ -312,3 +337,60 @@ async def test_a_gold_section_missing_from_the_corpus_refuses_the_run() -> None:
         await _run(_qa(("QA-1", GOLD), ("QA-2", "5.6")), ledger, sections={GOLD})
 
     assert (refused.value.code, ledger) == ("gold_section_missing", []), f"got {refused.value.code}, calls {ledger}"
+
+
+@pytest.mark.covers("US-014", "AC-1")
+async def test_every_question_is_asked_once_per_repetition_and_searched_once() -> None:
+    """Runs two questions with three repetitions against a fake app that reads the repetition from the request id
+    the way the proxy does; expects each question searched once and asked once in each of repetitions 1, 2 and 3.
+
+    A pass means every repetition reaches the proxy with its own mark, so the model answers each one anew, and the
+    search, which gives the same hits every time, is not asked again. A failure means either the repetitions carry
+    no mark (the proxy serves the first answer again and every question looks stable) or the run asks too often or
+    too seldom.
+    """
+    app = _App([])
+
+    await _run(_qa(("QA-1", GOLD), ("QA-2", None)), [], app=app, repetitions=3)
+
+    expected = [("/v1/search", 1)] * 2 + [("/v1/ask", n) for n in (1, 1, 2, 2, 3, 3)]
+    assert app.requests == expected, f"requests (path, repetition) sent by the run: {app.requests}"
+
+
+@pytest.mark.covers("US-014", "AC-2")
+async def test_each_repetition_is_summed_up_on_its_own() -> None:
+    """Runs one answerable question with three repetitions against a fake app whose model declines it in the second
+    repetition only; expects the answered shares 1, 0 and 1, one per repetition in order.
+
+    A pass means every repetition gets its own results and target verdict, so one repetition's luck is not hidden in
+    a total. A failure means the summaries mix repetitions, are out of order, or count every repetition as the
+    first.
+    """
+    ledger: list[LedgerLine] = []
+
+    record = await _run(_qa(("QA-1", GOLD)), ledger, app=_App(ledger, declines_in=2), repetitions=3)
+
+    answered = [summary.answered for summary in record.summaries]
+    assert answered == [1.0, 0.0, 1.0], f"answered share per repetition: {answered}"
+
+
+@pytest.mark.covers("US-014", "AC-3")
+def test_a_question_flips_when_its_verdict_is_not_the_same_in_every_repetition() -> None:
+    """Counts the flips of four questions over three repetitions: one always cites the gold section, one cites
+    another section once, one is always declined, and one failed in a repetition.
+
+    Expects three questions counted and one flipped: a change between citing the gold section and citing another
+    one is a flip, though the question was answered every time; a question with a failed repetition is left out,
+    as that repetition measured nothing. A failure means the flip rate counts the wrong questions: too low when only
+    answered / declined changes count, too high when a failed request counts as a changed answer.
+    """
+    verdicts: dict[str, list[AnswerVerdict]] = {
+        "QA-1": ["cited_gold", "cited_gold", "cited_gold"],
+        "QA-2": ["cited_gold", "cited_other", "cited_gold"],
+        "QA-3": ["declined_by_model", "declined_by_model", "declined_by_model"],
+        "QA-4": ["cited_gold", "failed", "cited_gold"],
+    }
+
+    counted, flipped = flipped_cases(verdicts)
+
+    assert (counted, flipped) == (3, ["QA-2"]), f"counted {counted}, flipped {flipped}"

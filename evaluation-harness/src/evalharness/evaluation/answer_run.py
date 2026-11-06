@@ -32,7 +32,16 @@ from evalharness.datasets.qa_set import QaSet, QaTargets, load_qa_set
 from evalharness.evaluation.answer_record import AnswerCaseRecord, AnswerRunRecord, write_answer_record
 from evalharness.evaluation.retrieval import Corpus, RunRefused
 from evalharness.observation import Observation
-from evalharness.oracles.answer import AbstainReason, AnswerSummary, AskReply, score_case, summarise
+from evalharness.oracles.answer import (
+    AbstainReason,
+    AnswerSummary,
+    AnswerVerdict,
+    AskReply,
+    flipped_cases,
+    score_case,
+    summarise,
+)
+from evalharness.proxy.keys import repetition_suffix
 from evalharness.proxy.ledger import LedgerLine
 from evalharness.proxy.ledger import read_ledger as read_ledger_file
 from evalharness.settings import HarnessSettings, StackSettings, load_stack_settings
@@ -102,33 +111,55 @@ async def run(
     qa_bytes: bytes,
     harness_commit: str,
     harness_dirty: bool,
+    repetitions: int = 1,
 ) -> AnswerRunRecord:
-    """Check the gold sections, search and ask every question one at a time, and return the run's record.
+    """Check the gold sections, search every question once, ask every question ``repetitions`` times one at a time,
+    and return the run's record.
 
+    Search is asked once: it does not sample, so asking again would only repeat its hits. Each ask carries its
+    repetition in the request id, so the proxy calls the model anew instead of serving the first answer again.
     ``read_ledger`` returns the proxy's ledger; it is read once, after the last question.
     """
+    if repetitions < 1:
+        raise ValueError(f"a run asks every question at least once, got {repetitions}")
     started_at = datetime.now(UTC)
     check_gold_sections(qa, corpus.section_ids(qa.course_id))
     snapshot = corpus.snapshot(qa.course_id)
-    asked = []
+    searched = {}
     for case in qa.cases:
-        body = {"course_id": qa.course_id}
-        searched = await sut.request("POST", "/v1/search", json={**body, "query": case.question})
-        answered = await sut.request("POST", "/v1/ask", json={**body, "question": case.question})
-        asked.append((case, searched, answered))
+        searched[case.id] = await sut.request(
+            "POST", "/v1/search", json={"course_id": qa.course_id, "query": case.question}
+        )
+    asked = []
+    for repetition in range(1, repetitions + 1):
+        for case in qa.cases:
+            answered = await sut.request(
+                "POST",
+                "/v1/ask",
+                json={"course_id": qa.course_id, "question": case.question},
+                request_id_suffix=repetition_suffix(repetition),
+            )
+            asked.append((repetition, case, answered))
     calls: defaultdict[str, list[LedgerLine]] = defaultdict(list)
     for line in read_ledger():
         if line.request_id is not None:
             calls[line.request_id].append(line)
     cases = tuple(
-        _case_record(case.id, case.gold_section, searched, answered, calls[answered.request_id])
-        for case, searched, answered in asked
+        _case_record(case.id, repetition, case.gold_section, searched[case.id], answered, calls[answered.request_id])
+        for repetition, case, answered in asked
     )
     # The ledger holds every call made on this machine; only the calls of this run's questions count.
     asked_ids = {answered.request_id for _, _, answered in asked}
     models = {
         line.model_returned for request_id in asked_ids for line in calls[request_id] if line.model_returned is not None
     }
+    summaries = tuple(
+        summarise(
+            [case.gold_section for case in cases if case.repetition == repetition],
+            [case.score for case in cases if case.repetition == repetition],
+        )
+        for repetition in range(1, repetitions + 1)
+    )
     return AnswerRunRecord(
         run_id=uuid.uuid4().hex,
         started_at=started_at,
@@ -139,15 +170,22 @@ async def run(
         course_id=qa.course_id,
         corpus_snapshot=snapshot,
         models_returned=tuple(sorted(models)),
-        summary=summarise([case.gold_section for case in cases], [case.score for case in cases]),
+        repetitions=repetitions,
+        summaries=summaries,
         cases=cases,
     )
 
 
 def _case_record(
-    case_id: str, gold_section: str | None, searched: Observation, answered: Observation, calls: Sequence[LedgerLine]
+    case_id: str,
+    repetition: int,
+    gold_section: str | None,
+    searched: Observation,
+    answered: Observation,
+    calls: Sequence[LedgerLine],
 ) -> AnswerCaseRecord:
-    """Record and score one question from its search response, its ask response and the ledger lines of the ask."""
+    """Record and score one question in one repetition from its search response, its ask response and the ledger
+    lines of the ask."""
     search_sections = (
         tuple(hit.section_id for hit in _Searched.model_validate(searched.body_json).hits)
         if _error(searched) is None
@@ -164,6 +202,7 @@ def _case_record(
     costs = [line.cost_usd for line in calls if line.source != "miss"]
     return AnswerCaseRecord(
         case_id=case_id,
+        repetition=repetition,
         gold_section=gold_section,
         search_request_id=searched.request_id,
         ask_request_id=answered.request_id,
@@ -195,7 +234,10 @@ def main(argv: Sequence[str]) -> int:
     """Run the command and return its exit code: 0 when the run completed, whatever its numbers; 2 when refused."""
     parser = argparse.ArgumentParser(prog="python -m evalharness.evaluation.answer_run")
     parser.add_argument("qa_file", type=Path, help="the Q&A set file")
+    parser.add_argument("--reps", type=int, default=1, help="how many times to ask every question (default 1)")
     args = parser.parse_args(argv)
+    if args.reps < 1:
+        parser.error("--reps must be at least 1")
     # One log line per request would bury the summary; failed requests still show as warnings.
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))
     settings = HarnessSettings()
@@ -204,7 +246,7 @@ def main(argv: Sequence[str]) -> int:
     qa = load_qa_set(args.qa_file)
     commit, dirty = _harness_version()
     try:
-        record = asyncio.run(_run(qa, qa_bytes, args.qa_file, settings, stack, commit, dirty))
+        record = asyncio.run(_run(qa, qa_bytes, args.qa_file, settings, stack, commit, dirty, args.reps))
     except RunRefused as error:
         print(f"refused: {error}", file=sys.stderr)
         return 2
@@ -221,6 +263,7 @@ async def _run(
     stack: StackSettings,
     commit: str,
     dirty: bool,
+    repetitions: int,
 ) -> AnswerRunRecord:
     """Make the run against the stack: requests over HTTP, the corpus through the read-only role, the proxy's
     ledger from this machine."""
@@ -235,6 +278,7 @@ async def _run(
                 qa_bytes=qa_bytes,
                 harness_commit=commit,
                 harness_dirty=dirty,
+                repetitions=repetitions,
             )
 
 
@@ -282,41 +326,57 @@ def _range(successes: int, n: int) -> str:
 
 
 def _print_summary(record: AnswerRunRecord, targets: QaTargets, path: Path) -> None:
-    """Print the run's identity and cost, where answerable questions went wrong, how unanswerable ones were
-    declined, and the results against their targets."""
-    s = record.summary
+    """Print the run's identity and cost, where answerable questions went wrong and how unanswerable ones were
+    declined (first repetition), the results against their targets (each repetition), and the flip rate."""
     dirty = " + uncommitted changes" if record.harness_dirty else ""
     costs = [case.cost_usd for case in record.cases]
     cost = "unknown" if any(c is None for c in costs) else f"${sum(c for c in costs if c is not None):.4f}"
     models = " ".join(record.models_returned) or "none called"
     print(f"run {record.run_id[:8]}  {record.course_id}  harness {record.harness_commit[:8]}{dirty}")
-    print(f"model {models}  cost {cost}  record: {path}")
+    print(f"model {models}  cost {cost}  repetitions {record.repetitions}  record: {path}")
     print(f"invalid citations dropped by the app: {sum(c.invalid_citations or 0 for c in record.cases)}")
 
-    print(f"\nanswerable ({s.answerable}): verdict by whether search found the gold section")
+    first = [case for case in record.cases if case.repetition == 1]
+    label = ", repetition 1" if record.repetitions > 1 else ""
+    answerable = [case for case in first if case.gold_section is not None]
+    print(f"\nanswerable ({len(answerable)}{label}): verdict by whether search found the gold section")
     print(f"  {'verdict':<22}{'found':>7}{'not found':>11}")
-    answerable = [case for case in record.cases if case.gold_section is not None]
     for verdict in ("cited_gold", "cited_other", "declined_no_passages", "declined_by_model", "failed"):
         found = sum(c.score.verdict == verdict and c.score.gold_retrieved is True for c in answerable)
         lost = sum(c.score.verdict == verdict and c.score.gold_retrieved is not True for c in answerable)
         print(f"  {verdict:<22}{found:>7}{lost:>11}")
 
-    print(f"\nunanswerable ({s.unanswerable}):")
+    unanswerable = [case for case in first if case.gold_section is None]
+    print(f"\nunanswerable ({len(unanswerable)}{label}):")
     for verdict in ("declined_no_passages", "declined_by_model", "answered_unsupported", "failed"):
-        count = sum(c.score.verdict == verdict for c in record.cases if c.gold_section is None)
-        print(f"  {verdict:<22}{count:>7}")
+        print(f"  {verdict:<22}{sum(c.score.verdict == verdict for c in unanswerable):>7}")
 
+    for repetition, summary in enumerate(record.summaries, start=1):
+        errors = sorted(
+            {
+                c.ask_error or "unknown"
+                for c in record.cases
+                if c.repetition == repetition and c.score.verdict == "failed"
+            }
+        )
+        _print_targets(summary, targets, f"repetition {repetition}" if record.repetitions > 1 else "", errors)
+    if record.repetitions > 1:
+        _print_flips(record)
+
+
+def _print_targets(s: AnswerSummary, targets: QaTargets, title: str, errors: list[str]) -> None:
+    """Print one repetition's results with their intervals against the targets, or why it has no verdict."""
     verdicts = target_verdict(s, targets)
+    heading = f"{title}: " if title else ""
     if verdicts is None:
-        failed = sorted({c.ask_error or "unknown" for c in record.cases if c.score.verdict == "failed"})
-        print(f"\ninvalid run: {s.failed} question(s) got no answer ({', '.join(failed)}); no target verdict")
+        print(f"\n{heading}invalid: {s.failed} question(s) got no answer ({', '.join(errors)}); no target verdict")
         return
     answered = "n/a" if s.answered is None else f"{s.answered:.3f}"
     gold_cited = "n/a" if s.gold_cited is None else f"{s.gold_cited:.3f}"
     answered_ci = _range(_answered(s), s.answerable)
     gold_cited_ci = _range(s.verdicts.get("cited_gold", 0), _answered(s))
     unsupported_ci = _range(s.unsupported_answers, s.unanswerable)
-    print(f"\n{'':<13}{'value':>6}{'95% CI':>14}  target")
+    print(f"\n{heading:<13}{'value':>6}{'95% CI':>14}  target")
     print(f"answered     {answered:>6}{answered_ci:>14}  >= {targets.answered_min}: {verdicts['answered']}")
     print(f"gold cited   {gold_cited:>6}{gold_cited_ci:>14}  >= {targets.gold_cited_min}: {verdicts['gold_cited']}")
     print(
@@ -326,6 +386,24 @@ def _print_summary(record: AnswerRunRecord, targets: QaTargets, path: Path) -> N
     values = verdicts.values()
     overall = "below" if "below" in values else ("not_confirmed" if "not_confirmed" in values else "met")
     print(f"all targets: {overall}")
+
+
+def _print_flips(record: AnswerRunRecord) -> None:
+    """Print the share of questions whose verdict changed between the repetitions, and each such question with its
+    verdicts in order: these are the questions where one answer says little about the next."""
+    verdicts: defaultdict[str, list[AnswerVerdict]] = defaultdict(list)
+    for case in record.cases:
+        verdicts[case.case_id].append(case.score.verdict)
+    counted, flipped = flipped_cases(verdicts)
+    if counted == 0:
+        print("\nflip rate: n/a (every question failed in some repetition)")
+        return
+    print(
+        f"\nflip rate {len(flipped)}/{counted} = {len(flipped) / counted:.3f}, 95% CI {_range(len(flipped), counted)}"
+        f"  (questions whose verdict was not the same in all {record.repetitions} repetitions)"
+    )
+    for case_id in flipped:
+        print(f"  {case_id}: {' > '.join(verdicts[case_id])}")
 
 
 if __name__ == "__main__":

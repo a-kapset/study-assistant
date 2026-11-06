@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from starlette.testclient import TestClient
 
 from evalharness.proxy.app import build_proxy
-from evalharness.proxy.keys import request_key
+from evalharness.proxy.keys import repetition_of, repetition_suffix, request_key
 from evalharness.proxy.ledger import read_ledger
 from evalharness.proxy.prices import Price, TokenUsage, call_cost
 from evalharness.settings import ProxySettings
@@ -166,6 +166,61 @@ def test_record_pays_once_for_the_same_request(tmp_path: Path) -> None:
     assert len(provider.calls) == 1, f"the same request reached the provider {len(provider.calls)} times"
     sources = [line.source for line in read_ledger(tmp_path / "ledger.jsonl")]
     assert sources == ["upstream", "cassette"], f"wrong sources in the ledger: {sources}"
+
+
+@pytest.mark.covers("US-010", "AC-9")
+def test_each_repetition_of_a_request_gets_its_own_recording(tmp_path: Path) -> None:
+    """Sends the same call in record mode as the first repetition, as the second ("<id>.rep2"), and as the first
+    again under another request id.
+
+    What it checks: the provider is called for the first and for the second repetition, and the third call is
+    served from the recording of the first.
+    What it tells: a pass means a repeated answer run gets a new answer from the model for every repetition, while
+    the first repetition still uses the recordings of a run made without repetitions. A failure points to how the
+    proxy reads the mark or builds the key: either every repetition gets the first answer again, so the flip rate is
+    always zero, or every call is new, so recordings are paid for again.
+    Why it is worth having: a repeated run that only replays its first answers looks perfectly stable and costs
+    nothing, so nothing else would show the mistake.
+    """
+    provider = FakeProvider()
+
+    call_proxy(tmp_path, "record", provider, REQUEST, request_id="case-1")
+    call_proxy(tmp_path, "record", provider, REQUEST, request_id="case-2.rep2")
+    call_proxy(tmp_path, "record", provider, REQUEST, request_id="case-3")
+
+    sources = [line.source for line in read_ledger(tmp_path / "ledger.jsonl")]
+    assert sources == ["upstream", "upstream", "cassette"], f"repetitions shared or split recordings: {sources}"
+
+
+@pytest.mark.parametrize(
+    ("request_id", "repetition"),
+    [(None, 1), ("3f2a", 1), ("3f2a.rep2", 2), ("3f2a.rep12", 12), ("3f2a.rep0", 1), ("3f2a.rep2.x", 1)],
+)
+def test_the_repetition_is_read_from_the_end_of_the_request_id(request_id: str | None, repetition: int) -> None:
+    """Reads the repetition from request ids with and without a mark, with a two-digit mark and with marks that are
+    not at the end or not a repetition.
+
+    What it checks: only ".rep<n>" at the very end, n from 1, counts; anything else is the first repetition.
+    What it tells: a pass means a run of ten or more repetitions keeps them apart and an id that only contains the
+    mark is not taken for a repetition. A failure points to the pattern in the proxy's key module.
+    Why it is worth having: the runner and the proxy agree only through this mark; a mark read wrongly sends two
+    repetitions to one recording without any error.
+    """
+    assert repetition_of(request_id) == repetition, f"{request_id!r} read as repetition {repetition_of(request_id)}"
+
+
+def test_the_runner_marks_every_repetition_so_the_proxy_reads_it_back() -> None:
+    """Marks request ids for repetitions 1 to 12 the way the runner does and reads them back the way the proxy does.
+
+    What it checks: every repetition is read back as itself.
+    What it tells: a pass means the two sides of the mark agree. A failure points to a change made on one side
+    only, the runner's suffix or the proxy's pattern.
+    Why it is worth having: the proxy's test above reads hand-written ids, so it would still pass after the runner
+    started writing the mark in another form.
+    """
+    read = [repetition_of("3f2a" + repetition_suffix(n)) for n in range(1, 13)]
+
+    assert read == list(range(1, 13)), f"marked repetitions were read back as {read}"
 
 
 @pytest.mark.covers("US-010", "AC-7")

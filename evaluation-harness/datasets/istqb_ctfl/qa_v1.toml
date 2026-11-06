@@ -1,0 +1,715 @@
+# Q&A set v1 of the first course: questions a learner could ask in the "study / ask" mode, each with the course
+# section that answers it, and questions the course does not answer. The questions were written for this set (not
+# taken from exams or course materials, which a model may have seen in training), so the file may be public; the
+# answers the app gives quote the course and stay on the local machine.
+#
+# v1 keeps the 30 questions of v0 with their ids and adds about one question for every learning objective of the
+# syllabus that v0 left out, and 20 more unanswerable questions, so that a share can be read against its target.
+# Every question lists the words it turns on (key_terms). Check the set against the stored course with
+#     poetry run python -m evalharness.datasets.check_qa_set datasets/istqb_ctfl/qa_v1.toml
+# For an answerable question each key term occurs in a passage of its gold section; for an unanswerable one no key
+# term occurs in any passage of the course (syllabus and Stapp et al. Part II). The course mentions nearby topics,
+# so search may still find passages, and the model has to see that they do not answer. Whether a passage really
+# answers a question is the writer's judgement; the check only rules out a wrong section or a covered topic.
+# The questions were not chosen or changed by looking at search or answer results.
+
+course_id = "istqb_ctfl"
+
+# What the run reports and which results count as good enough, fixed before the first run of v1. With about 80
+# answerable questions a share is precise to about +-8 points, so a share of about 0.95 can show that it reaches
+# 0.85 by the lower end of its interval.
+[targets]
+# Share of answerable questions the app answers instead of declining. Search alone loses about one question in
+# twelve under the lowest score (retrieval recall@5 0.918), so a perfect value is not expected.
+answered_min = 0.85
+# Share of answered answerable questions whose citations include a passage of the gold section or a subsection.
+gold_cited_min = 0.75
+# Unanswerable questions the app answers instead of declining. An answer without support in the course is a
+# blocker whatever the other numbers are.
+unsupported_answers_max = 0
+
+# Answerable: gold_section is the second-level section that answers the question; a citation of that section or
+# of one of its subsections counts.
+
+# --- From v0, unchanged ---
+
+[[cases]]
+id = "QA-01"
+question = "What is the difference between verification and validation in testing?"
+gold_section = "1.1"
+key_terms = ["verification", "validation"]
+
+[[cases]]
+id = "QA-02"
+question = "How do an error, a defect and a failure differ, and what is a root cause?"
+gold_section = "1.2"
+key_terms = ["error", "defect", "failure", "root cause"]
+
+[[cases]]
+id = "QA-03"
+question = "Why do tests become less effective when the same tests are run again and again?"
+gold_section = "1.3"
+key_terms = ["tests wear out"]
+
+[[cases]]
+id = "QA-04"
+question = "What is traceability between the test basis and the testware good for?"
+gold_section = "1.4"
+key_terms = ["traceability"]
+
+[[cases]]
+id = "QA-05"
+question = "What does the whole team approach mean for testers?"
+gold_section = "1.5"
+key_terms = ["whole team approach"]
+
+[[cases]]
+id = "QA-06"
+question = "What does shift left mean, and what are good practices for it?"
+gold_section = "2.1"
+key_terms = ["shift left"]
+
+[[cases]]
+id = "QA-07"
+question = "What is the difference between confirmation testing and regression testing?"
+gold_section = "2.2"
+key_terms = ["confirmation testing", "regression testing"]
+
+[[cases]]
+id = "QA-08"
+question = "What events can trigger maintenance testing?"
+gold_section = "2.3"
+key_terms = ["maintenance testing", "triggers"]
+
+[[cases]]
+id = "QA-09"
+question = "Which kinds of defects are easier to find with static testing than with dynamic testing?"
+gold_section = "3.1"
+key_terms = ["static testing", "dynamic testing"]
+
+[[cases]]
+id = "QA-10"
+question = "Which roles take part in a review, and what does each role do?"
+gold_section = "3.2"
+key_terms = ["moderator", "scribe", "reviewer"]
+
+[[cases]]
+id = "QA-11"
+question = "How do I choose test values with boundary value analysis?"
+gold_section = "4.2"
+key_terms = ["boundary value analysis"]
+
+[[cases]]
+id = "QA-12"
+question = "What is the difference between statement coverage and branch coverage?"
+gold_section = "4.3"
+key_terms = ["statement coverage", "branch coverage"]
+
+[[cases]]
+id = "QA-13"
+question = "What is exploratory testing and when is it useful?"
+gold_section = "4.4"
+key_terms = ["exploratory testing"]
+
+[[cases]]
+id = "QA-14"
+question = "In which formats can the acceptance criteria of a user story be written?"
+gold_section = "4.5"
+key_terms = ["acceptance criteria"]
+
+[[cases]]
+id = "QA-15"
+question = "What are entry criteria and exit criteria used for?"
+gold_section = "5.1"
+key_terms = ["entry criteria", "exit criteria"]
+
+[[cases]]
+id = "QA-16"
+question = "What does the test pyramid show?"
+gold_section = "5.1"
+key_terms = ["test pyramid"]
+
+[[cases]]
+id = "QA-17"
+question = "How is the level of a product risk determined?"
+gold_section = "5.2"
+key_terms = ["risk level", "likelihood", "impact"]
+
+[[cases]]
+id = "QA-18"
+question = "Which metrics are used to monitor testing?"
+gold_section = "5.3"
+key_terms = ["metrics"]
+
+[[cases]]
+id = "QA-19"
+question = "What information should a defect report contain?"
+gold_section = "5.5"
+key_terms = ["defect report"]
+
+[[cases]]
+id = "QA-20"
+question = "What are the risks of introducing test automation?"
+gold_section = "6.2"
+key_terms = ["test automation", "risks"]
+
+# --- New in v1: about one question per learning objective that v0 left out ---
+
+[[cases]]
+id = "QA-21"
+question = "What are typical objectives of testing?"
+gold_section = "1.1"
+key_terms = ["test objectives"]
+
+[[cases]]
+id = "QA-22"
+question = "How is testing different from debugging?"
+gold_section = "1.1"
+key_terms = ["debugging"]
+
+[[cases]]
+id = "QA-23"
+question = "How does testing contribute to the success of a project?"
+gold_section = "1.2"
+key_terms = ["contributions to success"]
+
+[[cases]]
+id = "QA-24"
+question = "How is testing related to quality assurance?"
+gold_section = "1.2"
+key_terms = ["quality assurance", "quality control"]
+
+[[cases]]
+id = "QA-25"
+question = "Why is exhaustive testing impossible, and what is done instead?"
+gold_section = "1.3"
+key_terms = ["exhaustive testing"]
+
+[[cases]]
+id = "QA-26"
+question = "What does it mean that defects cluster together?"
+gold_section = "1.3"
+key_terms = ["defects cluster together"]
+
+[[cases]]
+id = "QA-27"
+question = "What is the absence-of-defects fallacy?"
+gold_section = "1.3"
+key_terms = ["absence-of-defects"]
+
+[[cases]]
+id = "QA-28"
+question = "Why does early testing save time and money?"
+gold_section = "1.3"
+key_terms = ["early testing"]
+
+[[cases]]
+id = "QA-29"
+question = "What does it mean that testing is context dependent?"
+gold_section = "1.3"
+key_terms = ["context dependent"]
+
+[[cases]]
+id = "QA-30"
+question = "What is done during test analysis and during test design?"
+gold_section = "1.4"
+key_terms = ["test analysis", "test design"]
+
+[[cases]]
+id = "QA-31"
+question = "What activities happen during test completion?"
+gold_section = "1.4"
+key_terms = ["test completion"]
+
+[[cases]]
+id = "QA-32"
+question = "What is the difference between test monitoring and test control?"
+gold_section = "1.4"
+key_terms = ["test monitoring", "test control"]
+
+[[cases]]
+id = "QA-33"
+question = "Which factors of the context influence how testing is done in an organization?"
+gold_section = "1.4"
+key_terms = ["stakeholders", "business domain"]
+
+[[cases]]
+id = "QA-34"
+question = "What testware is produced during test implementation?"
+gold_section = "1.4"
+key_terms = ["test procedures", "test suites"]
+
+[[cases]]
+id = "QA-35"
+question = "What is the difference between the test management role and the testing role?"
+gold_section = "1.4"
+key_terms = ["test management role", "testing role"]
+
+[[cases]]
+id = "QA-36"
+question = "Which generic skills does a good tester need?"
+gold_section = "1.5"
+key_terms = ["communication", "analytical thinking"]
+
+[[cases]]
+id = "QA-37"
+question = "What are the benefits and drawbacks of independent testing?"
+gold_section = "1.5"
+key_terms = ["independence"]
+
+[[cases]]
+id = "QA-38"
+question = "How does the chosen software development lifecycle affect testing?"
+gold_section = "2.1"
+key_terms = ["sequential development", "iterative"]
+
+[[cases]]
+id = "QA-39"
+question = "Which good testing practices apply to any software development lifecycle?"
+gold_section = "2.1"
+key_terms = ["good testing practices"]
+
+[[cases]]
+id = "QA-40"
+question = "What is test-driven development?"
+gold_section = "2.1"
+key_terms = ["test-driven development"]
+
+[[cases]]
+id = "QA-41"
+question = "How does behavior-driven development express the expected behavior?"
+gold_section = "2.1"
+key_terms = ["behavior-driven development"]
+
+[[cases]]
+id = "QA-42"
+question = "How does DevOps change testing?"
+gold_section = "2.1"
+key_terms = ["devops"]
+
+[[cases]]
+id = "QA-43"
+question = "How can retrospectives improve the test process?"
+gold_section = "2.1"
+key_terms = ["retrospectives"]
+
+[[cases]]
+id = "QA-44"
+question = "What is component integration testing?"
+gold_section = "2.2"
+key_terms = ["component integration testing"]
+
+[[cases]]
+id = "QA-45"
+question = "What is system testing, and who usually does it?"
+gold_section = "2.2"
+key_terms = ["system testing"]
+
+[[cases]]
+id = "QA-46"
+question = "Which forms of acceptance testing are there?"
+gold_section = "2.2"
+key_terms = ["acceptance testing", "operational acceptance testing"]
+
+[[cases]]
+id = "QA-47"
+question = "What is the difference between functional and non-functional testing?"
+gold_section = "2.2"
+key_terms = ["functional testing", "non-functional testing"]
+
+[[cases]]
+id = "QA-48"
+question = "Which quality characteristics does non-functional testing evaluate?"
+gold_section = "2.2"
+key_terms = ["performance efficiency", "usability", "portability"]
+
+[[cases]]
+id = "QA-49"
+question = "What is impact analysis in maintenance testing for?"
+gold_section = "2.3"
+key_terms = ["impact analysis"]
+
+[[cases]]
+id = "QA-50"
+question = "Which work products can be examined by static testing?"
+gold_section = "3.1"
+key_terms = ["work product"]
+
+[[cases]]
+id = "QA-51"
+question = "Why is static testing valuable early in the lifecycle?"
+gold_section = "3.1"
+key_terms = ["static testing", "early"]
+
+[[cases]]
+id = "QA-52"
+question = "Which defects can static testing find that dynamic testing cannot, and the other way round?"
+gold_section = "3.1"
+key_terms = ["dynamic testing", "failures"]
+
+[[cases]]
+id = "QA-53"
+question = "Why is early and frequent feedback from stakeholders useful?"
+gold_section = "3.2"
+key_terms = ["stakeholder feedback"]
+
+[[cases]]
+id = "QA-54"
+question = "What are the activities of the review process?"
+gold_section = "3.2"
+key_terms = ["review process", "planning"]
+
+[[cases]]
+id = "QA-55"
+question = "How does a walkthrough differ from an inspection?"
+gold_section = "3.2"
+key_terms = ["walkthrough", "inspection"]
+
+[[cases]]
+id = "QA-56"
+question = "What is a technical review and who takes part in it?"
+gold_section = "3.2"
+key_terms = ["technical review"]
+
+[[cases]]
+id = "QA-57"
+question = "What makes a review successful?"
+gold_section = "3.2"
+key_terms = ["success factors"]
+
+[[cases]]
+id = "QA-58"
+question = "How do black-box, white-box and experience-based test techniques differ?"
+gold_section = "4.1"
+key_terms = ["black-box", "white-box", "experience-based"]
+
+[[cases]]
+id = "QA-59"
+question = "How does equivalence partitioning work?"
+gold_section = "4.2"
+key_terms = ["equivalence partitioning"]
+
+[[cases]]
+id = "QA-60"
+question = "What is each choice coverage in equivalence partitioning?"
+gold_section = "4.2"
+key_terms = ["each choice coverage"]
+
+[[cases]]
+id = "QA-61"
+question = "How does 3-value boundary value analysis differ from 2-value boundary value analysis?"
+gold_section = "4.2"
+key_terms = ["3-value"]
+
+[[cases]]
+id = "QA-62"
+question = "How do I derive test cases from a decision table?"
+gold_section = "4.2"
+key_terms = ["decision table"]
+
+[[cases]]
+id = "QA-63"
+question = "How does state transition testing work, and what coverage can it reach?"
+gold_section = "4.2"
+key_terms = ["state transition"]
+
+[[cases]]
+id = "QA-64"
+question = "What is the value of white-box testing?"
+gold_section = "4.3"
+key_terms = ["white-box testing"]
+
+[[cases]]
+id = "QA-65"
+question = "What is error guessing?"
+gold_section = "4.4"
+key_terms = ["error guessing"]
+
+[[cases]]
+id = "QA-66"
+question = "What is a fault attack?"
+gold_section = "4.4"
+key_terms = ["fault attack"]
+
+[[cases]]
+id = "QA-67"
+question = "How does checklist-based testing work?"
+gold_section = "4.4"
+key_terms = ["checklist-based testing"]
+
+[[cases]]
+id = "QA-68"
+question = "What are the card, the conversation and the confirmation of a user story?"
+gold_section = "4.5"
+key_terms = ["card", "conversation", "confirmation"]
+
+[[cases]]
+id = "QA-69"
+question = "What does INVEST stand for in user stories?"
+gold_section = "4.5"
+key_terms = ["invest"]
+
+[[cases]]
+id = "QA-70"
+question = "How does acceptance test-driven development work?"
+gold_section = "4.5"
+key_terms = ["acceptance test-driven development"]
+
+[[cases]]
+id = "QA-71"
+question = "What does a test plan contain?"
+gold_section = "5.1"
+key_terms = ["test plan"]
+
+[[cases]]
+id = "QA-72"
+question = "How does a tester add value to iteration and release planning?"
+gold_section = "5.1"
+key_terms = ["release planning", "iteration planning"]
+
+[[cases]]
+id = "QA-73"
+question = "Which techniques can be used to estimate the test effort?"
+gold_section = "5.1"
+key_terms = ["estimation", "wideband delphi"]
+
+[[cases]]
+id = "QA-74"
+question = "How can test cases be prioritized?"
+gold_section = "5.1"
+key_terms = ["prioritization"]
+
+[[cases]]
+id = "QA-75"
+question = "What are the testing quadrants?"
+gold_section = "5.1"
+key_terms = ["testing quadrants"]
+
+[[cases]]
+id = "QA-76"
+question = "What is the difference between project risks and product risks?"
+gold_section = "5.2"
+key_terms = ["project risks", "product risks"]
+
+[[cases]]
+id = "QA-77"
+question = "How does product risk analysis influence how thoroughly something is tested?"
+gold_section = "5.2"
+key_terms = ["product risk analysis"]
+
+[[cases]]
+id = "QA-78"
+question = "What can be done in response to an analyzed product risk?"
+gold_section = "5.2"
+key_terms = ["risk mitigation"]
+
+[[cases]]
+id = "QA-79"
+question = "What does a test progress report contain?"
+gold_section = "5.3"
+key_terms = ["test progress report"]
+
+[[cases]]
+id = "QA-80"
+question = "How can the status of testing be communicated to stakeholders?"
+gold_section = "5.3"
+key_terms = ["dashboards"]
+
+[[cases]]
+id = "QA-81"
+question = "How does configuration management support testing?"
+gold_section = "5.4"
+key_terms = ["configuration management"]
+
+[[cases]]
+id = "QA-82"
+question = "Which kinds of tools support testing?"
+gold_section = "6.1"
+key_terms = ["test management tools"]
+
+# Unanswerable: no gold_section. The comment says what the course has nearby, so a reader sees why search may
+# still find passages.
+
+# --- From v0, unchanged ---
+
+[[cases]]
+id = "QA-U01"
+question = "How is the mutation score calculated in mutation testing?"
+key_terms = ["mutation"]
+# Nearby: coverage measures (4.3).
+
+[[cases]]
+id = "QA-U02"
+question = "How do I build an orthogonal array for pairwise testing?"
+key_terms = ["pairwise", "orthogonal array"]
+# Nearby: black-box techniques (4.2).
+
+[[cases]]
+id = "QA-U03"
+question = "What are the five maturity levels of TMMi?"
+key_terms = ["tmmi"]
+# Nearby: process improvement through retrospectives (2.1.6) and reviews (3.2.5).
+
+[[cases]]
+id = "QA-U04"
+question = "How do I set up a Jenkins job that runs my automated tests on every commit?"
+key_terms = ["jenkins"]
+# Nearby: DevOps delivery pipeline and CI (2.1.4, 6.1).
+
+[[cases]]
+id = "QA-U05"
+question = "What is the Page Object pattern in UI test automation?"
+key_terms = ["page object"]
+# Nearby: benefits and risks of test automation (6.2).
+
+[[cases]]
+id = "QA-U06"
+question = "How much does it cost to take the CTFL exam?"
+key_terms = ["exam fee", "how much does"]
+# Nearby: the course is about this exam, but the exam chapter of the syllabus is not part of the course passages.
+
+[[cases]]
+id = "QA-U07"
+question = "How long should a soak test run?"
+key_terms = ["soak", "endurance"]
+# Nearby: performance efficiency as a non-functional characteristic (2.2.2).
+
+[[cases]]
+id = "QA-U08"
+question = "How does consumer-driven contract testing with Pact work?"
+key_terms = ["contract testing", "pact"]
+# Nearby: integration testing (2.2).
+
+[[cases]]
+id = "QA-U09"
+question = "How should flaky automated tests be quarantined?"
+key_terms = ["flaky", "quarantine"]
+# Nearby: test automation (6.2).
+
+[[cases]]
+id = "QA-U10"
+question = "What are the categories of the OWASP Top 10?"
+key_terms = ["owasp"]
+# Nearby: security as a quality characteristic (2.2).
+
+# --- New in v1 ---
+
+[[cases]]
+id = "QA-U11"
+question = "What is the difference between Cypress and Playwright?"
+key_terms = ["cypress", "playwright"]
+# Nearby: tool support for testing (6.1).
+
+[[cases]]
+id = "QA-U12"
+question = "How do I use Testcontainers to start a database for integration tests?"
+key_terms = ["testcontainers"]
+# Nearby: integration testing (2.2.1) and test environments (1.4.1).
+
+[[cases]]
+id = "QA-U13"
+question = "How do I calculate the Halstead metrics of a program?"
+key_terms = ["halstead"]
+# Nearby: white-box testing (4.3) and static analysis (3.1).
+
+[[cases]]
+id = "QA-U14"
+question = "How does A/B testing decide between two versions of a web page?"
+key_terms = ["a/b test"]
+# Nearby: acceptance testing (2.2) and the testing quadrants (5.1.7).
+
+[[cases]]
+id = "QA-U15"
+question = "How does a blue-green deployment work?"
+key_terms = ["blue-green"]
+# Nearby: DevOps and the delivery pipeline (2.1.4).
+
+[[cases]]
+id = "QA-U16"
+question = "How does a canary release limit the risk of a deployment?"
+key_terms = ["canary"]
+# Nearby: DevOps and the delivery pipeline (2.1.4).
+
+[[cases]]
+id = "QA-U17"
+question = "How do I create a mock with Mockito in a Java unit test?"
+key_terms = ["mockito"]
+# Nearby: component testing (2.2.1).
+
+[[cases]]
+id = "QA-U18"
+question = "How do I test a REST API with Postman?"
+key_terms = ["postman", "rest api"]
+# Nearby: test tools (6.1).
+
+[[cases]]
+id = "QA-U19"
+question = "What is the difference between SAST and DAST tools?"
+key_terms = ["sast", "dast"]
+# Nearby: security testing as a non-functional test (2.2.2).
+
+[[cases]]
+id = "QA-U20"
+question = "How does snapshot testing work in Jest?"
+key_terms = ["jest", "snapshot testing"]
+# Nearby: regression testing (2.2.3).
+
+[[cases]]
+id = "QA-U21"
+question = "How does property-based testing generate test inputs?"
+key_terms = ["property-based"]
+# Nearby: black-box techniques (4.2).
+
+[[cases]]
+id = "QA-U22"
+question = "What does the Kano model say about customer satisfaction?"
+key_terms = ["kano"]
+# Nearby: user stories and acceptance criteria (4.5).
+
+[[cases]]
+id = "QA-U23"
+question = "How do I configure JaCoCo to report code coverage?"
+key_terms = ["jacoco"]
+# Nearby: coverage (4.3).
+
+[[cases]]
+id = "QA-U24"
+question = "Which WCAG success criteria apply to color contrast?"
+key_terms = ["wcag"]
+# Nearby: usability and accessibility as quality characteristics (2.2.2).
+
+[[cases]]
+id = "QA-U25"
+question = "How are the DMAIC phases of Six Sigma applied to testing?"
+key_terms = ["dmaic", "six sigma"]
+# Nearby: process improvement (2.1.6).
+
+[[cases]]
+id = "QA-U26"
+question = "How is a Monte Carlo simulation used to estimate a release date?"
+key_terms = ["monte carlo"]
+# Nearby: estimation techniques (5.1.4).
+
+[[cases]]
+id = "QA-U27"
+question = "How do I write a Dockerfile for a test environment?"
+key_terms = ["dockerfile", "docker"]
+# Nearby: test environments in test implementation (1.4.1).
+
+[[cases]]
+id = "QA-U28"
+question = "What does the single responsibility principle of SOLID say?"
+key_terms = ["solid principle", "single responsibility"]
+# Nearby: testing principles (1.3).
+
+[[cases]]
+id = "QA-U29"
+question = "How do I tag scenarios in SpecFlow?"
+key_terms = ["specflow"]
+# Nearby: behavior-driven development (2.1.3) and acceptance criteria in Given/When/Then form (4.5.2).
+
+[[cases]]
+id = "QA-U30"
+question = "How do I write a load test script in k6?"
+key_terms = ["k6", "load test script"]
+# Nearby: performance efficiency (2.2.2).

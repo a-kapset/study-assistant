@@ -37,7 +37,7 @@ evaluation-harness/
 ├── src/evalharness/
 │   ├── settings.py         # where the system under test is (EVAL_*), and the values shared with the stack's .env
 │   ├── corpus_db.py        # direct reads of the app's stored corpus, as the read-only database role
-│   ├── datasets/           # the retrieval gold set (built from a local question bank) and the Q&A set file
+│   ├── datasets/           # the retrieval gold set (built from a local question bank), the Q&A set file and its check
 │   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run
 │   ├── evaluation/         # the retrieval run and the answer run: checks, requests, run records, commands
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
@@ -160,14 +160,31 @@ answer; an answer to one of them is a blocker. The answer text itself is not sco
 section), how the others were declined, the cost, and the results against the targets in the set's file, each
 share with its 95 % interval and judged by it, like the retrieval target. The metrics: [METRICS.md](METRICS.md).
 
-The set is committed (`datasets/<course>/qa_v0.toml`): its questions are written for it, not taken from course
-material. Run it on the stack started with the LLM proxy, serving that course. The replies quote course passages,
+The set is committed (`datasets/<course>/qa_v1.toml`; `qa_v0.toml` is the first, smaller set): its questions
+are written for it, not taken from course material. Each question lists its key terms; before a set is used,
+check it against the stored course, which needs the stack but asks no question:
+
+```powershell
+poetry run python -m evalharness.datasets.check_qa_set datasets/istqb_ctfl/qa_v1.toml
+```
+
+It fails when a term of an answerable question is missing from its gold section, or a term of an unanswerable
+question occurs anywhere in the course.
+
+Run the set on the stack started with the LLM proxy, serving that course. The replies quote course passages,
 so for a course whose material is not committed set `EVAL_PROXY_CASSETTES=./evaluation-harness/cassettes_local`
 in the root `.env`; record once with `EVAL_PROXY_MODE=record` (paid), then run in `replay` for free.
 
 ```powershell
-poetry run python -m evalharness.evaluation.answer_run datasets/istqb_ctfl/qa_v0.toml
+poetry run python -m evalharness.evaluation.answer_run datasets/istqb_ctfl/qa_v1.toml
+poetry run python -m evalharness.evaluation.answer_run datasets/istqb_ctfl/qa_v1.toml --reps 3
 ```
+
+`--reps n` asks every question n times. Each repetition carries its number in the request id (`<id>.rep2`), the
+app passes the id on, and the proxy keeps a recording per repetition, so the model answers each one anew; the
+first repetition uses the recordings of a run without `--reps`. Every repetition gets its own results and target
+verdicts, followed by the flip rate: the share of questions whose verdict was not the same in all repetitions,
+with the list of those questions.
 
 A run is refused before the first question, with exit code 2, when a gold section is not a section of the stored
 course. A completed run exits with 0, whatever its numbers. A question that got no answer at all (for example a

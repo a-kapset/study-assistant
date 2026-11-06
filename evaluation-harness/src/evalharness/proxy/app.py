@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from evalharness.proxy.cassettes import Cassette, CassetteStore
-from evalharness.proxy.keys import request_key
+from evalharness.proxy.keys import repetition_of, request_key
 from evalharness.proxy.ledger import Ledger, LedgerLine, Source
 from evalharness.proxy.prices import call_cost, load_prices
 from evalharness.proxy.surfaces import openai_responses as surface
@@ -89,8 +89,9 @@ def build_proxy(settings: ProxySettings, transport: httpx2.AsyncBaseTransport | 
         """Answer one model call from a recording, or from the provider when the mode allows it."""
         started = time.perf_counter()
         body = await request.body()
-        key = request_key(surface.SURFACE, body)
-        call = _Call(request.headers.get("X-Request-ID"), key, surface.requested_model(body), started)
+        request_id = request.headers.get("X-Request-ID")
+        key = request_key(surface.SURFACE, body, repetition_of(request_id))
+        call = _Call(request_id, key, surface.requested_model(body), started)
         cassette = store.find(key)
         if cassette is not None:
             return successful_reply(call, "cassette", cassette.body)

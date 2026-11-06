@@ -37,6 +37,9 @@ class QaCase(_Strict):
     question: str = Field(min_length=1)
     # The section that answers the question; a citation of it or of one of its subsections counts.
     gold_section: str | None = None
+    # Words the question turns on. For an answerable question each one occurs in a passage of the gold section; for
+    # an unanswerable one none occurs in any passage of the course. Read only by the set's check command.
+    key_terms: tuple[str, ...] = ()
 
 
 class QaSet(_Strict):

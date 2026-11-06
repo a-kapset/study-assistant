@@ -57,9 +57,13 @@ class SutTransport:
         *,
         json: JsonValue | None = None,
         headers: Mapping[str, str] | None = None,
+        request_id_suffix: str = "",
     ) -> Observation:
-        """Send one request and record what happened; never raises for an outcome of the exchange."""
-        request_id = uuid.uuid4().hex
+        """Send one request and record what happened; never raises for an outcome of the exchange.
+
+        ``request_id_suffix`` is appended to the new request id; a repeated answer run marks its repetition there.
+        """
+        request_id = uuid.uuid4().hex + request_id_suffix
         request = self._client.build_request(
             method, path, json=json, headers={**(headers or {}), REQUEST_ID_HEADER: request_id}
         )

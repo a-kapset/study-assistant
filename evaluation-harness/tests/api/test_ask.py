@@ -153,6 +153,34 @@ async def test_a_recorded_question_is_answered_from_the_recording(sut: SutTransp
     assert [citation["chunk_id"] for citation in citations] == [RECORDED_CITATION], f"wrong passage cited: {citations}"
 
 
+@pytest.mark.covers("US-010", "AC-9")
+async def test_a_repetition_mark_reaches_the_proxy_through_the_app(
+    sut: SutTransport, settings: HarnessSettings
+) -> None:
+    """Asks the recorded demo question again as the second repetition, the way a repeated answer run marks it.
+
+    What it checks: the proxy gets the request id with its mark unchanged and treats the call as a new one: the
+    ledger has one miss for this request, with "-rep2" at the end of its key, and the app answers with its 502.
+    What a result tells: a pass means the app accepts the marked id, keeps it for its model call and the proxy reads
+    the mark, so a repeated run on this stack makes the model answer every repetition anew. A line served from the
+    recording means the mark was lost on the way: the app replaced or changed the id, and every repetition would
+    get the first answer again. No line means the id did not reach the proxy at all.
+    Why it is worth having: the unit tests of the runner and the proxy use a fake app that passes the id on by
+    construction; only the real app shows that it does, at no cost: a replayed stack has no recording of a second
+    repetition.
+    """
+    await _require_the_proxy(sut)
+
+    observation = await sut.request(
+        "POST", "/v1/ask", json={"course_id": "demo", "question": ON_TOPIC_QUESTION}, request_id_suffix=".rep2"
+    )
+
+    lines = _ledger_lines(settings, observation.request_id)
+    seen = [(line.source, line.key.endswith("-rep2")) for line in lines]
+    assert seen == [("miss", True)], f"the second repetition did not reach the proxy as a new call: {lines}"
+    assert observation.status_code == 502, f"expected the failed answer of a miss: {observation.body_text}"
+
+
 @pytest.mark.covers("US-009", "AC-4")
 async def test_an_instruction_inside_a_passage_is_not_followed(sut: SutTransport, settings: HarnessSettings) -> None:
     """Asks a plain question whose answer sits in a passage that also tells the model to say all crossings are off.

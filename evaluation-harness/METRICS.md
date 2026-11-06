@@ -457,6 +457,35 @@ where
 if any is not confirmed, else "met". The unsupported answers are printed with the Wilson interval of their share
 of $U$: no unsupported answer among 10 unanswerable questions still allows a true share of up to 0.28.
 
+### Repetitions and the flip rate
+
+The answer model samples its reply, so the same question with the same passages may get another verdict when it
+is asked again. A run with `--reps n` asks every question $n$ times (search once: it does not sample). Each
+**repetition** $r = 1, \dots, n$ gets its own $\alpha$, $\gamma$, $u$, validity and target verdicts, computed as
+above over the verdicts $v_{q,r}$ of that repetition; they are not added up, so one repetition's luck stays
+visible.
+
+**Flip rate**, $\phi$ — the share of questions whose verdict was not the same in every repetition:
+
+```math
+\phi = \frac{1}{|Q^{*}|} \sum_{q \in Q^{*}} \mathbf{1}\bigl[\, |\{ v_{q,1}, \dots, v_{q,n} \}| > 1 \,\bigr]
+```
+
+where
+
+- $Q^{*}$ — the questions of the set, answerable and unanswerable, with no `failed` verdict in any repetition (a
+  failed repetition measured nothing about the answer); $|Q^{*}|$ — their number;
+- $v_{q,r}$ — the verdict of question $q$ in repetition $r$;
+- $\{ v_{q,1}, \dots, v_{q,n} \}$ — the different verdicts question $q$ got; more than one means it flipped;
+- $n$ — the number of repetitions;
+- $\mathbf{1}[\dots]$ — 1 when the condition in the brackets is true, otherwise 0.
+
+Every change of verdict counts, also between `cited_gold` and `cited_other` (the answer was given each time, but
+its support changed). $\phi$ is printed with its Wilson interval and the list of flipped questions with their
+verdicts in order; it has no target. It says how much of a single run is chance: a difference between two
+versions smaller than what the same version shows between its own repetitions is not evidence of a change. A
+flipped question is a borderline case, the first place to look.
+
 ## Comparison of two runs
 
 Code: [`src/evalharness/stats/paired.py`](src/evalharness/stats/paired.py),
@@ -561,6 +590,10 @@ it stands. Read together, by their intervals:
   $\mathrm{RR}_q > 0$ to MRR, so an MRR that does not rise with it means questions found before moved down.
 
 ## Changes
+
+- **2026-11-06 — answer runs may repeat every question.** An answer record holds the repetition of every case and
+  one summary per repetition; the flip rate $\phi$ is new. A run without `--reps` is one repetition and reports as
+  before.
 
 - **2026-11-05 — target verdicts read the interval.** Before, a share met its target when the measured value
   reached it ($R \ge \tau$; $\alpha \ge \alpha_{\min}$, $\gamma \ge \gamma_{\min}$), with only "met" and "below".

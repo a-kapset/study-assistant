@@ -1,12 +1,12 @@
-"""Exact scores of the answers to a Q&A set: did the app answer or decline, did it cite the gold section, and at
-which stage a case went wrong.
+"""Exact scores of the answers to a Q&A set: did the app answer or decline, did it cite the gold section, at which
+stage a case went wrong, and which questions changed their verdict when asked again.
 
 Only facts of the response are scored; whether the answer text is right needs a judge and is not scored here. A
 case whose ask failed is counted apart and left out of every share: it measured nothing about the answer.
 """
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from statistics import fmean
 from typing import Literal
 
@@ -84,6 +84,17 @@ def _verdict(gold_section: str | None, reply: AskReply | None) -> AnswerVerdict:
         return "answered_unsupported"
     cited = any(is_relevant(section, gold_section) for section in reply.cited_sections)
     return "cited_gold" if cited else "cited_other"
+
+
+def flipped_cases(verdicts: Mapping[str, Sequence[AnswerVerdict]]) -> tuple[int, list[str]]:
+    """Find the questions whose verdict was not the same in every repetition.
+
+    ``verdicts`` maps each case id to its verdicts, one per repetition. A question that failed in some repetition is
+    left out: that repetition measured nothing about the answer. Returns the number of questions counted and the ids
+    of those that flipped, sorted.
+    """
+    counted = {case_id: set(seen) for case_id, seen in verdicts.items() if "failed" not in seen}
+    return len(counted), sorted(case_id for case_id, seen in counted.items() if len(seen) > 1)
 
 
 def summarise(gold_sections: Sequence[str | None], scores: Sequence[AnswerCaseScore]) -> AnswerSummary:

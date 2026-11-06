@@ -1,5 +1,5 @@
-"""The record of one answer run over a Q&A set: what every question got from the app, how it scored, and the
-values needed to decide later whether two runs may be compared.
+"""The record of one answer run over a Q&A set: what every question got from the app in each repetition, how it
+scored, and the values needed to decide later whether two runs may be compared.
 
 It holds no question or answer text: answers quote the course, and a case id is enough to find its question in the
 set's file. Answer records go to their own folder, apart from the retrieval records the retrieval runner counts.
@@ -21,9 +21,12 @@ class _Strict(BaseModel):
 
 
 class AnswerCaseRecord(_Strict):
-    """One question: what search found for it, what the app answered, which model calls that took, and the score."""
+    """One question in one repetition: what search found for it, what the app answered, which model calls that
+    took, and the score."""
 
     case_id: str
+    # Counted from 1; a run without repetitions has only the first.
+    repetition: int
     # None for a question the course does not answer.
     gold_section: str | None
     # The same ids are in the app's log lines and, for the ask, in the proxy's ledger.
@@ -61,7 +64,10 @@ class AnswerRunRecord(_Strict):
     corpus_snapshot: str
     # The model versions the provider reported answering with, from the ledger; empty when no model was called.
     models_returned: tuple[str, ...]
-    summary: AnswerSummary
+    # How many times every question was asked; runs asked a different number of times are not compared directly.
+    repetitions: int
+    # One per repetition, in order.
+    summaries: tuple[AnswerSummary, ...]
     cases: tuple[AnswerCaseRecord, ...]
 
 
