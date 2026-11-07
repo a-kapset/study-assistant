@@ -232,7 +232,7 @@ where
 - $q_j^{(b)}$ — the $j$-th question of resample $b$, drawn with replacement from the $n$ questions;
 - $B$ — 9 999 resamples, with a fixed seed, so the same record always prints the same interval;
 - $\overline{\mathrm{RR}}^{(b)}$ — the mean reciprocal rank recomputed on resample $b$;
-- $\mathrm{BCa}_{95\%}$ — the range that holds the middle 95 % of the $B$ values, with percentiles corrected for
+- $`\mathrm{BCa}_{95\%}`$ — the range that holds the middle 95 % of the $B$ values, with percentiles corrected for
   bias and skew (bias-corrected and accelerated, scipy's default method).
 
 There is no interval when $n < 2$ or every $\mathrm{RR}_q$ is the same: resampling cannot change the mean then.
@@ -473,10 +473,10 @@ visible.
 
 where
 
-- $Q^{*}$ — the questions of the set, answerable and unanswerable, with no `failed` verdict in any repetition (a
-  failed repetition measured nothing about the answer); $|Q^{*}|$ — their number;
+- $`Q^{*}`$ — the questions of the set, answerable and unanswerable, with no `failed` verdict in any repetition (a
+  failed repetition measured nothing about the answer); $`|Q^{*}|`$ — their number;
 - $v_{q,r}$ — the verdict of question $q$ in repetition $r$;
-- $\{ v_{q,1}, \dots, v_{q,n} \}$ — the different verdicts question $q$ got; more than one means it flipped;
+- $`\{ v_{q,1}, \dots, v_{q,n} \}`$ — the different verdicts question $q$ got; more than one means it flipped;
 - $n$ — the number of repetitions;
 - $\mathbf{1}[\dots]$ — 1 when the condition in the brackets is true, otherwise 0.
 
@@ -527,7 +527,7 @@ where
 - $q_j^{(b)}$ — the $j$-th question of resample $b$, drawn with replacement from the $n$ questions;
 - $B$ — 9 999 resamples, with a fixed seed, so the same two records always give the same interval;
 - $\Delta^{(b)}$ — the change recomputed on resample $b$;
-- $\mathrm{BCa}_{95\%}$ — the middle 95 % of the $B$ values, as for the bootstrap interval of a mean above;
+- $`\mathrm{BCa}_{95\%}`$ — the middle 95 % of the $B$ values, as for the bootstrap interval of a mean above;
 - $\ell_\Delta$, $h_\Delta$ — the lower and upper end of that range.
 
 There is no interval when every $d_q$ is the same (in practice: no question changed).
@@ -694,7 +694,7 @@ as invalid with the number of such pairs.
 (code: [`src/evalharness/evaluation/calibrate_overlap.py`](src/evalharness/evaluation/calibrate_overlap.py)):
 
 ```math
-\omega = rac{\minig(\max_{(a,b) \in N} |C_a \cap C_b| + 1,\ kig)}{k}
+\omega = \frac{\min\big(\max_{(a,b) \in N} |C_a \cap C_b| + 1,\ k\big)}{k}
 ```
 
 where
