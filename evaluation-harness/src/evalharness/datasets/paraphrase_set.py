@@ -43,6 +43,16 @@ class _PairLine(_Strict):
     paraphrase: str = Field(min_length=1)
 
 
+class ClearedText(_Strict):
+    """A text the held-out check listed that a reading found to ask something else than the held-out question."""
+
+    # As the check names it, e.g. "QA-38 question" or "QA-38 rewording".
+    text: str = Field(min_length=1)
+    held_out_id: str = Field(min_length=1)
+    # Why the two ask different things, for the next reader of the check's output.
+    reason: str = Field(min_length=1)
+
+
 class _SetFile(_Strict):
     """The file as written: its course, its Q&A set, the rules and the pairs."""
 
@@ -50,6 +60,7 @@ class _SetFile(_Strict):
     # Next to the pair file.
     qa_file: str = Field(min_length=1)
     relations: RelationRules
+    cleared: tuple[ClearedText, ...] = ()
     pairs: tuple[_PairLine, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -79,6 +90,8 @@ class ParaphraseSet(_Strict):
     course_id: str
     rules: RelationRules
     pairs: tuple[ParaphrasePair, ...]
+    # Read by the held-out check only.
+    cleared: tuple[ClearedText, ...] = ()
     # The hash of the pair file and its Q&A set file together: two runs with the same value searched the same texts.
     sha256: str
 
@@ -97,7 +110,7 @@ def load_paraphrase_set(path: Path) -> ParaphraseSet:
         raise ValueError(f"the pairs are for {raw.course_id!r}, the Q&A set {raw.qa_file} for {qa.course_id!r}")
     pairs = tuple(_pair(line, qa) for line in raw.pairs)
     digest = hashlib.sha256(content + b"\0" + qa_path.read_bytes()).hexdigest()
-    return ParaphraseSet(course_id=raw.course_id, rules=raw.relations, pairs=pairs, sha256=digest)
+    return ParaphraseSet(course_id=raw.course_id, rules=raw.relations, pairs=pairs, cleared=raw.cleared, sha256=digest)
 
 
 def _pair(line: _PairLine, qa: QaSet) -> ParaphrasePair:

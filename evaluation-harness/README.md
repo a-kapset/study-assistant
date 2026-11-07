@@ -205,10 +205,15 @@ where no single right output exists. The relations, their transformations and th
 The paraphrase relation searches every answerable question of a Q&A set and its rewording without the question's
 key terms (`datasets/<course>/paraphrase_v0.toml`). A pair whose rewording still contains a key term, or whose
 question is unknown or unanswerable, is refused when the file is read. Before the pairs are used, check that none
-copies a held-out question of the local question bank; it needs the bank, not the stack:
+asks what a held-out question of the local question bank asks. The check compares meaning: it embeds every text
+with the stack's embedding server (published on this machine at `EMBEDDER_PUBLISHED_PORT`) and flags a text closer
+to a held-out question than any two questions of the set from different chapters; a flagged pair is read and, when
+it asks the same thing, left out of the pair file. The overlap a pair needs to count as stable is calibrated on
+searches with known answers (unchanged questions, different questions of one chapter):
 
 ```powershell
 poetry run python -m evalharness.datasets.check_paraphrases datasets/istqb_ctfl/paraphrase_v0.toml datasets/istqb_ctfl/retrieval_gold_v0.toml
+poetry run python -m evalharness.evaluation.calibrate_overlap datasets/istqb_ctfl/paraphrase_v0.toml
 poetry run python -m evalharness.evaluation.paraphrase_run datasets/istqb_ctfl/paraphrase_v0.toml
 ```
 

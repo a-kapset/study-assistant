@@ -91,6 +91,10 @@ class StackSettings(BaseSettings):
     # of the .env file (the repository root), as Docker Compose reads it.
     local_course_id: str
     local_course_sources: Path
+    # The stack's embedding server as published on this machine, and the text the app puts before every question:
+    # the held-out check embeds questions with the same model and the same prefix as the app's search.
+    embedder_published_port: int = Field(ge=1, le=65535)
+    app_embedding__query_prefix: str
 
 
 def load_stack_settings(env_file: Path) -> StackSettings:

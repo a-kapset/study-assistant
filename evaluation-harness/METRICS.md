@@ -676,7 +676,8 @@ where
 
 - $n$ — the pairs with no failed search;
 - $O_p$ — the overlap of pair $p$;
-- $\omega$ — the part of the $k$ passages a stable pair must share (`[relations] min_overlap`, 0.6: 3 of 5);
+- $\omega$ — the part of the $k$ passages a stable pair must share (`[relations] min_overlap`, 0.4: 2 of 5,
+  calibrated as below);
 - $\mathbf{1}[\dots]$ — 1 when the condition in the brackets is true, otherwise 0;
 - $n\sigma$ — the number of stable pairs;
 - $\sigma_{\min}$ — the share of stable pairs the search must reach (`[relations] stable_share_min`, 0.7);
@@ -689,6 +690,47 @@ return the same two passages would have $O_p = 0.4$ and look unstable for a reas
 **Validity.** A run with a failed search in a pass gives that pass no verdict for either relation; it is printed
 as invalid with the number of such pairs.
 
+**Calibrated overlap**, $\omega$ — read from searches with known answers, made like the diagnostic pass
+(code: [`src/evalharness/evaluation/calibrate_overlap.py`](src/evalharness/evaluation/calibrate_overlap.py)):
+
+```math
+\omega = rac{\minig(\max_{(a,b) \in N} |C_a \cap C_b| + 1,\ kig)}{k}
+```
+
+where
+
+- $N$ — the pairs of different questions on a nearby topic: each question $a$ of the set with the next question
+  $b$ (going round) from the same chapter and another section;
+- $C_a$, $C_b$ — the sets of chunk ids returned for $a$ and for $b$;
+- $|C_a \cap C_b|$ — the passages the two different questions share by topic alone;
+- $k$ — the number of hits the app returns (5).
+
+So $\omega$ is the smallest overlap no pair of different questions reached. The command also prints how many
+questions reach it against their unchanged form (lower case, no punctuation), which shows whether a change that
+keeps the meaning can still count as stable. On the first course: max over $N$ = 1, so $\omega = 2/5 = 0.4$; all 76
+unchanged questions reach it (the same on the first 82 pairs).
+
+**Held-out check line**, $\lambda$ — a text of the pair set is flagged as asking what a held-out question asks when
+its similarity to it is above
+(code: [`src/evalharness/datasets/check_paraphrases.py`](src/evalharness/datasets/check_paraphrases.py)):
+
+```math
+\lambda = \max_{\substack{a, b \in Q \ \mathrm{ch}(a)
+e \mathrm{ch}(b)}} \cos(e_a, e_b)
+```
+
+where
+
+- $Q$ — the questions of the pair set;
+- $\mathrm{ch}(a)$ — the chapter of the gold section of question $a$; questions of different chapters ask
+  different things;
+- $e_a$ — the vector of $a$ from the stack's embedding model, with the app's question prefix;
+- $\cos(e_a, e_b)$ — the cosine similarity of two vectors (their dot product, as the server returns them with
+  length 1).
+
+A text $t$ is flagged for a held-out question $d$ when $\cos(e_t, e_d) > \lambda$: it is closer to $d$ than any two
+different questions are to each other. On the first course $\lambda = 0.929$.
+
 **Slices.** Every count is also given for the pairs whose question contained a key term (the rewording removed
 it) and for the pairs whose question did not.
 
@@ -696,6 +738,9 @@ it) and for the pairs whose question did not.
 
 - **2026-11-07 — metamorphic relations on search.** New: the outcome $o_p$ and overlap $O_p$ of a pair, and the
   relations R1 (answer kept) and R2 (top k stable). Nothing earlier changed.
+- **2026-11-07 — calibrated overlap and the held-out line.** $\omega$ changed from 0.6 (chosen by judgement) to
+  0.4 (calibrated); the held-out check moved from shared four-word sequences (share 0.5) to the line $\lambda$ of
+  similarity by meaning, because it missed held-out questions retold in other words.
 
 - **2026-11-06 — answer runs may repeat every question.** An answer record holds the repetition of every case and
   one summary per repetition; the flip rate $\phi$ is new. A run without `--reps` is one repetition and reports as

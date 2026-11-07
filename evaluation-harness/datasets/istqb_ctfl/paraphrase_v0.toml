@@ -9,6 +9,10 @@
 #     poetry run python -m evalharness.evaluation.paraphrase_run datasets/istqb_ctfl/paraphrase_v0.toml
 #
 # The rewordings were written before the first run and not changed by looking at search results.
+#
+# Six questions are left out: the held-out check (by meaning) found that they ask what a held-out question of the
+# bank asks, and a reading confirmed it (2026-11-07): QA-13 (D-27), QA-20 (D-40), QA-21 (D-1), QA-39 (D-9),
+# QA-75 (D-33), QA-76 (D-35). They stay in the Q&A set, which tunes nothing.
 
 course_id = "istqb_ctfl"
 # The Q&A set the pairs come from, next to this file; a pair names its question by the case id.
@@ -18,14 +22,26 @@ qa_file = "qa_v1.toml"
 [relations]
 # Answer kept: the change of recall from the questions to their rewordings, judged by its 95 % interval. A change
 # smaller than this is not worth acting on: the same value as for two retrieval runs of the course, about 4 of the
-# 82 pairs.
+# 76 pairs.
 min_meaningful_change = 0.05
-# Top-k stable: a pair counts as stable when its two searches share at least this part of their k passages
-# (3 of 5). The answer step reads these passages, so with fewer than 3 shared most of what it reads changes.
-min_overlap = 0.6
+# Top-k stable: a pair counts as stable when its two searches share at least this part of their k passages.
+# Calibrated on 2026-11-07 with
+#     poetry run python -m evalharness.evaluation.calibrate_overlap datasets/istqb_ctfl/paraphrase_v0.toml
+# 75 pairs of different questions from the same chapter shared 0 passages (73) or 1 (2), never 2; 76 questions
+# against themselves in lower case without punctuation shared 2 (2), 3 (18), 4 (39) or 5 (17). So 2 of 5 is more
+# than topic alone gives, and every change that keeps the meaning reaches it (the same on the first 82 pairs). Before the calibration the value was
+# 0.6 (3 of 5), chosen by judgement; the first runs were judged by it.
+min_overlap = 0.4
 # Share of stable pairs the search must reach, judged by the lower end of its interval. Rewording without the term
 # is a hard change, so most pairs, not all, are expected to stay stable.
 stable_share_min = 0.7
+
+# Texts the held-out check lists that a reading found to ask something else; the check prints them apart and does
+# not fail on them.
+[[cleared]]
+text = "QA-38 question"
+held_out_id = "D-9"
+reason = "how the lifecycle model changes testing, not which practices fit every lifecycle"
 
 [[pairs]]
 id = "QA-01"
@@ -76,10 +92,6 @@ id = "QA-12"
 paraphrase = "How is measuring which lines of code ran different from measuring which decision outcomes ran?"
 
 [[pairs]]
-id = "QA-13"
-paraphrase = "What is testing where you design and run tests at the same time while learning the product, and when does it help?"
-
-[[pairs]]
 id = "QA-14"
 paraphrase = "How can the conditions a user story must meet before it is accepted be written down?"
 
@@ -102,14 +114,6 @@ paraphrase = "What numbers can be tracked to see how testing is going?"
 [[pairs]]
 id = "QA-19"
 paraphrase = "What should I write down when I log a bug I found?"
-
-[[pairs]]
-id = "QA-20"
-paraphrase = "What can go wrong when a team starts using tools to run its tests?"
-
-[[pairs]]
-id = "QA-21"
-paraphrase = "What do we usually want to achieve by testing?"
 
 [[pairs]]
 id = "QA-22"
@@ -178,10 +182,6 @@ paraphrase = "What are the pros and cons of having testers who are separate from
 [[pairs]]
 id = "QA-38"
 paraphrase = "How does the way a team organises development, all phases in order or in short cycles, change testing?"
-
-[[pairs]]
-id = "QA-39"
-paraphrase = "Which testing habits are worth keeping whatever development model a team uses?"
 
 [[pairs]]
 id = "QA-40"
@@ -322,14 +322,6 @@ paraphrase = "How can we work out how much testing work will be needed?"
 [[pairs]]
 id = "QA-74"
 paraphrase = "In what order should test cases be run, and how is that decided?"
-
-[[pairs]]
-id = "QA-75"
-paraphrase = "What is the model that sorts tests into four groups by business or technology focus?"
-
-[[pairs]]
-id = "QA-76"
-paraphrase = "How do threats to the project itself differ from threats to the quality of the software?"
 
 [[pairs]]
 id = "QA-77"
