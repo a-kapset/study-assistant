@@ -589,7 +589,113 @@ it stands. Read together, by their intervals:
 - **Recall better, MRR interval includes zero or lies below it:** a newly found question adds its
   $\mathrm{RR}_q > 0$ to MRR, so an MRR that does not rise with it means questions found before moved down.
 
+## Metamorphic relations on search
+
+Code: [`src/evalharness/relations/paraphrase.py`](src/evalharness/relations/paraphrase.py),
+[`src/evalharness/evaluation/paraphrase_run.py`](src/evalharness/evaluation/paraphrase_run.py). What the relations
+are, why, and their results: [RELATIONS.md](RELATIONS.md).
+
+A pair is a question $q$ of a Q&A set and its rewording $q'$ without the question's key terms; both have the gold
+section of $q$. Both are searched in two passes, as in a retrieval run: primary (the app's own $k$ and lowest score)
+and diagnostic (the same $k$, no lowest score). Each search is scored like a retrieval question (see Per question
+above): `hit` when a passage of the gold section is among the first $k$.
+
+**Outcome of a pair**, $o_p$ — from the verdicts of its two searches in one pass:
+
+```math
+o_p =
+\begin{cases}
+\text{failed} & \text{if either search of } p \text{ failed} \\
+\text{kept} & \text{if } h_q = 1 \text{ and } h_{q'} = 1 \\
+\text{lost} & \text{if } h_q = 1 \text{ and } h_{q'} = 0 \\
+\text{gained} & \text{if } h_q = 0 \text{ and } h_{q'} = 1 \\
+\text{neither} & \text{if } h_q = 0 \text{ and } h_{q'} = 0
+\end{cases}
+```
+
+where
+
+- $p$ — one pair, made of the question $q$ and its rewording $q'$;
+- $h_q$, $h_{q'}$ — 1 when the search of $q$ (of $q'$) is a `hit`, 0 when it is a `miss` or `empty`.
+
+**Overlap of a pair**, $O_p$ — the share of the $k$ places taken by passages both searches returned:
+
+```math
+O_p = \frac{|C_q \cap C_{q'}|}{k}
+```
+
+where
+
+- $C_q$, $C_{q'}$ — the sets of chunk ids returned for $q$ and for $q'$; order does not count, because the answer
+  step reads all of them;
+- $k$ — the number of hits the app returns (5), the same for both searches;
+- $|C_q \cap C_{q'}|$ — the number of passages found by both. Not defined when a search failed.
+
+**Relation R1, answer kept** — judged on the primary pass by the change of recall from the questions to their
+rewordings, which is the change $\Delta$ of [Comparison of two runs](#comparison-of-two-runs) with "before" = the
+questions and "after" = the rewordings:
+
+```math
+\Delta = \frac{1}{n} \sum_{p=1}^{n} \big(h_{q'} - h_q\big) = \frac{g - l}{n}
+```
+
+where
+
+- $n$ — the pairs with no failed search;
+- $h_q$, $h_{q'}$ — as in the outcome above;
+- $g$ — the pairs `gained`, $l$ — the pairs `lost`.
+
+$\Delta$ gets its bootstrap interval $[\ell_\Delta, h_\Delta]$, McNemar's exact $p$ on $g$ and $l$, and the verdict
+$W(\Delta)$ with the smallest meaningful change $\delta$ from the pair file (`[relations] min_meaningful_change`,
+0.05), all as defined there. The relation reads it as:
+
+```math
+R_1 =
+\begin{cases}
+\text{holds} & \text{if } W(\Delta) \in \{\text{unchanged},\ \text{no meaningful change},\ \text{better}\} \\
+\text{violated} & \text{if } W(\Delta) = \text{worse} \\
+\text{not confirmed} & \text{if } W(\Delta) = \text{underpowered}
+\end{cases}
+```
+
+where
+
+- $W(\Delta)$ — the verdict of a change, read from the two ends of its interval;
+- "better" counts as holding: rewordings that find more answers do not break the relation.
+
+The same $\Delta$ is printed for the diagnostic pass; the difference between the two passes is the share of losses
+the lowest score causes.
+
+**Relation R2, top k stable** — judged on the diagnostic pass by the share of stable pairs:
+
+```math
+\sigma = \frac{1}{n} \sum_{p=1}^{n} \mathbf{1}\big[\, O_p \ge \omega \,\big], \qquad R_2 = V(n\sigma,\ n,\ \sigma_{\min})
+```
+
+where
+
+- $n$ — the pairs with no failed search;
+- $O_p$ — the overlap of pair $p$;
+- $\omega$ — the part of the $k$ passages a stable pair must share (`[relations] min_overlap`, 0.6: 3 of 5);
+- $\mathbf{1}[\dots]$ — 1 when the condition in the brackets is true, otherwise 0;
+- $n\sigma$ — the number of stable pairs;
+- $\sigma_{\min}$ — the share of stable pairs the search must reach (`[relations] stable_share_min`, 0.7);
+- $V$ — the target verdict of a share by its Wilson interval (see Intervals above), read as holds (met), not
+  confirmed, violated (below).
+
+The diagnostic pass is used because the lowest score cuts the two lists to different lengths: two searches that
+return the same two passages would have $O_p = 0.4$ and look unstable for a reason that R1 already shows.
+
+**Validity.** A run with a failed search in a pass gives that pass no verdict for either relation; it is printed
+as invalid with the number of such pairs.
+
+**Slices.** Every count is also given for the pairs whose question contained a key term (the rewording removed
+it) and for the pairs whose question did not.
+
 ## Changes
+
+- **2026-11-07 — metamorphic relations on search.** New: the outcome $o_p$ and overlap $O_p$ of a pair, and the
+  relations R1 (answer kept) and R2 (top k stable). Nothing earlier changed.
 
 - **2026-11-06 — answer runs may repeat every question.** An answer record holds the repetition of every case and
   one summary per repetition; the flip rate $\phi$ is new. A run without `--reps` is one repetition and reports as

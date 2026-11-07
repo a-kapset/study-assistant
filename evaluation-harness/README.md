@@ -5,6 +5,7 @@ exchange as an observation, so a failed request is data for a test, never an exc
 
 How checks are split between the app's own tests and the harness: [TESTING.md](../TESTING.md).
 How every metric the harness reports is computed and how to read the metrics together: [METRICS.md](METRICS.md).
+Which metamorphic relations are checked, what they change and what they found: [RELATIONS.md](RELATIONS.md).
 
 > **Status: work in progress.** Both the app and the evaluation harness are under active development;
 > the READMEs of each part describe what already works.
@@ -29,7 +30,8 @@ evaluation-harness/
 ├── pyproject.toml          # project metadata, dependencies, ruff / mypy / pytest config
 ├── poetry.lock
 ├── METRICS.md              # the formula and meaning of every metric the harness reports
-├── datasets/               # per course: retrieval gold set declarations (questions stay local) and Q&A sets
+├── RELATIONS.md            # the metamorphic relations: transformation, relation type, results
+├── datasets/               # per course: retrieval gold set declarations (questions stay local), Q&A sets, paraphrase pairs
 ├── runs/                   # the proxy's ledger and, per kind of run, its records, e.g. runs/retrieval/ (not committed)
 ├── cassettes/              # recorded replies of invented courses (committed)
 ├── Dockerfile              # the image of the LLM proxy
@@ -37,9 +39,11 @@ evaluation-harness/
 ├── src/evalharness/
 │   ├── settings.py         # where the system under test is (EVAL_*), and the values shared with the stack's .env
 │   ├── corpus_db.py        # direct reads of the app's stored corpus, as the read-only database role
-│   ├── datasets/           # the retrieval gold set (built from a local question bank), the Q&A set file and its check
+│   ├── datasets/           # the retrieval gold set (built from a local question bank), the Q&A set and paraphrase
+│   │                       #   pair files and their checks
 │   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run
-│   ├── evaluation/         # the retrieval run and the answer run: checks, requests, run records, commands
+│   ├── evaluation/         # the retrieval, answer and paraphrase runs: checks, requests, run records, commands
+│   ├── relations/          # metamorphic relations: how a pair of inputs is scored and a relation judged
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices; one module per provider API in surfaces/
 │   ├── testdata/           # test data written into the app's stores: created and removed in one place
@@ -191,6 +195,29 @@ course. A completed run exits with 0, whatever its numbers. A question that got 
 recording that no longer matches the request, after a change of the prompt, the passages or the model) makes the
 run invalid: it is reported with the reasons and gets no target verdict; record again and compare.
 
+
+## Metamorphic relations
+
+A relation changes the input in a controlled way and checks that a stated relation between the two outputs holds,
+where no single right output exists. The relations, their transformations and their latest results:
+[RELATIONS.md](RELATIONS.md); the formulas: [METRICS.md](METRICS.md#metamorphic-relations-on-search).
+
+The paraphrase relation searches every answerable question of a Q&A set and its rewording without the question's
+key terms (`datasets/<course>/paraphrase_v0.toml`). A pair whose rewording still contains a key term, or whose
+question is unknown or unanswerable, is refused when the file is read. Before the pairs are used, check that none
+copies a held-out question of the local question bank; it needs the bank, not the stack:
+
+```powershell
+poetry run python -m evalharness.datasets.check_paraphrases datasets/istqb_ctfl/paraphrase_v0.toml datasets/istqb_ctfl/retrieval_gold_v0.toml
+poetry run python -m evalharness.evaluation.paraphrase_run datasets/istqb_ctfl/paraphrase_v0.toml
+```
+
+The run needs the stack serving the course and calls no model. It searches both texts of every pair with the app's
+own settings and again with no lowest score, writes a record to `runs/relations/`, and prints the counts per pass
+and slice, the answer-kept relation (change of recall with its interval, McNemar's p, verdict) for both passes,
+the top-k stable relation on the pass without a lowest score, and the pairs that lost their answer. A run is
+refused, with exit code 2, when a gold section is not a section of the stored course; a completed run exits with 0
+whatever its verdicts.
 
 ## Running the tests
 

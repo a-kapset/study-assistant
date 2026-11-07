@@ -1,0 +1,356 @@
+# Paraphrase pairs v0 of the first course: every answerable question of Q&A set v1, reworded the way a learner asks
+# who does not know the course's term yet. A rewording keeps the meaning and the gold section of its question and
+# leaves out every key term of the question; the run refuses a pair whose rewording still contains one. Like the
+# Q&A set, the rewordings were written for this set and may be public.
+#
+# Check that no question or rewording copies a held-out question of the local question bank:
+#     poetry run python -m evalharness.datasets.check_paraphrases datasets/istqb_ctfl/paraphrase_v0.toml datasets/istqb_ctfl/retrieval_gold_v0.toml
+# Run the relation on the stack with the course ingested:
+#     poetry run python -m evalharness.evaluation.paraphrase_run datasets/istqb_ctfl/paraphrase_v0.toml
+#
+# The rewordings were written before the first run and not changed by looking at search results.
+
+course_id = "istqb_ctfl"
+# The Q&A set the pairs come from, next to this file; a pair names its question by the case id.
+qa_file = "qa_v1.toml"
+
+# How the two relations are judged, fixed before the first run (2026-11-07).
+[relations]
+# Answer kept: the change of recall from the questions to their rewordings, judged by its 95 % interval. A change
+# smaller than this is not worth acting on: the same value as for two retrieval runs of the course, about 4 of the
+# 82 pairs.
+min_meaningful_change = 0.05
+# Top-k stable: a pair counts as stable when its two searches share at least this part of their k passages
+# (3 of 5). The answer step reads these passages, so with fewer than 3 shared most of what it reads changes.
+min_overlap = 0.6
+# Share of stable pairs the search must reach, judged by the lower end of its interval. Rewording without the term
+# is a hard change, so most pairs, not all, are expected to stay stable.
+stable_share_min = 0.7
+
+[[pairs]]
+id = "QA-01"
+paraphrase = "How is checking that we built the product right different from checking that we built the right product?"
+
+[[pairs]]
+id = "QA-02"
+paraphrase = "How do a human mistake, a bug in the code and wrong behaviour seen while the software runs differ, and what is the underlying origin of a problem called?"
+
+[[pairs]]
+id = "QA-03"
+paraphrase = "Why do old tests stop finding new bugs after they have been run many times?"
+
+[[pairs]]
+id = "QA-04"
+paraphrase = "Why link test cases back to the requirements and other documents they were derived from?"
+
+[[pairs]]
+id = "QA-05"
+paraphrase = "What does it mean for a tester when everyone on the team shares responsibility for quality?"
+
+[[pairs]]
+id = "QA-06"
+paraphrase = "What does it mean to start testing earlier in development, and how is that done well?"
+
+[[pairs]]
+id = "QA-07"
+paraphrase = "After a bug fix, how is rechecking the fix different from checking that nothing else broke?"
+
+[[pairs]]
+id = "QA-08"
+paraphrase = "When does a system that is already in use need to be tested again?"
+
+[[pairs]]
+id = "QA-09"
+paraphrase = "Which kinds of bugs are easier to catch by reading documents and code than by running the software?"
+
+[[pairs]]
+id = "QA-10"
+paraphrase = "Who does what in a review meeting?"
+
+[[pairs]]
+id = "QA-11"
+paraphrase = "How do I pick test inputs at the edges of the allowed ranges?"
+
+[[pairs]]
+id = "QA-12"
+paraphrase = "How is measuring which lines of code ran different from measuring which decision outcomes ran?"
+
+[[pairs]]
+id = "QA-13"
+paraphrase = "What is testing where you design and run tests at the same time while learning the product, and when does it help?"
+
+[[pairs]]
+id = "QA-14"
+paraphrase = "How can the conditions a user story must meet before it is accepted be written down?"
+
+[[pairs]]
+id = "QA-15"
+paraphrase = "What are the conditions for starting and for finishing a test activity used for?"
+
+[[pairs]]
+id = "QA-16"
+paraphrase = "What does the layered model with many small fast tests at the bottom and few large ones at the top show?"
+
+[[pairs]]
+id = "QA-17"
+paraphrase = "How do you work out how serious a possible problem in the product is?"
+
+[[pairs]]
+id = "QA-18"
+paraphrase = "What numbers can be tracked to see how testing is going?"
+
+[[pairs]]
+id = "QA-19"
+paraphrase = "What should I write down when I log a bug I found?"
+
+[[pairs]]
+id = "QA-20"
+paraphrase = "What can go wrong when a team starts using tools to run its tests?"
+
+[[pairs]]
+id = "QA-21"
+paraphrase = "What do we usually want to achieve by testing?"
+
+[[pairs]]
+id = "QA-22"
+paraphrase = "How is testing different from finding and fixing the cause of a bug?"
+
+[[pairs]]
+id = "QA-23"
+paraphrase = "In what ways does testing help a project succeed?"
+
+[[pairs]]
+id = "QA-24"
+paraphrase = "Is testing the same as making sure the development process is good, or how do the two relate?"
+
+[[pairs]]
+id = "QA-25"
+paraphrase = "Why can't we test every possible input, and what do we do instead?"
+
+[[pairs]]
+id = "QA-26"
+paraphrase = "Why are most bugs often found in just a few parts of a system?"
+
+[[pairs]]
+id = "QA-27"
+paraphrase = "Can software with no known bugs still be a bad product?"
+
+[[pairs]]
+id = "QA-28"
+paraphrase = "Why is it cheaper to start testing at the beginning of a project?"
+
+[[pairs]]
+id = "QA-29"
+paraphrase = "Why is there no single way of testing that suits every project?"
+
+[[pairs]]
+id = "QA-30"
+paraphrase = "What happens when testers decide what to test, and when they work out how to test it?"
+
+[[pairs]]
+id = "QA-31"
+paraphrase = "What is done when the testing of a project is finished?"
+
+[[pairs]]
+id = "QA-32"
+paraphrase = "How is tracking test progress different from taking action when testing goes off plan?"
+
+[[pairs]]
+id = "QA-33"
+paraphrase = "What circumstances shape the way a company organises its testing?"
+
+[[pairs]]
+id = "QA-34"
+paraphrase = "What gets created when testers prepare everything needed to run the tests?"
+
+[[pairs]]
+id = "QA-35"
+paraphrase = "What is the difference between the person who plans and leads testing and the people who do the hands-on testing?"
+
+[[pairs]]
+id = "QA-36"
+paraphrase = "What general abilities make someone good at testing?"
+
+[[pairs]]
+id = "QA-37"
+paraphrase = "What are the pros and cons of having testers who are separate from the developers?"
+
+[[pairs]]
+id = "QA-38"
+paraphrase = "How does the way a team organises development, all phases in order or in short cycles, change testing?"
+
+[[pairs]]
+id = "QA-39"
+paraphrase = "Which testing habits are worth keeping whatever development model a team uses?"
+
+[[pairs]]
+id = "QA-40"
+paraphrase = "What does it mean to write the tests before the code?"
+
+[[pairs]]
+id = "QA-41"
+paraphrase = "How are expected behaviours written down as Given, When, Then scenarios?"
+
+[[pairs]]
+id = "QA-42"
+paraphrase = "How does testing change when development and operations work together and deliver continuously?"
+
+[[pairs]]
+id = "QA-43"
+paraphrase = "How can meetings where the team looks back on its work make testing better?"
+
+[[pairs]]
+id = "QA-44"
+paraphrase = "What is testing the connections between the parts of one system?"
+
+[[pairs]]
+id = "QA-45"
+paraphrase = "What is testing the whole product end to end, and who usually does it?"
+
+[[pairs]]
+id = "QA-46"
+paraphrase = "In which ways can users or operators check whether a product is ready to be accepted?"
+
+[[pairs]]
+id = "QA-47"
+paraphrase = "How is testing what a system does different from testing how well it does it?"
+
+[[pairs]]
+id = "QA-48"
+paraphrase = "Which qualities of a product, apart from its features, can be tested?"
+
+[[pairs]]
+id = "QA-49"
+paraphrase = "Why work out which parts may be affected before changing a system that is in use?"
+
+[[pairs]]
+id = "QA-50"
+paraphrase = "Which documents and other outputs can be checked without running the code?"
+
+[[pairs]]
+id = "QA-51"
+paraphrase = "Why is reviewing documents and code worthwhile at the beginning of a project?"
+
+[[pairs]]
+id = "QA-52"
+paraphrase = "Which problems can only be found by reviewing, and which only by running the software?"
+
+[[pairs]]
+id = "QA-53"
+paraphrase = "Why does it help to get frequent comments from users and customers from the start?"
+
+[[pairs]]
+id = "QA-54"
+paraphrase = "Which steps does a review go through from start to finish?"
+
+[[pairs]]
+id = "QA-55"
+paraphrase = "How does a review led by the author differ from the most formal kind of review?"
+
+[[pairs]]
+id = "QA-56"
+paraphrase = "What is a review held by technical experts to reach agreement, and who joins it?"
+
+[[pairs]]
+id = "QA-57"
+paraphrase = "What helps a review go well?"
+
+[[pairs]]
+id = "QA-58"
+paraphrase = "How do techniques based on the specification, on the structure of the code and on the tester's knowledge differ?"
+
+[[pairs]]
+id = "QA-59"
+paraphrase = "How does dividing inputs into groups that the software should treat the same way work?"
+
+[[pairs]]
+id = "QA-60"
+paraphrase = "What does it mean to test every group of every input at least once?"
+
+[[pairs]]
+id = "QA-61"
+paraphrase = "How does testing three values at each edge differ from testing two?"
+
+[[pairs]]
+id = "QA-62"
+paraphrase = "How do I write test cases from combinations of conditions and the actions they lead to?"
+
+[[pairs]]
+id = "QA-63"
+paraphrase = "How do I test a system whose behaviour depends on the state it is in, and what coverage can I reach?"
+
+[[pairs]]
+id = "QA-64"
+paraphrase = "Why is testing based on the internal structure of the code worth doing?"
+
+[[pairs]]
+id = "QA-65"
+paraphrase = "What is it called when testers predict likely mistakes from their experience?"
+
+[[pairs]]
+id = "QA-66"
+paraphrase = "What is deliberately trying to make the software break at its known weak spots?"
+
+[[pairs]]
+id = "QA-67"
+paraphrase = "How does testing from a list of items to check work?"
+
+[[pairs]]
+id = "QA-68"
+paraphrase = "What are the three Cs of a user story?"
+
+[[pairs]]
+id = "QA-69"
+paraphrase = "Which qualities should a good user story have according to the well-known six-letter acronym?"
+
+[[pairs]]
+id = "QA-70"
+paraphrase = "How does writing the tests from the conditions for accepting a feature before building it work?"
+
+[[pairs]]
+id = "QA-71"
+paraphrase = "What goes into the document that describes how testing will be done?"
+
+[[pairs]]
+id = "QA-72"
+paraphrase = "How can a tester help when the team plans the next release and each sprint?"
+
+[[pairs]]
+id = "QA-73"
+paraphrase = "How can we work out how much testing work will be needed?"
+
+[[pairs]]
+id = "QA-74"
+paraphrase = "In what order should test cases be run, and how is that decided?"
+
+[[pairs]]
+id = "QA-75"
+paraphrase = "What is the model that sorts tests into four groups by business or technology focus?"
+
+[[pairs]]
+id = "QA-76"
+paraphrase = "How do threats to the project itself differ from threats to the quality of the software?"
+
+[[pairs]]
+id = "QA-77"
+paraphrase = "How does judging what could go wrong in the product change how deeply it is tested?"
+
+[[pairs]]
+id = "QA-78"
+paraphrase = "What can be done about a possible problem once it has been assessed?"
+
+[[pairs]]
+id = "QA-79"
+paraphrase = "What does a regular status update on testing include?"
+
+[[pairs]]
+id = "QA-80"
+paraphrase = "How can testers tell stakeholders how testing is going?"
+
+[[pairs]]
+id = "QA-81"
+paraphrase = "How does keeping track of the versions of code and test items help testing?"
+
+[[pairs]]
+id = "QA-82"
+paraphrase = "What kinds of tools help testers?"

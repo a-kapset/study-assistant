@@ -24,12 +24,12 @@ from evalharness.oracles.retrieval import is_relevant
 from evalharness.settings import HarnessSettings, load_stack_settings
 
 
-def _normal(text: str) -> str:
+def normal_text(text: str) -> str:
     """Lower-case ``text`` and turn every run of white space into one space, as line breaks of a PDF fall anywhere."""
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
-def _occurs(term: str, text: str) -> bool:
+def term_occurs(term: str, text: str) -> bool:
     """Say whether ``term`` occurs in ``text`` at the start of a word: "error" is found in "errors", but "pact" is
     not found in "impact"."""
     return re.search(rf"(?<!\w){re.escape(term)}", text) is not None
@@ -37,18 +37,18 @@ def _occurs(term: str, text: str) -> bool:
 
 def find_problems(qa: QaSet, passages: Sequence[tuple[str | None, str]]) -> list[str]:
     """Return one line per problem of the set against ``passages`` (section, text); empty when every case passes."""
-    texts = [(section, _normal(text)) for section, text in passages]
+    texts = [(section, normal_text(text)) for section, text in passages]
     problems = []
     for case in qa.cases:
         if not case.key_terms:
             problems.append(f"{case.id}: no key terms")
             continue
-        for term in map(_normal, case.key_terms):
+        for term in map(normal_text, case.key_terms):
             if case.gold_section is None:
-                where = sorted({section or "-" for section, text in texts if _occurs(term, text)})
+                where = sorted({section or "-" for section, text in texts if term_occurs(term, text)})
                 if where:
                     problems.append(f"{case.id}: '{term}' occurs in the course (sections {', '.join(where)})")
-            elif not any(_occurs(term, text) for section, text in texts if is_relevant(section, case.gold_section)):
+            elif not any(term_occurs(term, text) for section, text in texts if is_relevant(section, case.gold_section)):
                 problems.append(f"{case.id}: '{term}' occurs in no passage of section {case.gold_section}")
     return problems
 

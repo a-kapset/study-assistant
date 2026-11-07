@@ -63,7 +63,7 @@ class _Hit(BaseModel):
     score: float
 
 
-class _SearchResult(BaseModel):
+class SearchResult(BaseModel):
     """The fields of a successful search response a run reads."""
 
     model_config = ConfigDict(extra="ignore")
@@ -91,7 +91,7 @@ class _ErrorEnvelope(BaseModel):
 
 
 # One search as a run sees it: the request id, why the search gave no result (None when it ran), and the result.
-type _Searched = tuple[str, str | None, _SearchResult | None]
+type Searched = tuple[str, str | None, SearchResult | None]
 
 
 def bank_folder(declaration: GoldDeclaration, local_course_id: str, local_sources: Path, env_file: Path) -> Path:
@@ -183,13 +183,17 @@ async def run(
     check_questions_not_in_corpus(gold, corpus.chunk_texts(course_id))
     snapshot = corpus.snapshot(course_id)
 
-    primary = [await _search(sut, course_id, case.query, {}) for case in cases]
+    primary = [await search(sut, course_id, case.query, {}) for case in cases]
     reported = next((result for _, _, result in primary if result is not None), None)
     k = reported.k if reported is not None else gold.declaration.primary.k
-    diagnostic = [await _search(sut, course_id, case.query, {"k": k, "min_score": -1}) for case in cases]
+    diagnostic = [await search(sut, course_id, case.query, {"k": k, "min_score": -1}) for case in cases]
 
-    primary_results = [_pass_result(case, searched, k) for case, searched in zip(cases, primary, strict=True)]
-    diagnostic_results = [_pass_result(case, searched, k) for case, searched in zip(cases, diagnostic, strict=True)]
+    primary_results = [
+        pass_result(case.gold_section, searched, k) for case, searched in zip(cases, primary, strict=True)
+    ]
+    diagnostic_results = [
+        pass_result(case.gold_section, searched, k) for case, searched in zip(cases, diagnostic, strict=True)
+    ]
     return RunRecord(
         run_id=uuid.uuid4().hex,
         started_at=started_at,
@@ -232,14 +236,14 @@ def summaries(cases: Sequence[GoldCase], scores: Sequence[CaseScore]) -> dict[st
     return {key: summarise(group) for key, group in groups.items()}
 
 
-async def _search(sut: SutTransport, course_id: str, query: str, extra: dict[str, JsonValue]) -> _Searched:
+async def search(sut: SutTransport, course_id: str, query: str, extra: dict[str, JsonValue]) -> Searched:
     """Send one search of the course; the question goes as it is, with ``extra`` fields added to the request."""
     observation = await sut.request("POST", "/v1/search", json={"course_id": course_id, "query": query, **extra})
     error, result = _read(observation)
     return observation.request_id, error, result
 
 
-def _read(observation: Observation) -> tuple[str | None, _SearchResult | None]:
+def _read(observation: Observation) -> tuple[str | None, SearchResult | None]:
     """Read a search response: the result, or why there is none.
 
     An error response is a failed search of this question only, so one failing case never stops the run.
@@ -251,10 +255,10 @@ def _read(observation: Observation) -> tuple[str | None, _SearchResult | None]:
             return _ErrorEnvelope.model_validate(observation.body_json).error.code, None
         except ValidationError:
             return f"http_{observation.status_code}", None
-    return None, _SearchResult.model_validate(observation.body_json)
+    return None, SearchResult.model_validate(observation.body_json)
 
 
-def _pass_result(case: GoldCase, searched: _Searched, k: int) -> PassResult:
+def pass_result(gold_section: str, searched: Searched, k: int) -> PassResult:
     """Record one search of one question and score it against the question's answer section over ``k`` places."""
     request_id, error, result = searched
     hits = tuple(
@@ -262,4 +266,4 @@ def _pass_result(case: GoldCase, searched: _Searched, k: int) -> PassResult:
         for hit in (result.hits if result is not None else [])
     )
     sections = [hit.section_id for hit in hits] if result is not None else None
-    return PassResult(request_id=request_id, error=error, hits=hits, score=score_case(case.gold_section, sections, k))
+    return PassResult(request_id=request_id, error=error, hits=hits, score=score_case(gold_section, sections, k))
