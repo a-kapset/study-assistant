@@ -9,7 +9,9 @@ compared only when they measured the same questions and the recorded values diff
 things changed at once, a difference cannot be put down to either. The app's code is told by the commit in the
 recorded app settings, so a run whose app commit cannot be told is refused: one recorded before runs kept the app
 settings, one built without GIT_COMMIT ("unknown"), and two runs of the same commit with uncommitted changes
-("-dirty"), which may hold different code. Exit code 0 when the runs were compared, whatever the result; 2 when the
+("-dirty"), which may hold different code. A run with a failed search is refused too: that question measured
+nothing, and counting it as not found would show a broken stack as worse retrieval. Exit code 0 when the runs were
+compared, whatever the result; 2 when the
 comparison was refused.
 """
 
@@ -69,6 +71,12 @@ def check_comparable(before: RunRecord, after: RunRecord, factor: Factor | None)
     for field in ("gold_sha256", "course_id", "sets"):
         if getattr(before, field) != getattr(after, field):
             raise NotComparable(f"{field} differs: {getattr(before, field)} / {getattr(after, field)}")
+    for record in (before, after):
+        failed = sum(case.passes["primary"].score.verdict == "failed" for case in record.cases)
+        if failed:
+            raise NotComparable(
+                f"run {record.run_id[:8]} has {failed} failed search(es), which measured nothing; repeat it"
+            )
     before_commit, after_commit = app_commit(before), app_commit(after)
     if before_commit == after_commit and before_commit.endswith(_DIRTY):
         raise NotComparable(
@@ -152,7 +160,7 @@ def _cases(record: RunRecord) -> dict[str, CaseRecord]:
 
 
 def _hit(case: CaseRecord) -> bool:
-    """Whether the search a user sends found the answer section; a failed search counts as not found."""
+    """Whether the search a user sends found the answer section; runs with a failed search are not compared."""
     return case.passes["primary"].score.verdict == "hit"
 
 

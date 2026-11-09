@@ -129,7 +129,7 @@ async def run(
 
 def _first_result(searched: Sequence[tuple[Searched, Searched]]) -> SearchResult | None:
     """Return the first successful search result of a pass, or None when every search of it failed."""
-    return next((result for pair in searched for _, _, result in pair if result is not None), None)
+    return next((one.result for pair in searched for one in pair if one.result is not None), None)
 
 
 def _pair_pass(pair: ParaphrasePair, searched: tuple[Searched, Searched], k: int) -> PairPass:

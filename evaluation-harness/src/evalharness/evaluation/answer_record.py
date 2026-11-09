@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+from evalharness.failures import FailureLabel
 from evalharness.oracles.answer import AbstainReason, AnswerCaseScore, AnswerSummary
 from evalharness.proxy.ledger import Source
 
@@ -34,6 +35,9 @@ class AnswerCaseRecord(_Strict):
     ask_request_id: str
     # Why the ask gave no answer: the code of the app's error response, "http_<status>" or the transport error.
     ask_error: str | None
+    # Why the ask failed, from its response and the ledger: decides whether the case counts for quality. None when it
+    # did not fail.
+    failure_label: FailureLabel | None
     abstain_reason: AbstainReason | None
     cited_sections: tuple[str | None, ...]
     # Citations the model gave to passages it was not shown; None when the ask failed.

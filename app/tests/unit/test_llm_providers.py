@@ -13,6 +13,7 @@ from study_assistant.db import Database
 from study_assistant.llm.providers import (
     LlmRequestError,
     LlmUnavailableError,
+    LlmUnreadableReplyError,
     UnknownProviderError,
     ainvoke,
     build_chat_model,
@@ -174,3 +175,20 @@ async def test_error_status_is_reported_with_its_code(settings: Settings) -> Non
         await _ask(settings, refuse)
 
     assert error.value.status_code == 401, f"the error carries status {error.value.status_code}"
+
+
+@pytest.mark.covers("US-009", "AC-3")
+async def test_a_reply_cut_off_in_the_middle_is_reported_as_unreadable(settings: Settings) -> None:
+    """Answers with status 200 and the first half of a valid reply body, and expects an ``LlmUnreadableReplyError``.
+
+    Catches the client's JSON error leaking out: the app then answers 500 "internal_server_error", which tells the
+    learner and the operator that the app itself broke, when the provider sent a broken reply.
+    """
+
+    def cut_off(request: httpx2.Request) -> httpx2.Response:
+        """Send a successful reply whose body stops halfway, as a dropped connection or a faulty proxy leaves it."""
+        body = json.dumps(responses_api_reply([{"type": "output_text", "text": "Two.", "annotations": []}]))
+        return httpx2.Response(200, content=body[: len(body) // 2], headers={"Content-Type": "application/json"})
+
+    with pytest.raises(LlmUnreadableReplyError):
+        await _ask(settings, cut_off)

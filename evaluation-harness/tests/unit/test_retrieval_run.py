@@ -420,3 +420,27 @@ async def test_the_ci_verdict_reads_the_interval_of_the_primary_pass(found: int,
     actual = target_verdict(record, gold)
 
     assert actual == verdict, f"{found} of 5 found with target 0.5 gave {actual!r}, expected {verdict!r}"
+
+
+@pytest.mark.covers("US-016", "AC-6")
+@pytest.mark.covers("US-007", "AC-4")
+async def test_a_run_with_a_failed_search_has_no_target_verdict() -> None:
+    """Runs five questions whose answer section is always found, except that the first search of the primary pass
+    fails because the embedder is down; the target 0.5 would be met by the other four.
+
+    A pass means a run in which the stack broke is reported as invalid instead of being judged on the searches that
+    happened to work. A failure means CI could pass (or fail) a run that did not measure every question.
+    """
+    calls: list[int] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Fail the first search with the embedder's error; find section 1.1 for every other one."""
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx2.Response(503, json={"status": "error", "error": {"code": "embedding_unavailable"}})
+        return _found(request)
+
+    gold = _gold(*(_case(f"A-{n}", "1.1") for n in range(1, 6)), target=0.5)
+    record = await _run(gold, handler)
+
+    assert target_verdict(record, gold) is None, "a run with a failed search was judged against its target"

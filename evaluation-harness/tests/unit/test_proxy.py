@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from starlette.testclient import TestClient
 
 from evalharness.proxy.app import build_proxy
+from evalharness.proxy.faults import FaultKind, fault_of, fault_suffix
 from evalharness.proxy.keys import repetition_of, repetition_suffix, request_key
 from evalharness.proxy.ledger import read_ledger
 from evalharness.proxy.prices import Price, TokenUsage, call_cost
@@ -339,3 +340,66 @@ def test_record_mode_stops_at_start_without_a_key(key: str | None, monkeypatch: 
 
     with pytest.raises(ValueError, match="EVAL_PROXY_UPSTREAM_API_KEY"):
         ProxySettings.model_validate(values)
+
+
+@pytest.mark.covers("US-016", "AC-8")
+@pytest.mark.parametrize(
+    ("kind", "status"),
+    [
+        pytest.param("rate_limited", 429, id="rate-limit"),
+        pytest.param("spend_limit", 429, id="spend-limit"),
+        pytest.param("server_error", 500, id="server-error"),
+        pytest.param("empty_output", 200, id="empty-output"),
+        pytest.param("truncated_body", 200, id="truncated-body"),
+    ],
+)
+def test_a_call_marked_for_a_fault_gets_it_without_reaching_the_provider(
+    kind: FaultKind, status: int, tmp_path: Path
+) -> None:
+    """Sends one call whose request id carries a fault mark, in record mode, where a plain call would be paid.
+
+    What it checks: the app gets the fault's status, the provider gets no call, nothing is recorded, and the ledger
+    line says the fault answered.
+    What it tells: a pass means a test can make the provider fail at no cost and without a recording that a later
+    run would replay. A failure points to the order in the proxy: the mark must be read before anything else.
+    Why it is worth having: the api tests of failure labels rely on it, and a mark read too late would make them pay
+    for real calls, or replay a stored answer and pass for the wrong reason.
+    """
+    provider = FakeProvider()
+
+    [reply] = call_proxy(tmp_path, "record", provider, REQUEST, request_id=f"case-1{fault_suffix(kind)}")
+
+    assert reply.status_code == status, f"expected the {kind} status {status}, got {reply.status_code}: {reply.text}"
+    assert provider.calls == [], f"a call marked for a fault reached the provider: {provider.calls}"
+    assert not (tmp_path / "cassettes").exists() or not any((tmp_path / "cassettes").iterdir()), "a fault was recorded"
+    [line] = read_ledger(tmp_path / "ledger.jsonl")
+    assert (line.source, line.status) == ("fault", status), f"the ledger must name the fault: {line}"
+
+
+@pytest.mark.covers("US-016", "AC-1")
+def test_the_ledger_keeps_the_providers_error_code(tmp_path: Path) -> None:
+    """Gets a 429 with the code of a spending limit from the provider and reads the ledger line of the call.
+
+    What it checks: the line holds the provider's error code next to the status.
+    What it tells: a pass means a spending limit can be told from a rate limit, which share the status. A failure
+    points to the reading of error replies.
+    Why it is worth having: the two need opposite actions (raise the limit or wait), and only the code says which.
+    """
+    body = {"error": {"message": "limit", "type": None, "code": "project_spend_limit_exceeded"}}
+    provider = FakeProvider(httpx2.Response(429, json=body))
+
+    call_proxy(tmp_path, "record", provider, REQUEST)
+
+    [line] = read_ledger(tmp_path / "ledger.jsonl")
+    assert (line.status, line.error) == (429, "project_spend_limit_exceeded"), f"the code was lost: {line}"
+
+
+def test_an_unknown_fault_mark_is_refused() -> None:
+    """Reads a request id marked with a fault the proxy does not know.
+
+    What it checks: the mark raises instead of being ignored.
+    What it tells: a pass means a typo in a test's fault stops that test. A failure means the call would go to the
+    provider as a plain call and the test would check a real reply under a fault's name.
+    """
+    with pytest.raises(ValueError, match="unknown fault"):
+        fault_of("case-1.fault-rate_limit")

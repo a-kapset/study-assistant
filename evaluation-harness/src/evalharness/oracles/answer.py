@@ -2,7 +2,9 @@
 stage a case went wrong, and which questions changed their verdict when asked again.
 
 Only facts of the response are scored; whether the answer text is right needs a judge and is not scored here. A
-case whose ask failed is counted apart and left out of every share: it measured nothing about the answer.
+case whose ask failed in the stack or in the app is counted apart and left out of every share: it measured nothing
+about the answer. A case where the model's reply could not be used is the model's answer, and it counts as one that
+did not answer.
 """
 
 from collections import Counter
@@ -12,15 +14,23 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from evalharness.failures import CATEGORY, FailureLabel
 from evalharness.oracles.retrieval import is_relevant
 
 # Why the app declined, as its response states it.
 type AbstainReason = Literal["no_passages", "model_declined"]
 # "cited_gold": answered and cited the gold section. "cited_other": answered without citing it. "answered_unsupported":
 # answered a question the course does not answer. "declined_no_passages" / "declined_by_model": declined, by search
-# finding nothing close enough or by the model. "failed": no answer at all.
+# finding nothing close enough or by the model. "unusable_reply": the model replied, but not with an answer the app
+# could use. "failed": the stack or the app failed, so the case says nothing about the answer.
 type AnswerVerdict = Literal[
-    "cited_gold", "cited_other", "answered_unsupported", "declined_no_passages", "declined_by_model", "failed"
+    "cited_gold",
+    "cited_other",
+    "answered_unsupported",
+    "declined_no_passages",
+    "declined_by_model",
+    "unusable_reply",
+    "failed",
 ]
 
 
@@ -50,6 +60,7 @@ class AnswerSummary(_Strict):
 
     answerable: int
     unanswerable: int
+    # Cases that failed in the stack or in the app; a model's unusable reply is a verdict of its own.
     failed: int
     # Share of answerable questions answered instead of declined; None when no answerable question was scored.
     answered: float | None
@@ -60,20 +71,29 @@ class AnswerSummary(_Strict):
 
 
 def score_case(
-    gold_section: str | None, reply: AskReply | None, search_sections: Sequence[str | None] | None
+    gold_section: str | None,
+    reply: AskReply | None,
+    search_sections: Sequence[str | None] | None,
+    failure: FailureLabel | None = None,
 ) -> AnswerCaseScore:
-    """Score one question from its answer (None when the ask failed) and the sections a search for it found (None
-    when that search failed)."""
+    """Score one question from its answer (None when the ask failed), the sections a search for it found (None
+    when that search failed) and the label of the ask's failure (None when it did not fail)."""
     gold_retrieved = (
         None
         if gold_section is None or search_sections is None
         else any(is_relevant(section, gold_section) for section in search_sections)
     )
-    return AnswerCaseScore(verdict=_verdict(gold_section, reply), gold_retrieved=gold_retrieved)
+    return AnswerCaseScore(verdict=_verdict(gold_section, reply, failure), gold_retrieved=gold_retrieved)
 
 
-def _verdict(gold_section: str | None, reply: AskReply | None) -> AnswerVerdict:
-    """Say what the app did with the question, judged against whether the course answers it."""
+def _verdict(gold_section: str | None, reply: AskReply | None, failure: FailureLabel | None) -> AnswerVerdict:
+    """Say what the app did with the question, judged against whether the course answers it.
+
+    A failure decides first: even a successful response is "failed" when its model call failed (the app showed
+    something that is not the model's answer). An ask without a reply and without a label is "failed" too.
+    """
+    if failure is not None:
+        return "unusable_reply" if CATEGORY[failure] == "model" else "failed"
     if reply is None:
         return "failed"
     if reply.abstain_reason == "no_passages":

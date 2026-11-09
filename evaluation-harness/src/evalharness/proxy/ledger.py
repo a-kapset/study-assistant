@@ -6,7 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-type Source = Literal["upstream", "cassette", "miss"]
+# "fault": the proxy answered with a failure a test asked for, without calling the provider.
+type Source = Literal["upstream", "cassette", "miss", "fault"]
 
 
 class LedgerLine(BaseModel):
@@ -14,7 +15,9 @@ class LedgerLine(BaseModel):
 
     ``source`` says who answered, and only "upstream" was paid for. ``cost_usd`` is what the reply costs at the
     listed price whoever answered, so a replayed run still shows the cost of each question; it is ``None`` when
-    there is no price or no token count. Token fields are ``None`` when the reply reported no counts.
+    there is no price or no token count. Token fields are ``None`` when the reply reported no counts. ``error`` is
+    the provider's error code for an error reply (it tells a rate limit from a spending limit), or what went wrong
+    on the proxy's side.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

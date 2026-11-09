@@ -53,8 +53,8 @@ What is planned and what is done, in the order of work.
 - [x] Evaluation harness: metamorphic relation — questions reworded without the course term
 
 **6. Reliable evaluation runs**
-- [ ] Evaluation harness: app version and settings in every run record
-- [ ] Evaluation harness: fault injection in the LLM proxy; failure classifier (infrastructure or model); spending limit
+- [x] Evaluation harness: app version and settings in every run record
+- [x] Evaluation harness: fault injection in the LLM proxy; failure classifier (infrastructure, model or app); spending limit through the provider
 
 **7. Tracing**
 - [ ] App: OpenTelemetry traces per request and per stage

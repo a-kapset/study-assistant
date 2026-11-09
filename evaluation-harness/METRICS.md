@@ -121,12 +121,13 @@ The results are averaged over a group of questions $Q$, for example the question
 $k$ passages:
 
 ```math
-\mathrm{recall@}k = \frac{1}{n} \sum_{q \in Q} \mathbf{1}[\, v_q = \text{hit} \,]
+\mathrm{recall@}k = \frac{1}{n^{*}} \sum_{q \in Q^{*}} \mathbf{1}[\, v_q = \text{hit} \,]
 ```
 
 where
 
-- $Q$ — the group of questions; $n$ — the number of questions in it;
+- $Q$ — the group of questions; $`Q^{*}`$ — the questions of $Q$ whose search ran (verdict not `failed`);
+  $`n^{*}`$ — their number;
 - $v_q$ — the verdict of question $q$;
 - $\mathbf{1}[\dots]$ — 1 when the condition in the brackets is true, otherwise 0.
 
@@ -135,33 +136,37 @@ Each question has exactly one answer section, so this is the same as the hit rat
 **Mean reciprocal rank**, $\mathrm{MRR}$ — the average of the reciprocal ranks:
 
 ```math
-\mathrm{MRR} = \frac{1}{n} \sum_{q \in Q} \mathrm{RR}_q
+\mathrm{MRR} = \frac{1}{n^{*}} \sum_{q \in Q^{*}} \mathrm{RR}_q
 ```
 
 where
 
-- $n$ — the number of questions in the group $Q$;
-- $\mathrm{RR}_q$ — the reciprocal rank of question $q$ (0 for miss, empty and failed).
+- $`Q^{*}`$ — the questions of the group $Q$ whose search ran; $`n^{*}`$ — their number;
+- $\mathrm{RR}_q$ — the reciprocal rank of question $q$ (0 for miss and empty).
 
 **Mean precision**, $\bar{P}$, and **mean irrelevant**, $\bar{I}$ — the averages of the per-question shares:
 
 ```math
-\bar{P} = \frac{1}{n} \sum_{q \in Q} P_q
+\bar{P} = \frac{1}{n^{*}} \sum_{q \in Q^{*}} P_q
 \qquad
-\bar{I} = \frac{1}{n} \sum_{q \in Q} I_q
+\bar{I} = \frac{1}{n^{*}} \sum_{q \in Q^{*}} I_q
 ```
 
 where
 
-- $n$ — the number of questions in the group $Q$;
+- $`Q^{*}`$ — the questions of the group $Q$ whose search ran; $`n^{*}`$ — their number;
 - $P_q$, $I_q$ — the precision and the irrelevant share of question $q$.
 
-**Failure counts** — how many questions of the group ended as `miss`, as `empty` and as `failed`. The number of
-hits is $n$ minus these three counts.
+**Failure counts** — how many questions of the group ended as `miss`, as `empty` and as `failed`; $n$ is the
+number of all questions of the group, and the number of hits is $n$ minus these three counts. Each `failed` search
+keeps its reason: the app's error code, `http_<status>` or the transport error.
 
-In every formula of the group, $n$ counts all questions: a failed or empty search stays in the group with 0,
-because a search that gives the user nothing must lower the result, never be left out of it. A group with no
-questions is an error, not a score.
+An empty search ran and gave the user nothing, so it stays in $`Q^{*}`$ with 0 and lowers the result. A failed
+search measured nothing about retrieval (the stack or the app broke), so it is left out of $`Q^{*}`$: counted as
+0 it would show an outage as worse retrieval. A run with a failed search in its primary pass gets no target
+verdict and is not compared with another run, so a broken stack cannot pass for a better search either. When no
+search of a group ran, its shares do not exist and are shown as `n/a`. A group with no questions is an error, not
+a score.
 
 ### Worked example
 
@@ -174,7 +179,7 @@ Answer section $g_q$ = `1.2`, $k = 5$:
 | () — empty list | empty | — | 0 | 0 | 0 |
 | does not exist | failed | — | 0 | 0 | 0 |
 
-The last three as a group: $n = 3$, recall@5 = 1/3, MRR = 1/3, one `empty`, one `failed`, no `miss`.
+The last three as a group: $n = 3$, $`n^{*} = 2`$, recall@5 = 1/2, MRR = 1/2, one `empty`, one `failed`, no `miss`.
 
 ### Reading the metrics together
 
@@ -335,7 +340,7 @@ scored here: that needs a judge.
 
 ### Per question
 
-**Verdict**, $v_q$ — what the app did with question $q$, one of six:
+**Verdict**, $v_q$ — what the app did with question $q$, one of seven:
 
 | Verdict | When | Good for |
 |---|---|---|
@@ -344,7 +349,8 @@ scored here: that needs a judge.
 | `answered_unsupported` | the app answered a question without a gold section | — (a blocker) |
 | `declined_no_passages` | the app declined because search found nothing close enough; the model was not called | unanswerable |
 | `declined_by_model` | the app declined because the model said the passages do not answer the question | unanswerable |
-| `failed` | `/v1/ask` gave no answer (an error response, a timeout, a recording that no longer matches) | — |
+| `unusable_reply` | the model replied, but the app could not use the reply (no text, wrong form, cut off): failure label of category model | — |
+| `failed` | the stack or the app failed: a failure label of category infrastructure or app (an outage, a recording that no longer matches, an error shown as an answer) | — |
 
 where
 
@@ -380,8 +386,8 @@ points to the answer step (the prompt or the model).
 where
 
 - $A$ — the answerable questions of the set;
-- $A^{*}$ — the questions of $A$ whose verdict $v_q$ is not `failed`;
-- $A_{\text{ans}}$ — the questions of $A^{*}$ whose verdict $v_q$ is `cited_gold` or `cited_other`;
+- $`A^{*}`$ — the questions of $A$ whose verdict $v_q$ is not `failed`;
+- $A_{\text{ans}}$ — the questions of $`A^{*}`$ whose verdict $v_q$ is `cited_gold` or `cited_other`;
 - $|\dots|$ — the number of questions in a set.
 
 **Gold cited share**, $\gamma$ — among the answered answerable questions, the share whose citations include the
@@ -416,8 +422,9 @@ where
 A count, not a share: one answer that the course does not support is a blocker whatever $\alpha$ and $\gamma$
 are.
 
-A `failed` question stays out of every share and count above: it measured nothing about the answer. When
-$A^{*}$ or $A_{\text{ans}}$ is empty, $\alpha$ or $\gamma$ does not exist and is shown as `n/a`.
+A `failed` question stays out of every share and count above: it measured nothing about the answer. An
+`unusable_reply` stays in $`A^{*}`$ and counts as not answered: it is the model's reply. When
+$`A^{*}`$ or $A_{\text{ans}}$ is empty, $\alpha$ or $\gamma$ does not exist and is shown as `n/a`.
 
 Also reported, without a target: the **invalid citations**, the sum over all questions of the citations the
 model gave to passages it was not shown (the app drops them, the learner does not see them), and the **cost**,
@@ -427,7 +434,8 @@ cost of the reply it replays; a miss costs nothing).
 ### Validity and the target verdict
 
 A run is **valid** when no question is `failed`. An invalid run gets no target verdict: it is reported with the
-reasons of its failed questions (for example `llm_failed` after a recording no longer matches the request).
+failure labels of its failed questions, counted per category (for example `replay_miss` after a recording no
+longer matches the request). An `unusable_reply` does not make a run invalid.
 
 A valid run gets one verdict per target; the two shares are judged by their intervals (see
 [Intervals and target verdicts](#intervals-and-target-verdicts) above), the unsupported answers by their count:
@@ -444,7 +452,7 @@ V\bigl(c,\ |A_{\text{ans}}|,\ \gamma_{\min}\bigr), \qquad
 where
 
 - $V$ — the target verdict of a share (met, not confirmed or below), defined under Intervals above;
-- $A^{*}$, $A_{\text{ans}}$ — the scored and the answered answerable questions (see $\alpha$); $|\dots|$ — their
+- $`A^{*}`$, $A_{\text{ans}}$ — the scored and the answered answerable questions (see $\alpha$); $|\dots|$ — their
   number;
 - $c$ — the questions of $A_{\text{ans}}$ whose verdict $v_q$ is `cited_gold`, so $\gamma = c / |A_{\text{ans}}|$;
 - $u$ — the unsupported answers of the run;
@@ -486,6 +494,31 @@ verdicts in order; it has no target. It says how much of a single run is chance:
 versions smaller than what the same version shows between its own repetitions is not evidence of a change. A
 flipped question is a borderline case, the first place to look.
 
+## Failure labels
+
+Code: [`src/evalharness/failures.py`](src/evalharness/failures.py).
+
+The app answers one code, `llm_failed`, for a rate limit, a provider error and a reply it cannot use, so a failed
+request is labelled from the app's response and the LLM proxy's ledger lines of its model calls. The **last** model
+call decides: the app's model client repeats a failed call and stops when a repeat fails too. The category decides
+how a run counts the case (see the validity rules of each run above).
+
+| Label | When | Category |
+|---|---|---|
+| `no_response` | no response from the app (connection refused, timeout) | infrastructure |
+| `search_failed` | the app's code is `embedding_failed`, `embedding_unavailable` or `course_not_searchable` | infrastructure |
+| `provider_unreachable` | the app's code is `llm_unavailable` | infrastructure |
+| `rate_limited` | `llm_failed`, the last call got 429 with another code than the money codes below | infrastructure |
+| `budget_exceeded` | `llm_failed`, the last call got 429 with a money code of the provider: `project_spend_limit_exceeded`, `organization_spend_limit_exceeded`, `organization_usage_limit_exceeded`, `credit_balance_exhausted` or the older `insufficient_quota` | infrastructure |
+| `provider_error` | `llm_failed`, the last call got a status of 500 or above | infrastructure |
+| `provider_refused_access` | `llm_failed`, the last call got 401 or 403 | infrastructure |
+| `replay_miss` | `llm_failed`, the last call had no recording in replay mode | infrastructure |
+| `unusable_reply` | `llm_failed`, the last call got 200: the reply came, the app could not use it | model |
+| `app_error` | any other error status or code, `llm_failed` without a model call, or a provider refusal of the request (400, 404, 422) | app |
+| `error_as_answer` | status 200, but the last model call of the request failed | app |
+
+A successful response whose model calls ended in a reply has no label.
+
 ## Comparison of two runs
 
 Code: [`src/evalharness/stats/paired.py`](src/evalharness/stats/paired.py),
@@ -493,7 +526,8 @@ Code: [`src/evalharness/stats/paired.py`](src/evalharness/stats/paired.py),
 
 Two retrieval runs are compared only when they measured the same questions (same gold-set hash, course and exam
 sets) and their recorded corpus snapshot, embedding space, k and lowest score differ in exactly the one factor
-declared for the comparison, or in nothing when none is declared. Both runs answered the same questions, so the
+declared for the comparison, or in nothing when none is declared, and when neither run has a failed search in
+its primary pass. Both runs answered the same questions, so the
 comparison is made question by question, on the primary pass: a hard question is hard in both runs, and the
 per-question differences carry much less noise than two separately measured numbers.
 
@@ -735,6 +769,13 @@ different questions are to each other. On the first course $\lambda = 0.929$.
 it) and for the pairs whose question did not.
 
 ## Changes
+
+- **2026-11-09 — failure labels; failed searches leave the retrieval shares.** New: the failure label of every
+  failed question of an answer run, the answer verdict `unusable_reply`. Recall@k, MRR, $\bar{P}$ and $\bar{I}$ are now averaged
+  over $`Q^{*}`$, the questions whose search ran, instead of all $n$; before, a failed search counted as 0. Reason:
+  an outage lowered the numbers as if retrieval were worse. Runs with a failed search are now invalid (no target
+  verdict) and not compared, so no recorded result changes its verdict. An answer case `failed` because the model's
+  reply was unusable is now `unusable_reply`, counted as not answered, and the run keeps its target verdict.
 
 - **2026-11-07 — metamorphic relations on search.** New: the outcome $o_p$ and overlap $O_p$ of a pair, and the
   relations R1 (answer kept) and R2 (top k stable). Nothing earlier changed.

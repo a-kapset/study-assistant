@@ -45,7 +45,10 @@ evaluation-harness/
 │   ├── evaluation/         # the retrieval, answer and paraphrase runs: checks, requests, run records, commands
 │   ├── relations/          # metamorphic relations: how a pair of inputs is scored and a relation judged
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
-│   ├── proxy/              # the LLM proxy: ledger, recordings, prices; one module per provider API in surfaces/
+│   ├── proxy/              # the LLM proxy: ledger, recordings, prices, provider failures on request; one module
+│   │                       #   per provider API in surfaces/
+│   ├── failures.py         # the label of a failed request (infrastructure, model or app), from the app's
+│   │                       #   response and the proxy's ledger
 │   ├── testdata/           # test data written into the app's stores: created and removed in one place
 │   │   ├── __init__.py     # the name prefix every piece of test data carries
 │   │   ├── cleanup.py      # removes all test data from every store and lists what is left (no kind of data yet)
@@ -194,9 +197,12 @@ verdicts, followed by the flip rate: the share of questions whose verdict was no
 with the list of those questions.
 
 A run is refused before the first question, with exit code 2, when a gold section is not a section of the stored
-course. A completed run exits with 0, whatever its numbers. A question that got no answer at all (for example a
-recording that no longer matches the request, after a change of the prompt, the passages or the model) makes the
-run invalid: it is reported with the reasons and gets no target verdict; record again and compare.
+course. A completed run exits with 0, whatever its numbers. Every failed question gets a failure label, and the
+summary counts them by category. A failure of the stack or the app (for example `replay_miss`: a recording that no
+longer matches the request, after a change of the prompt, the passages or the model) makes the run invalid: it gets
+no target verdict; record again and compare. A model reply the app could not use (`unusable_reply`) counts as a
+question not answered, and the run keeps its verdict. In a retrieval run a failed search is listed with its reason;
+it leaves the shares and takes the target verdict away.
 
 
 ## Metamorphic relations
@@ -253,6 +259,21 @@ chooses the mode:
 
 To record again, delete the recording: its file name is the `key` in the ledger. Replies quote the course, so a
 course whose material is not committed uses `EVAL_PROXY_CASSETTES=./evaluation-harness/cassettes_local`.
+
+### Provider failures on request
+
+A request id that ends in `.fault-<kind>` makes the proxy answer every model call of that request with a provider
+failure, in any mode and without calling the provider; the app passes the id on unchanged. Kinds: `rate_limited`
+(429), `spend_limit` (429 with the code of a spending limit), `server_error` (500), `empty_output` (200, no text),
+`truncated_body` (200, the body cut off in the middle). The ledger line has the source `fault`. The api tests use
+it to check that each failure gets the right failure label (`failures.py`, see `METRICS.md`):
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/v1/ask -H "Content-Type: application/json" -H "X-Request-ID: try-1.fault-rate_limited" -d '{\"course_id\": \"demo\", \"question\": \"How many barges does each player receive?\"}'
+```
+
+Spending is capped by the provider, not by the proxy: set a monthly limit with "Enforce a hard limit" in the
+OpenAI project's limits. Calls over it get 429 `project_spend_limit_exceeded`, labelled `budget_exceeded`.
 
 ### What a recording is for
 

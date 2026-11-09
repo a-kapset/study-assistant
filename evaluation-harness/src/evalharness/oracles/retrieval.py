@@ -1,7 +1,9 @@
 """Reference scores of a search against the course section that answers the question, and their summary.
 
-A search that fails or finds nothing gives the user nothing, so it scores zero and stays in every count; it is
-never left out as "not applicable", which would make a broken search look better than a working one.
+A search that finds nothing gives the user nothing, so it scores zero and stays in every count. A search that
+failed (the embedding server, the database or the app broke) measured nothing about retrieval: it is counted apart
+and left out of the shares, and a run with such a failure gets no target verdict, so a broken stack can neither
+lower the numbers nor pass for a better search.
 """
 
 from collections.abc import Sequence
@@ -38,11 +40,12 @@ class Summary(_Strict):
     """The mean scores of a group of questions and how many of them ended in each kind of failure."""
 
     n: int
-    # Share of questions with the answer section among the first k (one answer section per question).
-    recall: float
-    mrr: float
-    precision: float
-    irrelevant: float
+    # Share of the questions whose search ran with the answer section among the first k (one answer section per
+    # question). The shares are over the searches that ran; all four are None when none did.
+    recall: float | None
+    mrr: float | None
+    precision: float | None
+    irrelevant: float | None
     misses: int
     empty: int
     failed: int
@@ -75,15 +78,17 @@ def score_case(gold_section: str, sections: Sequence[str | None] | None, k: int)
 
 
 def summarise(scores: Sequence[CaseScore]) -> Summary:
-    """Average the scores of a group of questions; an empty group is an error, never a score of 0 or 1."""
+    """Average the scores of a group of questions over the searches that ran; an empty group is an error, never a
+    score of 0 or 1."""
     if not scores:
         raise ValueError("cannot summarise an empty group of questions")
+    ran = [score for score in scores if score.verdict != "failed"]
     return Summary(
         n=len(scores),
-        recall=fmean(score.verdict == "hit" for score in scores),
-        mrr=fmean(score.reciprocal_rank for score in scores),
-        precision=fmean(score.precision for score in scores),
-        irrelevant=fmean(score.irrelevant for score in scores),
+        recall=fmean(score.verdict == "hit" for score in ran) if ran else None,
+        mrr=fmean(score.reciprocal_rank for score in ran) if ran else None,
+        precision=fmean(score.precision for score in ran) if ran else None,
+        irrelevant=fmean(score.irrelevant for score in ran) if ran else None,
         misses=sum(score.verdict == "miss" for score in scores),
         empty=sum(score.verdict == "empty" for score in scores),
         failed=sum(score.verdict == "failed" for score in scores),

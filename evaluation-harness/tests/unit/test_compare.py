@@ -123,3 +123,33 @@ def test_runs_whose_app_code_cannot_be_told_are_refused(
         check_comparable(_record(**before), _record(**after), factor)
 
     assert "differ" not in str(refusal.value), f"refused by the one-factor rule, not the app identity: {refusal.value}"
+
+
+def _failed_case() -> dict[str, object]:
+    """Build one question whose search of the primary pass failed and whose diagnostic search found nothing."""
+    failed = {"verdict": "failed", "first_relevant_rank": None, "reciprocal_rank": 0.0, "precision": 0.0}
+    empty = failed | {"verdict": "empty"}
+    result = {"request_id": "evalharness_request", "error": "embedding_unavailable", "hits": ()}
+    return {
+        "case_id": "A-1",
+        "exam_set": "A",
+        "chapter": "1",
+        "knowledge_level": None,
+        "gold_section": "1.1",
+        "passes": {
+            "primary": result | {"score": failed | {"irrelevant": 0.0}},
+            "diagnostic": result | {"score": empty | {"irrelevant": 0.0}},
+        },
+    }
+
+
+@pytest.mark.covers("US-016", "AC-6")
+def test_a_run_with_a_failed_search_is_not_compared() -> None:
+    """Checks a repeated run against a run in which one search of the primary pass failed; expects a refusal that
+    names the failed search.
+
+    A pass means an outage during one of the runs cannot show up as lost questions and a "worse" verdict. A failure
+    means the comparison counts a search that measured nothing as not found.
+    """
+    with pytest.raises(NotComparable, match="failed search"):
+        check_comparable(_record(), _record(cases=(_failed_case(),)), None)

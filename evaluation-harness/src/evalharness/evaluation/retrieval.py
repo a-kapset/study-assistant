@@ -12,7 +12,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, NamedTuple, Protocol
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
@@ -95,8 +95,13 @@ class _ErrorEnvelope(BaseModel):
     error: _ErrorBody
 
 
-# One search as a run sees it: the request id, why the search gave no result (None when it ran), and the result.
-type Searched = tuple[str, str | None, SearchResult | None]
+class Searched(NamedTuple):
+    """One search as a run sees it."""
+
+    request_id: str
+    # Why the search gave no result; None when it ran.
+    error: str | None
+    result: SearchResult | None
 
 
 def bank_folder(declaration: GoldDeclaration, local_course_id: str, local_sources: Path, env_file: Path) -> Path:
@@ -190,7 +195,7 @@ async def run(
     app_settings = await read_app_settings(sut)
 
     primary = [await search(sut, course_id, case.query, {}) for case in cases]
-    reported = next((result for _, _, result in primary if result is not None), None)
+    reported = next((one.result for one in primary if one.result is not None), None)
     k = reported.k if reported is not None else gold.declaration.primary.k
     diagnostic = [await search(sut, course_id, case.query, {"k": k, "min_score": -1}) for case in cases]
 
@@ -271,7 +276,7 @@ async def search(sut: SutTransport, course_id: str, query: str, extra: dict[str,
     """Send one search of the course; the question goes as it is, with ``extra`` fields added to the request."""
     observation = await sut.request("POST", "/v1/search", json={"course_id": course_id, "query": query, **extra})
     error, result = _read(observation)
-    return observation.request_id, error, result
+    return Searched(observation.request_id, error, result)
 
 
 def _read(observation: Observation) -> tuple[str | None, SearchResult | None]:
@@ -291,10 +296,15 @@ def _read(observation: Observation) -> tuple[str | None, SearchResult | None]:
 
 def pass_result(gold_section: str, searched: Searched, k: int) -> PassResult:
     """Record one search of one question and score it against the question's answer section over ``k`` places."""
-    request_id, error, result = searched
+    result = searched.result
     hits = tuple(
         HitRecord(chunk_id=hit.chunk_id, section_id=hit.section_id, score=hit.score)
         for hit in (result.hits if result is not None else [])
     )
     sections = [hit.section_id for hit in hits] if result is not None else None
-    return PassResult(request_id=request_id, error=error, hits=hits, score=score_case(gold_section, sections, k))
+    return PassResult(
+        request_id=searched.request_id,
+        error=searched.error,
+        hits=hits,
+        score=score_case(gold_section, sections, k),
+    )

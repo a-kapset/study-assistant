@@ -1,4 +1,5 @@
-"""The LLM proxy: the app calls it instead of the provider, and it logs, records and replays every call."""
+"""The LLM proxy: the app calls it instead of the provider, and it logs, records and replays every call, or answers
+with a failure a test asked for."""
 
 import time
 from collections.abc import AsyncGenerator
@@ -14,6 +15,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from evalharness.proxy.cassettes import Cassette, CassetteStore
+from evalharness.proxy.faults import fault_of
 from evalharness.proxy.keys import repetition_of, request_key
 from evalharness.proxy.ledger import Ledger, LedgerLine, Source
 from evalharness.proxy.prices import call_cost, load_prices
@@ -85,6 +87,11 @@ def build_proxy(settings: ProxySettings, transport: httpx2.AsyncBaseTransport | 
             log_call(call, source, 200, error="unreadable_reply")
         return Response(text, media_type="application/json")
 
+    def failed_reply(call: _Call, source: Source, status: int, body: bytes) -> Response:
+        """Log an error reply with the provider's error code and pass it on unchanged."""
+        log_call(call, source, status, error=surface.error_code(body))
+        return Response(body, status_code=status, media_type="application/json")
+
     async def handle_call(request: Request) -> Response:
         """Answer one model call from a recording, or from the provider when the mode allows it."""
         started = time.perf_counter()
@@ -92,6 +99,13 @@ def build_proxy(settings: ProxySettings, transport: httpx2.AsyncBaseTransport | 
         request_id = request.headers.get("X-Request-ID")
         key = request_key(surface.SURFACE, body, repetition_of(request_id))
         call = _Call(request_id, key, surface.requested_model(body), started)
+        # Before the recordings: a fault asked for by a test must win over a reply recorded for the same request.
+        fault = fault_of(request_id)
+        if fault is not None:
+            status, fault_body = surface.fault_reply(fault, body)
+            if status != 200:
+                return failed_reply(call, "fault", status, fault_body)
+            return successful_reply(call, "fault", fault_body.decode("utf-8"))
         cassette = store.find(key)
         if cassette is not None:
             return successful_reply(call, "cassette", cassette.body)
@@ -104,8 +118,7 @@ def build_proxy(settings: ProxySettings, transport: httpx2.AsyncBaseTransport | 
             log_call(call, "upstream", 502, error=type(error).__name__)
             return JSONResponse({"error": {"type": "upstream_unreachable"}}, status_code=502)
         if reply.status_code != 200:
-            log_call(call, "upstream", reply.status_code)
-            return Response(reply.content, status_code=reply.status_code, media_type="application/json")
+            return failed_reply(call, "upstream", reply.status_code, reply.content)
         # Kept before anything reads it: the reply is paid for, and a repeat of this call must not pay again.
         store.save(key, Cassette(recorded_at=datetime.now(UTC), body=reply.text))
         return successful_reply(call, "upstream", reply.text)

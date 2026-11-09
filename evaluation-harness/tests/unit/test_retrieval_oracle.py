@@ -69,20 +69,33 @@ def test_each_kind_of_failure_gets_its_own_verdict(sections: list[str | None] | 
 
 
 @pytest.mark.covers("US-007", "AC-4")
-def test_failed_and_empty_searches_stay_in_the_group_with_zero() -> None:
-    """Averages one found question, one empty search and one failed search, and expects recall and MRR of 1/3.
+def test_an_empty_search_scores_zero_and_a_failed_one_is_left_out() -> None:
+    """Averages one found question, one empty search and one failed search, and expects recall and MRR of 1/2.
 
-    A pass means a question whose search gave the user nothing lowers the result as much as a wrong answer does.
-    A failure means such questions are dropped from the count, so a broken or over-strict search would show a
-    better number than a working one. This is the rule that keeps outages and threshold mistakes visible.
+    A pass means a search that ran and gave the user nothing lowers the result as much as a wrong answer does,
+    while a search that failed (the stack broke) is counted apart and measures nothing. A failure means either an
+    over-strict threshold is hidden (empty dropped) or an outage reads as worse retrieval (failed scored as 0).
     """
     scores = [score_case(GOLD, ["1.2"], K), score_case(GOLD, [], K), score_case(GOLD, None, K)]
 
     summary = summarise(scores)
 
-    assert (summary.n, summary.recall, summary.mrr) == (3, 1 / 3, 1 / 3), (
-        f"one found question of three must give n 3, recall 1/3 and MRR 1/3, got {summary}"
+    assert (summary.n, summary.failed, summary.recall, summary.mrr) == (3, 1, 1 / 2, 1 / 2), (
+        f"one found question of the two searches that ran must give recall and MRR 1/2, with 1 failed of 3: {summary}"
     )
+
+
+@pytest.mark.covers("US-007", "AC-4")
+def test_a_group_where_every_search_failed_has_no_shares() -> None:
+    """Averages two failed searches and expects no recall, MRR or precision at all, rather than 0.
+
+    A pass means a group the stack never answered says "nothing measured". A failure (a 0 or a division error)
+    means a full outage either reads as the worst possible retrieval or stops the run report.
+    """
+    summary = summarise([score_case(GOLD, None, K), score_case(GOLD, None, K)])
+
+    shares = (summary.recall, summary.mrr, summary.precision, summary.irrelevant)
+    assert shares == (None, None, None, None), f"no search ran, so nothing may be scored: {summary}"
 
 
 @pytest.mark.covers("US-007", "AC-4")

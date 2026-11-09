@@ -71,10 +71,10 @@ async def _shared(sut: SutTransport, course_id: str, first: str, second: str) ->
     """Search two texts with no lowest score and return how many passages they share, and the k the app used."""
     results = []
     for text in (first, second):
-        _, error, result = await search(sut, course_id, text, {"min_score": -1})
-        if result is None:
-            raise RuntimeError(f"a search failed ({error}); the calibration needs every search")
-        results.append(result)
+        searched = await search(sut, course_id, text, {"min_score": -1})
+        if searched.result is None:
+            raise RuntimeError(f"a search failed ({searched.error}); the calibration needs every search")
+        results.append(searched.result)
     return len({h.chunk_id for h in results[0].hits} & {h.chunk_id for h in results[1].hits}), results[0].k
 
 

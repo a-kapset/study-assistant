@@ -13,6 +13,7 @@ from evalharness.datasets.qa_set import QaCase, QaSet, QaTargets
 from evalharness.evaluation.answer_record import AnswerRunRecord
 from evalharness.evaluation.answer_run import run, target_verdict
 from evalharness.evaluation.retrieval import RunRefused
+from evalharness.failures import FailureLabel
 from evalharness.oracles.answer import (
     AbstainReason,
     AnswerCaseScore,
@@ -396,3 +397,81 @@ def test_a_question_flips_when_its_verdict_is_not_the_same_in_every_repetition()
     counted, flipped = flipped_cases(verdicts)
 
     assert (counted, flipped) == (3, ["QA-2"]), f"counted {counted}, flipped {flipped}"
+
+
+@pytest.mark.covers("US-016", "AC-6", "AC-7")
+@pytest.mark.covers("US-011", "AC-6")
+@pytest.mark.parametrize(
+    ("reply", "failure", "verdict"),
+    [
+        pytest.param(None, "unusable_reply", "unusable_reply", id="the-model-spoiled-its-reply"),
+        pytest.param(None, "rate_limited", "failed", id="the-provider-limited-the-calls"),
+        pytest.param(_reply(None, "4.2"), "error_as_answer", "failed", id="the-app-showed-an-error-as-an-answer"),
+    ],
+)
+def test_the_failure_label_decides_whether_a_case_counts_for_quality(
+    reply: AskReply | None, failure: FailureLabel, verdict: AnswerVerdict
+) -> None:
+    """Scores an answerable question that failed for a reason of each category: the model, the provider, the app.
+
+    A pass means only the model's own failure is scored as an answer, and a failure of the stack or the app is
+    counted apart, even when the app's response looked like an answer citing the gold section. A failure means a
+    provider outage lowers the quality numbers, or an error the app passed off as an answer raises them.
+    """
+    score = score_case(GOLD, reply, None, failure)
+
+    assert score.verdict == verdict, f"a failure labelled {failure!r} was scored {score.verdict!r}"
+
+
+@pytest.mark.covers("US-016", "AC-7")
+@pytest.mark.covers("US-011", "AC-6")
+def test_an_unusable_reply_counts_as_not_answered_and_keeps_the_target_verdict() -> None:
+    """Sums up two answerable questions: one answer citing the gold section, one reply the model spoiled.
+
+    Expects one answered of two and a target verdict. A pass means a model that sometimes returns nothing usable
+    shows up in the answered share and in the verdict. A failure means such replies are dropped as if the stack had
+    failed, and the run looks better than the model is.
+    """
+    summary = summarise([GOLD, GOLD], [_score("cited_gold"), _score("unusable_reply")])
+
+    assert (summary.answered, summary.failed) == (0.5, 0), f"expected 1 of 2 answered and none failed: {summary}"
+    assert target_verdict(summary, TARGETS) is not None, "a model failure took the run's target verdict away"
+
+
+@pytest.mark.covers("US-016", "AC-5")
+async def test_a_failed_ask_is_recorded_with_the_label_its_model_calls_give() -> None:
+    """Runs one question against a fake app whose ask fails with "llm_failed" after three model calls that the
+    provider answered with a rate limit, as the ledger shows.
+
+    A pass means the record names the cause the app's single code hides. A failure means the label is not read
+    from this request's ledger lines, so every provider failure looks alike in the record.
+    """
+    ledger: list[LedgerLine] = []
+
+    def app(request: httpx2.Request) -> httpx2.Response:
+        """Serve the settings and a search; fail the ask the way the app does after a rate limit."""
+        if request.url.path == "/v1/config":
+            return httpx2.Response(200, json={"settings": {"git_commit": "evalharness_app"}})
+        if request.url.path == "/v1/search":
+            return httpx2.Response(200, json={"hits": [{"section_id": GOLD}]})
+        line = _line(request.headers[REQUEST_ID_HEADER], None, None, source="upstream")
+        ledger.extend([line.model_copy(update={"status": 429, "error": "rate_limit_exceeded"})] * 3)
+        envelope = {"status": "error", "error": {"code": "llm_failed", "message": "429"}, "request_id": "x"}
+        return httpx2.Response(502, json=envelope)
+
+    gold = {GOLD}
+    settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
+    async with SutTransport(settings, transport=httpx2.MockTransport(app)) as sut:
+        record = await run(
+            _qa(("QA-1", GOLD)),
+            sut,
+            _Corpus(gold),
+            lambda: ledger,
+            qa_file="evalharness_qa.toml",
+            qa_bytes=b"evalharness",
+            harness_commit="evalharness_commit",
+            harness_dirty=False,
+        )
+
+    case = record.cases[0]
+    assert (case.failure_label, case.score.verdict) == ("rate_limited", "failed"), f"recorded as {case}"

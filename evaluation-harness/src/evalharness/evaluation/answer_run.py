@@ -19,7 +19,7 @@ import logging
 import subprocess
 import sys
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +31,7 @@ from evalharness.corpus_db import CorpusReader
 from evalharness.datasets.qa_set import QaSet, QaTargets, load_qa_set
 from evalharness.evaluation.answer_record import AnswerCaseRecord, AnswerRunRecord, write_answer_record
 from evalharness.evaluation.retrieval import Corpus, RunRefused, read_app_settings
+from evalharness.failures import CATEGORY, classify
 from evalharness.observation import Observation
 from evalharness.oracles.answer import (
     AbstainReason,
@@ -194,6 +195,7 @@ def _case_record(
         else None
     )
     ask_error = _error(answered)
+    failure_label = classify(answered, calls)
     reply = _Answered.model_validate(answered.body_json) if ask_error is None else None
     ask_reply = (
         AskReply(abstain_reason=reply.abstain_reason, cited_sections=tuple(c.section_id for c in reply.citations))
@@ -209,13 +211,14 @@ def _case_record(
         search_request_id=searched.request_id,
         ask_request_id=answered.request_id,
         ask_error=ask_error,
+        failure_label=failure_label,
         abstain_reason=reply.abstain_reason if reply is not None else None,
         cited_sections=ask_reply.cited_sections if ask_reply is not None else (),
         invalid_citations=reply.invalid_citations if reply is not None else None,
         search_sections=search_sections,
         model_calls=tuple(line.source for line in calls),
         cost_usd=None if any(cost is None for cost in costs) else sum(cost for cost in costs if cost is not None),
-        score=score_case(gold_section, ask_reply, search_sections),
+        score=score_case(gold_section, ask_reply, search_sections, failure_label),
     )
 
 
@@ -292,7 +295,8 @@ def _harness_version() -> tuple[str, bool]:
 
 
 def target_verdict(summary: AnswerSummary, targets: QaTargets) -> dict[str, TargetVerdict] | None:
-    """Compare the run with each target; None when a case failed, so the run measured less than it claims.
+    """Compare the run with each target; None when a case failed in the stack or the app, so the run measured less
+    than it claims. A model's unusable reply does not stop the verdict: it counts as a question not answered.
 
     A share is judged by its 95 % interval: "met" only when even the lower end reaches the minimum. A share that
     could not be computed (no case to compute it over) does not meet its target. Unsupported answers are judged by
@@ -343,35 +347,52 @@ def _print_summary(record: AnswerRunRecord, targets: QaTargets, path: Path) -> N
     answerable = [case for case in first if case.gold_section is not None]
     print(f"\nanswerable ({len(answerable)}{label}): verdict by whether search found the gold section")
     print(f"  {'verdict':<22}{'found':>7}{'not found':>11}")
-    for verdict in ("cited_gold", "cited_other", "declined_no_passages", "declined_by_model", "failed"):
+    for verdict in (
+        "cited_gold",
+        "cited_other",
+        "declined_no_passages",
+        "declined_by_model",
+        "unusable_reply",
+        "failed",
+    ):
         found = sum(c.score.verdict == verdict and c.score.gold_retrieved is True for c in answerable)
         lost = sum(c.score.verdict == verdict and c.score.gold_retrieved is not True for c in answerable)
         print(f"  {verdict:<22}{found:>7}{lost:>11}")
 
     unanswerable = [case for case in first if case.gold_section is None]
     print(f"\nunanswerable ({len(unanswerable)}{label}):")
-    for verdict in ("declined_no_passages", "declined_by_model", "answered_unsupported", "failed"):
+    for verdict in ("declined_no_passages", "declined_by_model", "answered_unsupported", "unusable_reply", "failed"):
         print(f"  {verdict:<22}{sum(c.score.verdict == verdict for c in unanswerable):>7}")
 
     for repetition, summary in enumerate(record.summaries, start=1):
-        errors = sorted(
-            {
-                c.ask_error or "unknown"
-                for c in record.cases
-                if c.repetition == repetition and c.score.verdict == "failed"
-            }
-        )
-        _print_targets(summary, targets, f"repetition {repetition}" if record.repetitions > 1 else "", errors)
+        title = f"repetition {repetition}" if record.repetitions > 1 else ""
+        _print_failures([c for c in record.cases if c.repetition == repetition], title)
+        _print_targets(summary, targets, title)
     if record.repetitions > 1:
         _print_flips(record)
 
 
-def _print_targets(s: AnswerSummary, targets: QaTargets, title: str, errors: list[str]) -> None:
+def _print_failures(cases: Sequence[AnswerCaseRecord], title: str) -> None:
+    """Print the failed cases of one repetition counted by category and label, so an outage of the stack is never
+    read as worse answers; nothing when no case failed."""
+    counts = Counter(c.failure_label for c in cases if c.failure_label is not None)
+    if not counts:
+        return
+    heading = f"{title}: " if title else ""
+    print(f"\n{heading}failures by category (infrastructure and app: left out of the numbers; model: counted)")
+    for category in ("infrastructure", "app", "model"):
+        labels = {label: n for label, n in sorted(counts.items()) if CATEGORY[label] == category}
+        if labels:
+            listed = ", ".join(f"{label} {n}" for label, n in labels.items())
+            print(f"  {category:<15}{sum(labels.values()):>4}  {listed}")
+
+
+def _print_targets(s: AnswerSummary, targets: QaTargets, title: str) -> None:
     """Print one repetition's results with their intervals against the targets, or why it has no verdict."""
     verdicts = target_verdict(s, targets)
     heading = f"{title}: " if title else ""
     if verdicts is None:
-        print(f"\n{heading}invalid: {s.failed} question(s) got no answer ({', '.join(errors)}); no target verdict")
+        print(f"\n{heading}invalid: {s.failed} question(s) failed in the stack or the app; no target verdict")
         return
     answered = "n/a" if s.answered is None else f"{s.answered:.3f}"
     gold_cited = "n/a" if s.gold_cited is None else f"{s.gold_cited:.3f}"

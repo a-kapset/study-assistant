@@ -5,6 +5,7 @@ model as "provider/model", and this module picks the builder for that provider, 
 provider is a change of configuration only.
 """
 
+import json
 from collections.abc import Callable, Mapping
 
 import httpx2
@@ -39,6 +40,15 @@ class LlmRequestError(LlmError):
         """Keep the status the provider answered with; it is the only detail the message shows."""
         super().__init__(f"the model provider answered with status {status_code}")
         self.status_code = status_code
+
+
+class LlmUnreadableReplyError(LlmError):
+    """The model provider answered with success, but its reply could not be read, for example because it was cut
+    off in the middle."""
+
+    def __init__(self) -> None:
+        """Say that the reply could not be read; the reply itself is not shown."""
+        super().__init__("the model provider sent a reply that could not be read")
 
 
 class LlmRefusedError(LlmError):
@@ -95,8 +105,9 @@ async def ainvoke[Input, Output](runnable: Runnable[Input, Output], value: Input
     """Call a chat model, or a runnable built on one, and turn a provider's failure into an ``LlmError``.
 
     No connection or no answer in time raises ``LlmUnavailableError`` with the error's type; an error status from
-    the provider raises ``LlmRequestError``; a refusal of a structured reply raises ``LlmRefusedError``. The
-    provider's own exception stays attached as the cause.
+    the provider raises ``LlmRequestError``; a successful status with a body that is not valid JSON, or not the
+    reply the client expects, raises ``LlmUnreadableReplyError``; a refusal of a structured reply raises
+    ``LlmRefusedError``. The provider's own exception stays attached as the cause.
     """
     try:
         return await runnable.ainvoke(value)
@@ -105,5 +116,9 @@ async def ainvoke[Input, Output](runnable: Runnable[Input, Output], value: Input
         raise LlmUnavailableError(type(error).__name__) from error
     except openai.APIStatusError as error:
         raise LlmRequestError(error.status_code) from error
+    # The client reads the body of a successful reply without catching a JSON error, so a reply cut off on the way
+    # would otherwise leave the app as an unhandled error.
+    except (json.JSONDecodeError, openai.APIResponseValidationError) as error:
+        raise LlmUnreadableReplyError from error
     except OpenAIRefusalError as error:
         raise LlmRefusedError from error

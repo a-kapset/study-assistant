@@ -6,6 +6,8 @@ from typing import cast
 import pytest
 from pydantic import JsonValue
 
+from evalharness.failures import FailureLabel, classify
+from evalharness.proxy.faults import FaultKind, fault_suffix
 from evalharness.proxy.ledger import LedgerLine, read_ledger
 from evalharness.settings import HarnessSettings
 from evalharness.transport import SutTransport
@@ -218,3 +220,67 @@ async def test_an_instruction_in_the_question_does_not_override_the_rules(
     placed, not how a real model treats it. One reply of one model, like the passage test.
     """
     await _ask_and_expect_the_instruction_ignored(sut, settings, f"{INJECTION_QUESTION} {INSTRUCTION}")
+
+
+@pytest.mark.covers("US-016", "AC-1", "AC-2")
+@pytest.mark.parametrize(
+    ("fault", "label"),
+    [
+        pytest.param("rate_limited", "rate_limited", id="rate-limit"),
+        pytest.param("spend_limit", "budget_exceeded", id="spend-limit"),
+        pytest.param("server_error", "provider_error", id="server-error"),
+        pytest.param("empty_output", "unusable_reply", id="empty-output"),
+        pytest.param("truncated_body", "unusable_reply", id="truncated-body"),
+    ],
+)
+async def test_a_provider_failure_gets_the_label_of_its_cause(
+    fault: FaultKind, label: FailureLabel, sut: SutTransport, settings: HarnessSettings
+) -> None:
+    """Asks the recorded demo question with a request id marked for a provider failure, so the proxy answers every
+    model call of this request with that failure instead of the recording, and labels the app's response with the
+    ledger lines of the request.
+
+    What it checks: the label the harness gives the response of the real app is the cause that was injected.
+    What a result tells: a pass means the app answers each provider failure in the way the label rules expect (an
+    error envelope with its code, the calls the client repeats), so a run on this stack can tell an outage from a
+    model failure. A wrong label points to a changed answer of the app (another status or code, an unhandled error
+    shown as "app_error", an error passed off as an answer) or to a label rule that no longer fits it.
+    Why it is worth having: the label rules are tested on prepared responses, which assume how the app answers each
+    failure; only the real app and its model client show that they do. No call reaches the provider, so it costs
+    nothing and runs on every push.
+    """
+    await _require_the_proxy(sut)
+
+    observation = await sut.request(
+        "POST",
+        "/v1/ask",
+        json={"course_id": "demo", "question": ON_TOPIC_QUESTION},
+        request_id_suffix=fault_suffix(fault),
+    )
+
+    lines = _ledger_lines(settings, observation.request_id)
+    assert classify(observation, lines) == label, (
+        f"the {fault} fault was labelled {classify(observation, lines)!r}: the app answered "
+        f"{observation.status_code} {observation.body_text}, the ledger has {[(ln.source, ln.status) for ln in lines]}"
+    )
+
+
+@pytest.mark.covers("US-016", "AC-1")
+async def test_a_call_without_a_recording_is_labelled_a_replay_miss(
+    sut: SutTransport, settings: HarnessSettings
+) -> None:
+    """Asks a question that reaches the model and has no recording, with a new id in the text so none can exist.
+
+    What it checks: the response is labelled "replay_miss", a failure of the stack, not of the model.
+    What a result tells: a pass means a run on an out-of-date recording is reported as invalid, not as an app that
+    cannot answer. A failure points to the app's answer to the proxy's miss or to the miss rule.
+    Why it is worth having: a miss is the most common failure of a replayed run, and it reaches the app the way a
+    provider error does; the miss here is a real one, not an injected fault.
+    """
+    await _require_the_proxy(sut)
+    question = f"{ON_TOPIC_QUESTION} (case {uuid.uuid4().hex})"
+
+    observation = await sut.request("POST", "/v1/ask", json={"course_id": "demo", "question": question})
+
+    lines = _ledger_lines(settings, observation.request_id)
+    assert classify(observation, lines) == "replay_miss", f"labelled {classify(observation, lines)!r}: {lines}"
