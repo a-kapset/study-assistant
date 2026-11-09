@@ -32,7 +32,15 @@ from evalharness.corpus_db import CorpusReader
 from evalharness.datasets.paraphrase_set import ParaphrasePair, ParaphraseSet, load_paraphrase_set
 from evalharness.evaluation.paraphrase_record import PairPass, PairRecord, ParaphraseRunRecord, write_record
 from evalharness.evaluation.record import PassName
-from evalharness.evaluation.retrieval import Corpus, RunRefused, Searched, SearchResult, pass_result, search
+from evalharness.evaluation.retrieval import (
+    Corpus,
+    RunRefused,
+    Searched,
+    SearchResult,
+    pass_result,
+    read_app_settings,
+    search,
+)
 from evalharness.relations.paraphrase import (
     PairOutcome,
     RelationSummary,
@@ -78,6 +86,7 @@ async def run(
     started_at = datetime.now(UTC)
     check_gold_sections(pairs, corpus.section_ids(course_id))
     snapshot = corpus.snapshot(course_id)
+    app_settings = await read_app_settings(sut)
     searched: dict[PassName, list[tuple[Searched, Searched]]] = {}
     for name, extra in _PASSES.items():
         searched[name] = [
@@ -109,6 +118,7 @@ async def run(
         set_sha256=pairs.sha256,
         course_id=course_id,
         corpus_snapshot=snapshot,
+        app_settings=app_settings,
         embedding_space=reported.embedding_space if reported is not None else None,
         k=reported.k if reported is not None else None,
         min_score=reported.min_score if reported is not None else None,

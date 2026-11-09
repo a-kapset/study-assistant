@@ -4,10 +4,13 @@
     poetry run python -m evalharness.evaluation.compare <before.json> <after.json>
 
 Run it from evaluation-harness/, like the tests. --factor names the one recorded value that was changed on purpose
-(corpus, embedding_space, k, min_score); leave it out for a repeated run or a change of the app's code, which a
-record does not hold. The runs are compared only when they measured the same questions and the recorded values
-differ in exactly that factor: when two things changed at once, a difference cannot be put down to either.
-Exit code 0 when the runs were compared, whatever the result; 2 when the comparison was refused.
+(corpus, embedding_space, k, min_score, or app for the app's code); leave it out for a repeated run. The runs are
+compared only when they measured the same questions and the recorded values differ in exactly that factor: when two
+things changed at once, a difference cannot be put down to either. The app's code is told by the commit in the
+recorded app settings, so a run whose app commit cannot be told is refused: one recorded before runs kept the app
+settings, one built without GIT_COMMIT ("unknown"), and two runs of the same commit with uncommitted changes
+("-dirty"), which may hold different code. Exit code 0 when the runs were compared, whatever the result; 2 when the
+comparison was refused.
 """
 
 import argparse
@@ -20,15 +23,20 @@ from evalharness.datasets.retrieval_gold import load_declaration
 from evalharness.evaluation.record import CaseRecord, RunRecord
 from evalharness.stats.paired import Change, change_verdict, flip_count, paired_change
 
-type Factor = Literal["corpus", "embedding_space", "k", "min_score"]
+type Factor = Literal["corpus", "embedding_space", "k", "min_score", "app"]
 
-# The run values a comparison checks, and the factor name each one goes by on the command line.
+# The run values a comparison checks, and the factor name each one goes by on the command line. The app's code has
+# no field of its own: it is the commit inside the recorded app settings.
 _FACTOR_FIELDS: dict[Factor, str] = {
     "corpus": "corpus_snapshot",
     "embedding_space": "embedding_space",
     "k": "k",
     "min_score": "min_score",
 }
+_FACTORS: tuple[Factor, ...] = (*_FACTOR_FIELDS, "app")
+
+# The build marks a commit with this ending when app/ had changes not yet committed.
+_DIRTY = "-dirty"
 
 
 class NotComparable(ValueError):
@@ -40,7 +48,7 @@ def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m evalharness.evaluation.compare")
     parser.add_argument("before", type=Path, help="the record of the run before the change")
     parser.add_argument("after", type=Path, help="the record of the run after the change")
-    parser.add_argument("--factor", choices=list(_FACTOR_FIELDS), help="the one recorded value changed on purpose")
+    parser.add_argument("--factor", choices=list(_FACTORS), help="the one recorded value changed on purpose")
     args = parser.parse_args(argv)
 
     before = RunRecord.model_validate_json(args.before.read_bytes())
@@ -61,12 +69,35 @@ def check_comparable(before: RunRecord, after: RunRecord, factor: Factor | None)
     for field in ("gold_sha256", "course_id", "sets"):
         if getattr(before, field) != getattr(after, field):
             raise NotComparable(f"{field} differs: {getattr(before, field)} / {getattr(after, field)}")
-    differing = {name for name, field in _FACTOR_FIELDS.items() if getattr(before, field) != getattr(after, field)}
+    before_commit, after_commit = app_commit(before), app_commit(after)
+    if before_commit == after_commit and before_commit.endswith(_DIRTY):
+        raise NotComparable(
+            f"both runs are app {before_commit}: uncommitted changes of one commit may hold other code; "
+            "commit the app's changes, rebuild and repeat both runs"
+        )
+    differing: set[Factor] = {
+        name for name, field in _FACTOR_FIELDS.items() if getattr(before, field) != getattr(after, field)
+    }
+    if before_commit != after_commit:
+        differing.add("app")
     expected = {factor} if factor else set()
     if differing != expected:
         declared = factor or "nothing"
         found = ", ".join(sorted(differing)) or "nothing"
         raise NotComparable(f"declared change: {declared}; recorded values that differ: {found}")
+
+
+def app_commit(record: RunRecord) -> str:
+    """Return the commit of the app's code a run measured; refuse a run whose app commit cannot be told."""
+    if record.app_settings is None:
+        raise NotComparable(f"run {record.run_id[:8]} was recorded without the app's settings; repeat it")
+    commit = record.app_settings.get("git_commit")
+    if not isinstance(commit, str) or commit in ("", "unknown"):
+        raise NotComparable(
+            f"run {record.run_id[:8]} has no app commit ({commit!r}): "
+            "build the app with GIT_COMMIT set, see app/README.md"
+        )
+    return commit
 
 
 def _min_meaningful_change(record: RunRecord) -> float:
@@ -81,7 +112,9 @@ def _print_comparison(before: RunRecord, after: RunRecord, factor: Factor | None
     """Print what changed, the change of recall with its interval, flips and verdict, and the change of MRR."""
     print(f"compare {before.run_id[:8]} -> {after.run_id[:8]}  {before.course_id}  sets {' '.join(before.sets)}")
     if factor is None:
-        print("declared change: none of the recorded values (a repeated run or a change of the app's code)")
+        print(f"declared change: none of the recorded values (a repeated run of app {_commit(app_commit(before))})")
+    elif factor == "app":
+        print(f"declared change: app ({_commit(app_commit(before))} -> {_commit(app_commit(after))})")
     else:
         field = _FACTOR_FIELDS[factor]
         print(f"declared change: {factor} ({_short(getattr(before, field))} -> {_short(getattr(after, field))})")
@@ -145,6 +178,12 @@ def _short(value: object) -> str:
     """Write a recorded value; a corpus snapshot hash is cut to its first 12 characters, enough to tell two apart."""
     text = str(value)
     return text[:12] if len(text) == 64 else text
+
+
+def _commit(commit: str) -> str:
+    """Write an app commit cut to its first 12 characters, keeping the mark of uncommitted changes."""
+    base = commit.removesuffix(_DIRTY)
+    return base[:12] + commit[len(base) :]
 
 
 if __name__ == "__main__":

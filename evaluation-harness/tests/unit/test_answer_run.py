@@ -259,7 +259,9 @@ class _App:
         self.requests: list[tuple[str, int]] = []
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
-        """Answer a search or an ask of the fake course."""
+        """Answer a search or an ask of the fake course; the settings request is answered but not remembered."""
+        if request.url.path == "/v1/config":
+            return httpx2.Response(200, json={"app_version": "0.1.0", "settings": {"git_commit": "evalharness_app"}})
         request_id = request.headers[REQUEST_ID_HEADER]
         repetition = repetition_of(request_id)
         self.requests.append((request.url.path, repetition))

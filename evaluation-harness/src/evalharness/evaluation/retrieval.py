@@ -24,7 +24,12 @@ from evalharness.transport import SutTransport
 
 # Why a run was refused; a caller can act on the code without parsing the message.
 type RunRefusedCode = Literal[
-    "course_mismatch", "unknown_set", "held_out_not_allowed", "gold_section_missing", "gold_question_in_corpus"
+    "course_mismatch",
+    "unknown_set",
+    "held_out_not_allowed",
+    "gold_section_missing",
+    "gold_question_in_corpus",
+    "app_config_unreadable",
 ]
 
 
@@ -182,6 +187,7 @@ async def run(
     check_sections(gold, corpus.section_ids(course_id))
     check_questions_not_in_corpus(gold, corpus.chunk_texts(course_id))
     snapshot = corpus.snapshot(course_id)
+    app_settings = await read_app_settings(sut)
 
     primary = [await search(sut, course_id, case.query, {}) for case in cases]
     reported = next((result for _, _, result in primary if result is not None), None)
@@ -205,6 +211,7 @@ async def run(
         sets=tuple(sorted({case.exam_set for case in cases})),
         held_out_use=held_out_use,
         corpus_snapshot=snapshot,
+        app_settings=app_settings,
         embedding_space=reported.embedding_space if reported is not None else None,
         k=reported.k if reported is not None else None,
         min_score=reported.min_score if reported is not None else None,
@@ -234,6 +241,30 @@ def summaries(cases: Sequence[GoldCase], scores: Sequence[CaseScore]) -> dict[st
         for key in ("all", f"set {case.exam_set}", f"chapter {case.chapter}", f"level {level}"):
             groups[key].append(score)
     return {key: summarise(group) for key, group in groups.items()}
+
+
+class _AppConfig(BaseModel):
+    """The part of the app's GET /v1/config response a run records."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    settings: dict[str, JsonValue]
+
+
+async def read_app_settings(sut: SutTransport) -> dict[str, JsonValue]:
+    """Read the app's effective settings, so the record says which code and configuration answered.
+
+    Refused when they cannot be read: a record without them could never be compared with another one, since a
+    change of the app's code would not be seen.
+    """
+    observation = await sut.request("GET", "/v1/config")
+    if observation.transport_error is not None or observation.status_code != 200:
+        reason = observation.transport_error or f"status {observation.status_code}"
+        raise RunRefused("app_config_unreadable", f"GET /v1/config failed: {reason}")
+    try:
+        return _AppConfig.model_validate(observation.body_json).settings
+    except ValidationError as error:
+        raise RunRefused("app_config_unreadable", f"GET /v1/config has no settings object: {error}") from error
 
 
 async def search(sut: SutTransport, course_id: str, query: str, extra: dict[str, JsonValue]) -> Searched:

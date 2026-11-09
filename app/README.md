@@ -98,7 +98,9 @@ From the repository root, with Docker running:
 
 ```powershell
 Copy-Item .env.example .env                   # then set the passwords and ADMIN_API_KEY in .env
-$env:GIT_COMMIT = git rev-parse --short HEAD  # optional: shown by /v1/config
+# The app's code: the last commit that changed app/, "-dirty" when app/ has uncommitted changes.
+# Shown by /v1/config and kept in every harness run record; runs built without it cannot be compared.
+$env:GIT_COMMIT = "$(git log -1 --format=%H -- app)$(if (git status --porcelain -- app) { '-dirty' })"
 docker compose up -d --build --wait
 docker compose wait ingest                    # waits for the one-shot ingestion run and returns its exit code
 docker compose logs migrate --no-log-prefix   # which migration files were applied

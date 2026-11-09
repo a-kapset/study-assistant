@@ -8,7 +8,7 @@ committed pair file, whose hash the record carries.
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from evalharness.evaluation.record import PassName, PassResult
 from evalharness.relations.paraphrase import PairOutcome, RelationSummary
@@ -52,6 +52,9 @@ class ParaphraseRunRecord(_Strict):
     course_id: str
     # Taken once, before the first search.
     corpus_snapshot: str
+    # The settings the app reported at GET /v1/config before the first search, secrets masked. Their "git_commit"
+    # names the app's code, with "-dirty" when app/ had uncommitted changes at build time.
+    app_settings: dict[str, JsonValue]
     # The values the app reported in the primary pass; None when no search of that pass succeeded.
     embedding_space: str | None
     k: int | None

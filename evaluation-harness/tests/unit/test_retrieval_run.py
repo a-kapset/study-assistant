@@ -99,16 +99,38 @@ def _found(request: httpx2.Request, k: int = 5) -> httpx2.Response:
     )
 
 
+APP_SETTINGS: dict[str, JsonValue] = {"log_level": "INFO", "git_commit": "evalharness_app_commit"}
+
+
+def _settings(request: httpx2.Request) -> httpx2.Response:
+    """Answer GET /v1/config as the app does, with the settings ``APP_SETTINGS``."""
+    return httpx2.Response(200, json={"app_version": "0.1.0", "settings": APP_SETTINGS})
+
+
+def _serving_config(handler: Handler, config: Handler) -> Handler:
+    """Answer GET /v1/config with ``config``, every other request with ``handler``."""
+
+    def serve(request: httpx2.Request) -> httpx2.Response:
+        """Route the settings request apart from the searches."""
+        if request.url.path == "/v1/config":
+            return config(request)
+        return handler(request)
+
+    return serve
+
+
 async def _run(
     gold: GoldSet,
     handler: Handler,
     sections: set[str] | None = None,
     texts: tuple[str, ...] = ("Testing finds defects.",),
+    config: Handler = _settings,
 ) -> RunRecord:
-    """Run every case of ``gold`` against a fake app answering with ``handler``; the corpus holds the gold sections."""
+    """Run every case of ``gold`` against a fake app answering searches with ``handler`` and its settings request
+    with ``config``; the corpus holds the gold sections."""
     corpus = _Corpus(sections if sections is not None else {case.gold_section for case in gold.cases}, texts)
     settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
-    async with SutTransport(settings, transport=httpx2.MockTransport(handler)) as sut:
+    async with SutTransport(settings, transport=httpx2.MockTransport(_serving_config(handler, config))) as sut:
         return await run(
             gold,
             gold.cases,
@@ -189,6 +211,56 @@ async def test_a_gold_question_reprinted_in_the_corpus_refuses_the_run() -> None
     assert refused.value.code == "gold_question_in_corpus", f"a reprinted question gave {refused.value.code}"
 
 
+@pytest.mark.covers("US-007", "AC-6")
+async def test_the_record_carries_the_settings_the_app_reported() -> None:
+    """Runs one question against a fake app whose GET /v1/config reports a commit and a log level; expects exactly
+    these settings in the run record.
+
+    A pass means every record says which app code and configuration answered, so a later comparison can see a change
+    of the app's code and a person can rebuild the same stack to repeat the run. A failure means the record keeps
+    nothing, or something else, and two runs of different code look like a repeat; nothing else in the record shows
+    the code, because the app's code changes neither the gold set nor the corpus.
+    """
+    record = await _run(_gold(_case("A-1", "1.1")), _found)
+
+    assert record.app_settings == APP_SETTINGS, (
+        f"the record holds {record.app_settings}, the app reported {APP_SETTINGS}"
+    )
+
+
+def _connect_error(request: httpx2.Request) -> httpx2.Response:
+    """Fail the request as an app that cannot be reached."""
+    raise httpx2.ConnectError("connection refused", request=request)
+
+
+def _not_found(request: httpx2.Request) -> httpx2.Response:
+    """Answer as an app without the settings endpoint, or an address that is not the app."""
+    return httpx2.Response(404, json={"status": "error", "error": {"code": "not_found"}})
+
+
+@pytest.mark.covers("US-007", "AC-6")
+@pytest.mark.parametrize("config", [_not_found, _connect_error], ids=["not found", "no response"])
+async def test_a_run_whose_app_settings_cannot_be_read_is_refused_before_the_first_search(config: Handler) -> None:
+    """Answers GET /v1/config with 404, or not at all; expects the refusal "app_config_unreadable" and no search sent.
+
+    A pass means a record without the app's identity is never written: the run stops before it spends time on the
+    questions. A failure means such a run goes on and leaves a record whose code nobody can tell, which every later
+    comparison would have to refuse, or the settings are read only after the searches, when the run's time is spent.
+    """
+    searches: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Remember every search and answer it with one found passage."""
+        searches.append(request.url.path)
+        return _found(request)
+
+    with pytest.raises(RunRefused) as refused:
+        await _run(_gold(_case("A-1", "1.1")), handler, config=config)
+
+    assert refused.value.code == "app_config_unreadable", f"an unreadable /v1/config gave {refused.value.code}"
+    assert searches == [], f"the run sent {len(searches)} searches before it was refused"
+
+
 @pytest.mark.covers("US-007", "AC-9")
 async def test_the_primary_pass_sends_the_question_as_a_user_does() -> None:
     """Runs two questions and reads the requests of the primary pass: only the course and the unchanged question.
@@ -233,11 +305,6 @@ async def test_the_diagnostic_pass_asks_for_the_apps_k_with_no_lowest_score() ->
 
     diagnostic = [(body.get("k"), body.get("min_score")) for body in bodies[len(gold.cases) :]]
     assert diagnostic == [(7, -1)] * len(gold.cases), f"the diagnostic pass asked for (k, min_score) {diagnostic}"
-
-
-def _connect_error(request: httpx2.Request) -> httpx2.Response:
-    """Fail the request as an app that cannot be reached."""
-    raise httpx2.ConnectError("connection refused", request=request)
 
 
 @pytest.mark.covers("US-007", "AC-4")

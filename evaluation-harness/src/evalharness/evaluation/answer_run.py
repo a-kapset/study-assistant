@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from evalharness.corpus_db import CorpusReader
 from evalharness.datasets.qa_set import QaSet, QaTargets, load_qa_set
 from evalharness.evaluation.answer_record import AnswerCaseRecord, AnswerRunRecord, write_answer_record
-from evalharness.evaluation.retrieval import Corpus, RunRefused
+from evalharness.evaluation.retrieval import Corpus, RunRefused, read_app_settings
 from evalharness.observation import Observation
 from evalharness.oracles.answer import (
     AbstainReason,
@@ -125,6 +125,7 @@ async def run(
     started_at = datetime.now(UTC)
     check_gold_sections(qa, corpus.section_ids(qa.course_id))
     snapshot = corpus.snapshot(qa.course_id)
+    app_settings = await read_app_settings(sut)
     searched = {}
     for case in qa.cases:
         searched[case.id] = await sut.request(
@@ -169,6 +170,7 @@ async def run(
         qa_sha256=hashlib.sha256(qa_bytes).hexdigest(),
         course_id=qa.course_id,
         corpus_snapshot=snapshot,
+        app_settings=app_settings,
         models_returned=tuple(sorted(models)),
         repetitions=repetitions,
         summaries=summaries,

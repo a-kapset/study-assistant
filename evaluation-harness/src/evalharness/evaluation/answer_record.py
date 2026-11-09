@@ -8,7 +8,7 @@ set's file. Answer records go to their own folder, apart from the retrieval reco
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from evalharness.oracles.answer import AbstainReason, AnswerCaseScore, AnswerSummary
 from evalharness.proxy.ledger import Source
@@ -62,6 +62,9 @@ class AnswerRunRecord(_Strict):
     course_id: str
     # Taken once, before the first question.
     corpus_snapshot: str
+    # The settings the app reported at GET /v1/config before the first question, secrets masked. Their "git_commit"
+    # names the app's code, with "-dirty" when app/ had uncommitted changes at build time.
+    app_settings: dict[str, JsonValue]
     # The model versions the provider reported answering with, from the ledger; empty when no model was called.
     models_returned: tuple[str, ...]
     # How many times every question was asked; runs asked a different number of times are not compared directly.

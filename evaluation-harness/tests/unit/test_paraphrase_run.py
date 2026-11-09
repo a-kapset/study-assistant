@@ -48,8 +48,11 @@ def _app(request: httpx2.Request) -> httpx2.Response:
     """Answer a search as an app whose lowest score cuts off every passage of a rewording.
 
     A question finds five passages, the first from the gold section 1.1. A rewording finds nothing with the app's
-    own lowest score; asked with no lowest score it finds three of the question's passages and two others.
+    own lowest score; asked with no lowest score it finds three of the question's passages and two others. The
+    settings request gets a minimal settings object.
     """
+    if request.url.path == "/v1/config":
+        return httpx2.Response(200, json={"app_version": "0.1.0", "settings": {"git_commit": "evalharness_app"}})
     body = json.loads(request.content)
     if body["query"].startswith("question"):
         chunks = [("c1", "1.1"), ("c2", "2.1"), ("c3", "2.1"), ("c4", "2.1"), ("c5", "2.1")]

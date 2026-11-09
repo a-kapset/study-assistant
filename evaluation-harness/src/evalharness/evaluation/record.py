@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from evalharness.oracles.retrieval import CaseScore, Summary
 
@@ -76,6 +76,10 @@ class RunRecord(_Strict):
     held_out_use: int | None
     # Taken once, before the first search.
     corpus_snapshot: str
+    # The settings the app reported at GET /v1/config before the first search, secrets masked. Their "git_commit"
+    # names the app's code, with "-dirty" when app/ had uncommitted changes at build time. None in records written
+    # before runs read them.
+    app_settings: dict[str, JsonValue] | None = None
     # The values the app reported in the primary pass; None when no search of that pass succeeded.
     embedding_space: str | None
     k: int | None

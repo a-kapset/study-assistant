@@ -147,10 +147,13 @@ poetry run python -m evalharness.evaluation.compare runs/retrieval/<before>.json
 poetry run python -m evalharness.evaluation.compare runs/retrieval/<before>.json runs/retrieval/<after>.json
 ```
 
-`--factor` (`corpus`, `embedding_space`, `k`, `min_score`) names the one recorded value changed on purpose; leave it
-out for a repeated run or a change of the app's code, which a record does not hold. The comparison is refused, with
-exit code 2, when the runs measured other questions, when any other recorded value differs as well, or when the gold
-declaration has no `[comparison] min_meaningful_change`. It prints the change of recall with its interval, the
+`--factor` (`corpus`, `embedding_space`, `k`, `min_score`, `app`) names the one recorded value changed on purpose;
+`app` is the app's code, read from the commit in the app settings every run records from `/v1/config`. Leave it out
+for a repeated run. The comparison is refused, with exit code 2, when the runs measured other questions, when any
+other recorded value differs as well, when the gold declaration has no `[comparison] min_meaningful_change`, or when
+the app's code of a run cannot be told: a record written before runs kept the app settings, an app built without
+`GIT_COMMIT` (`unknown`), or two runs of the same commit with uncommitted changes (`-dirty`). Build the stack with the
+`GIT_COMMIT` command of [app/README.md](../app/README.md#with-docker-the-app-and-its-database). It prints the change of recall with its interval, the
 questions gained and lost, McNemar's exact p and a verdict (better, worse, no meaningful change, underpowered,
 unchanged), and the change of MRR with its interval: [METRICS.md](METRICS.md#comparison-of-two-runs).
 
