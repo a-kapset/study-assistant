@@ -60,11 +60,11 @@ What is planned and what is done, in the order of work.
 - [ ] App: OpenTelemetry traces per request and per stage
 
 **8. Hybrid search and reranker**
-- [ ] App: lexical search, hybrid fusion, cross-encoder reranker
-- [ ] Evaluation harness: variants compared with paired statistics; retrieval relations (threshold, k, insertion order); latency per stage; the stage where a relevant passage was lost
+- [ ] App: lexical search, hybrid fusion, cross-encoder reranker; a lexical-only result marked as degraded when the embedding server is down
+- [ ] Evaluation harness: variants compared with paired statistics; retrieval relations (threshold, k); latency per stage; a degraded result never reported as normal
 
 **9. Mutant experiment**
-- [ ] Evaluation harness: a catalogue of configuration and boundary faults; which check catches which fault; a report reproducible from run ids
+- [ ] Evaluation harness: a catalogue of configuration, boundary and source-code faults; which check catches which fault; whether the trace names the faulty stage; a report reproducible from run ids
 
 **10. Practice exams and progress**
 - [ ] App: practice sessions, scoring by course rules, progress per learning objective
