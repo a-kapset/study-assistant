@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from opentelemetry.trace import NoOpTracerProvider
 
 from study_assistant.courses.models import CourseManifest
 from study_assistant.courses.registry import load_course
@@ -42,7 +43,7 @@ NEW_REVISION = "fedcba9876543210fedcba9876543210fedcba98"
 @pytest.fixture
 async def search_store(postgres: MigratedDatabase) -> AsyncIterator[PostgresSearchStore]:
     """The app's search store, connected as the app's role through the app's connection pool."""
-    database = PostgresDatabase(postgres.settings(APP_ROLE, APP_ROLE_PASSWORD))
+    database = PostgresDatabase(postgres.settings(APP_ROLE, APP_ROLE_PASSWORD), NoOpTracerProvider())
     await database.open()
     try:
         yield PostgresSearchStore(database)

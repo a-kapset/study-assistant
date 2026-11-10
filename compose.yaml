@@ -1,5 +1,6 @@
 # Local stack: PostgreSQL with pgvector, the embedding server (after a check of its model files), a one-shot
-# migration run, the app, then a one-shot ingestion run that brings every course's stored data in line with its files.
+# migration run, a trace store, the app, then a one-shot ingestion run that brings every course's stored data in line
+# with its files.
 # Every value comes from the .env file next to this one (see .env.example); a missing one stops Compose
 # with its name. Each service gets only the values it needs.
 name: study-assistant
@@ -110,10 +111,21 @@ services:
       timeout: 3s
       retries: 30
 
+  # The trace store (Jaeger, in memory): the app sends its spans here over OTLP, and the harness and a browser read
+  # them back by trace id. Its traces are gone when the container stops.
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    ports:
+      # Reachable from this machine only: the web UI and the query API (/api/v3/traces/<trace id>).
+      - "127.0.0.1:${JAEGER_PUBLISHED_PORT:?set JAEGER_PUBLISHED_PORT in .env, see .env.example}:16686"
+
   app:
     build: *app-build
     environment:
       APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      # Where the app sends its spans, and the requests it does not trace (standard OpenTelemetry variables).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:?set OTEL_EXPORTER_OTLP_ENDPOINT in .env, see .env.example}
+      OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: ${OTEL_PYTHON_FASTAPI_EXCLUDED_URLS:?set OTEL_PYTHON_FASTAPI_EXCLUDED_URLS in .env, see .env.example}
       APP_DB__HOST: ${DB_HOST}
       APP_DB__PORT: ${DB_PORT}
       APP_DB__NAME: ${DB_NAME}
@@ -164,6 +176,9 @@ services:
       # Ingestion needs vectors, so the app starts once the embedding server has loaded its model.
       embedder:
         condition: service_healthy
+      # Its spans have somewhere to go from the first request on.
+      jaeger:
+        condition: service_started
     healthcheck:
       # The image has no curl; Python's standard library is enough. Healthy means ready, not only alive.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]

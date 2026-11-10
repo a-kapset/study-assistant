@@ -1,8 +1,11 @@
 """Vector search within one course: the question's vector, the closest passages, and the lowest score they need."""
 
+from opentelemetry.trace import Tracer
+
 from study_assistant.embed.base import Embedder
 from study_assistant.retrieval.models import SearchHit, SearchResult
 from study_assistant.retrieval.repository import SearchStore
+from study_assistant.tracing import stage_span
 
 
 class CourseNotSearchableError(Exception):
@@ -27,10 +30,11 @@ class CourseNotSearchableError(Exception):
 class VectorSearch:
     """Find the passages of a course that are closest to a question, in the embedder's space."""
 
-    def __init__(self, store: SearchStore, embedder: Embedder) -> None:
-        """Keep the store and the embedder; the space searched is always the one the embedder computes."""
+    def __init__(self, store: SearchStore, embedder: Embedder, tracer: Tracer) -> None:
+        """Keep the store, the embedder and the tracer; the space searched is always the one the embedder computes."""
         self._store = store
         self._embedder = embedder
+        self._tracer = tracer
 
     async def search(self, course_id: str, query: str, k: int, min_score: float) -> SearchResult:
         """Return up to ``k`` passages of the course scoring at least ``min_score``, closest first.
@@ -38,7 +42,13 @@ class VectorSearch:
         The course is checked before the question is embedded: a course that is not fully in the embedder's
         space raises ``CourseNotSearchableError``, so a result always covers the whole course. The result is
         "empty" when no passage reaches ``min_score``. Errors of the embedding server pass through unchanged.
+        The whole search is one span of the request's trace, marked as failed when the search raises.
         """
+        with stage_span(self._tracer, "search"):
+            return await self._search(course_id, query, k, min_score)
+
+    async def _search(self, course_id: str, query: str, k: int, min_score: float) -> SearchResult:
+        """Run the search that ``search`` describes."""
         space = self._embedder.space
         coverage = await self._store.coverage(course_id, space)
         if coverage.chunks == 0 or coverage.vectors < coverage.chunks:

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.trace import NoOpTracer
 from pydantic import ValidationError
 
 from study_assistant.composition import build_app
@@ -47,7 +48,9 @@ async def test_passages_below_the_lowest_score_are_left_out_and_the_kept_ones_ar
     """
     store = FakeSearchStore(scored_passages(0.9, 0.85, 0.85, 0.8))
 
-    result = await VectorSearch(store, fake_embedder).search("demo", "How many dice?", k=4, min_score=0.85)
+    result = await VectorSearch(store, fake_embedder, NoOpTracer()).search(
+        "demo", "How many dice?", k=4, min_score=0.85
+    )
 
     kept = [(hit.chunk_id, hit.rank) for hit in result.hits]
     assert kept == [("c1", 1), ("c2", 2), ("c3", 3)], f"hits at or above 0.85 should be ranked 1..3, got {kept}"
@@ -62,7 +65,7 @@ async def test_search_where_no_passage_reaches_the_lowest_score_is_empty(fake_em
     """
     store = FakeSearchStore(scored_passages(0.8, 0.7))
 
-    result = await VectorSearch(store, fake_embedder).search("demo", "Bake bread", k=5, min_score=0.85)
+    result = await VectorSearch(store, fake_embedder, NoOpTracer()).search("demo", "Bake bread", k=5, min_score=0.85)
 
     assert (result.status, result.hits) == ("empty", []), f"expected an empty result, got {result.status}"
 
@@ -85,7 +88,7 @@ async def test_course_not_fully_embedded_in_the_space_is_refused(
     store = FakeSearchStore(scored_passages(0.9), coverage=coverage)
 
     with pytest.raises(CourseNotSearchableError):
-        await VectorSearch(store, fake_embedder).search("demo", "How many dice?", k=5, min_score=0.85)
+        await VectorSearch(store, fake_embedder, NoOpTracer()).search("demo", "How many dice?", k=5, min_score=0.85)
 
 
 @pytest.mark.covers("US-006", "AC-3")

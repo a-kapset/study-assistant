@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import psycopg
 import pytest
+from opentelemetry.trace import NoOpTracerProvider
 from psycopg.conninfo import make_conninfo
 from pydantic import SecretStr
 from testcontainers.community.postgres import PostgresContainer
@@ -160,7 +161,7 @@ def postgres() -> Iterator[MigratedDatabase]:
 async def store(postgres: MigratedDatabase) -> AsyncIterator[PostgresCorpusStore]:
     """The app's corpus store on an empty corpus, connected as the app's role through the app's connection pool."""
     postgres.empty_corpus()
-    database = PostgresDatabase(postgres.settings(APP_ROLE, APP_ROLE_PASSWORD))
+    database = PostgresDatabase(postgres.settings(APP_ROLE, APP_ROLE_PASSWORD), NoOpTracerProvider())
     await database.open()
     try:
         yield PostgresCorpusStore(database)

@@ -21,6 +21,8 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
   OpenAI-compatible endpoint; the app image holds no model and no PyTorch
 - PostgreSQL 18 with [pgvector](https://github.com/pgvector/pgvector), reached through
   [psycopg 3](https://www.psycopg.org/psycopg3/) and its connection pool
+- Traces: the [OpenTelemetry](https://opentelemetry.io/docs/languages/python/) SDK with its FastAPI, psycopg and
+  httpx2 instrumentation, sent over OTLP to any trace backend
 - Docker Compose for running the app next to its database
 - [Poetry 2](https://python-poetry.org/) for dependencies and the virtual environment
 - Development: [pytest](https://docs.pytest.org/) with [Hypothesis](https://hypothesis.readthedocs.io/) for property
@@ -41,6 +43,7 @@ app/
 │   ├── composition.py      # build_app(settings): the one place where parts are built and wired
 │   ├── settings.py         # typed settings; unknown APP_* variables stop startup
 │   ├── logging_setup.py    # structlog, one JSON object per line on stdout
+│   ├── tracing.py          # OpenTelemetry: the OTLP exporter and the span of each stage of our own code
 │   ├── errors.py           # the error envelope and the handlers that use it
 │   ├── db.py               # Database protocol and the PostgreSQL pool, opened at startup, closed at shutdown
 │   ├── migrate.py          # one-shot migration run: applies new SQL files, the embedding space's vector table, the two roles
@@ -241,7 +244,10 @@ poetry run uvicorn study_assistant.main:create_app --factory
 ```
 
 Logs are JSON lines on stdout, each with the request id while a request is handled; uvicorn's own
-startup and access lines stay plain text.
+startup and access lines stay plain text. The traceback of an unhandled error is logged without the values of
+local variables, which hold the learner's question, course passages and model replies.
+
+Traces are configured by the standard OpenTelemetry variables, not by `APP_*` settings (see "Traces" below).
 
 ## Database
 
@@ -472,6 +478,27 @@ traceback and the request id.
 curl.exe -i http://127.0.0.1:8000/nope
 curl.exe -i -H "X-Request-ID: my-test-1" http://127.0.0.1:8000/health
 ```
+
+## Traces
+
+Every request is traced with [OpenTelemetry](https://opentelemetry.io/docs/languages/python/): one span for the
+request, one for each database query and each call to the embedding server and the model provider, and one for
+each stage of our own code, `search` and `generate_answer`. A retried model call shows as several call spans
+inside `generate_answer`. A stage that fails ends with the status ERROR and the error's class in `error.type`;
+error messages, query values and request bodies are never written to a span, so a trace holds no question text.
+
+Every response names its trace in the standard
+[`traceresponse`](https://www.w3.org/TR/trace-context-2/#traceresponse-header) header
+(`00-<trace id>-<span id>-<flags>`), and the request span keeps the request id as
+`http.response.header.x_request_id`, so a log line leads to its trace.
+
+Spans are sent in batches over OTLP/HTTP from a background thread, so a trace backend that is down slows no
+request. In the Compose stack they go to the `jaeger` service, which keeps them in memory; its UI and query API are
+at `http://127.0.0.1:16686` (`JAEGER_PUBLISHED_PORT`), e.g. `curl.exe http://127.0.0.1:16686/api/v3/traces/<trace id>`.
+Where they go is set by the standard variables, e.g. `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318`;
+`OTEL_PYTHON_FASTAPI_EXCLUDED_URLS=health,ready` leaves the health checks untraced and `OTEL_SDK_DISABLED=true`
+switches tracing off. Without an endpoint the exporter tries `http://localhost:4318`, logs in plain text that it cannot
+send, and a server stop then waits about 10 s for the last batch. Unit tests pass their own tracer provider to `build_app` and read the spans from memory.
 
 ## Development checks
 

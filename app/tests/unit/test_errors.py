@@ -79,3 +79,28 @@ def test_unhandled_exception_answers_500_without_its_details(settings: Settings,
         "request_id": response.headers["X-Request-ID"],
     }
     assert CANARY not in response.text
+
+
+def test_unhandled_error_log_keeps_no_local_values(
+    settings: Settings, fake_db: Database, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Raises an unhandled error inside a route that holds the learner's question in a local variable, and expects
+    the error logged with its traceback but without the question.
+
+    Catches the logged traceback carrying the values of local variables, which put the question, the course
+    passages and the model's reply into the logs although the app promises not to log them.
+    """
+    app = build_app(settings, fake_db)
+
+    @app.get("/test/crash-with-question")
+    async def crash_with_question() -> None:
+        """Hold a question in a local variable, as the ask route does, then fail."""
+        question = CANARY
+        raise RuntimeError(f"failed after {len(question)} characters")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/test/crash-with-question")
+
+    logged = capsys.readouterr().out
+    assert "unhandled_error" in logged, f"the unhandled error was not logged: {logged}"
+    assert CANARY not in logged, "the log of an unhandled error holds the value of a local variable"

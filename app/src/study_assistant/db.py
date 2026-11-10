@@ -5,6 +5,8 @@ from contextlib import AbstractAsyncContextManager
 from typing import Protocol
 
 import psycopg
+from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
+from opentelemetry.trace import TracerProvider
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
@@ -50,11 +52,12 @@ class Database(Protocol):
 
 
 class PostgresDatabase:
-    """The real database: a psycopg connection pool built from the settings."""
+    """The real database: a psycopg connection pool built from the settings; every query is a span of its request."""
 
-    def __init__(self, settings: DbSettings) -> None:
-        """Keep the settings; nothing connects until ``open``."""
+    def __init__(self, settings: DbSettings, tracer_provider: TracerProvider) -> None:
+        """Keep the settings and the tracer provider; nothing connects until ``open``."""
         self._settings = settings
+        self._tracer_provider = tracer_provider
         self._pool: AsyncConnectionPool[Connection] | None = None
 
     async def open(self) -> None:
@@ -76,8 +79,13 @@ class PostgresDatabase:
             timeout=s.connect_timeout_s,
             # A connection broken by a database restart is replaced instead of being handed out.
             check=AsyncConnectionPool.check_connection,
+            configure=self._trace_queries,
         )
         await self._pool.open(wait=False)
+
+    async def _trace_queries(self, conn: Connection) -> None:
+        """Make every query on a new pooled connection a span; query values are not recorded, only the SQL text."""
+        PsycopgInstrumentor.instrument_connection(conn, tracer_provider=self._tracer_provider)
 
     async def close(self) -> None:
         """Close every connection; calling it again, or before ``open``, does nothing."""

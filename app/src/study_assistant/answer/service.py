@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from opentelemetry.trace import Tracer
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from study_assistant.answer.models import AbstainReason, Answer, Citation
@@ -18,6 +19,10 @@ from study_assistant.llm.providers import LlmError, ainvoke
 from study_assistant.retrieval.models import SearchHit
 from study_assistant.retrieval.service import VectorSearch
 from study_assistant.settings import AskSettings, SearchSettings
+from study_assistant.tracing import stage_span
+
+# The span of the request's trace that covers the model call and the reading of its reply.
+GENERATE_SPAN = "generate_answer"
 
 # What the learner reads when no course passage is close enough to the question.
 NO_PASSAGES_ANSWER = "The course material has no passage close enough to this question, so it is not answered."
@@ -54,10 +59,16 @@ class Answerer:
     """Answer a learner's question about a course in the configured mode."""
 
     def __init__(
-        self, model: BaseChatModel, search: VectorSearch, ask: AskSettings, search_settings: SearchSettings
+        self,
+        model: BaseChatModel,
+        search: VectorSearch,
+        ask: AskSettings,
+        search_settings: SearchSettings,
+        tracer: Tracer,
     ) -> None:
-        """Keep the model, the search and the mode; the grounded mode searches with the default number of hits and
-        lowest score. Nothing is sent until the first question."""
+        """Keep the model, the search, the mode and the tracer; the grounded mode searches with the default number
+        of hits and lowest score. Nothing is sent until the first question."""
+        self._tracer = tracer
         self._model = model
         self._grounded_model = model.with_structured_output(_GroundedReply, method="json_schema", strict=True)
         self._search = search
@@ -81,18 +92,20 @@ class Answerer:
         A reply without text raises ``EmptyAnswerError``, so a refusal never looks like an answer.
         """
         messages: list[BaseMessage] = [SystemMessage(tutor_instructions(course)), HumanMessage(question)]
-        reply = await ainvoke(self._model, messages)
-        text = reply.text.strip()
-        if not text:
-            raise EmptyAnswerError
-        return text
+        with stage_span(self._tracer, GENERATE_SPAN):
+            reply = await ainvoke(self._model, messages)
+            text = reply.text.strip()
+            if not text:
+                raise EmptyAnswerError
+            return text
 
     async def _answer_from_passages(self, course: CourseManifest, question: str) -> Answer:
         """Search the course, and answer only from the passages found, or decline when none is close enough.
 
         The passages go to the model in their own message, after the instructions and before the question, so
         neither the course text nor the learner's question becomes part of the instructions. A reply that does not
-        have the asked-for form raises ``MalformedAnswerError``; one without answer text ``EmptyAnswerError``.
+        have the asked-for form raises ``MalformedAnswerError``; one without answer text ``EmptyAnswerError``. The
+        model call and the reading of its reply are one span of the request's trace, after the search's own span.
         """
         result = await self._search.search(course.id, question, self._k, self._min_score)
         if result.status != "ok":
@@ -103,16 +116,17 @@ class Answerer:
             HumanMessage(passages_block(result.hits)),
             HumanMessage(question),
         ]
-        try:
-            reply = await ainvoke(self._grounded_model, messages)
-        except ValidationError as error:
-            raise MalformedAnswerError from error
-        if not isinstance(reply, _GroundedReply):
-            raise MalformedAnswerError
-        text = reply.answer.strip()
-        if not text:
-            raise EmptyAnswerError
-        citations, invalid = _cite(reply.citations, result.hits)
+        with stage_span(self._tracer, GENERATE_SPAN):
+            try:
+                reply = await ainvoke(self._grounded_model, messages)
+            except ValidationError as error:
+                raise MalformedAnswerError from error
+            if not isinstance(reply, _GroundedReply):
+                raise MalformedAnswerError
+            text = reply.answer.strip()
+            if not text:
+                raise EmptyAnswerError
+            citations, invalid = _cite(reply.citations, result.hits)
         reason: AbstainReason | None = "model_declined" if reply.abstained else None
         return Answer(answer=text, abstain_reason=reason, citations=citations, invalid_citations=invalid)
 

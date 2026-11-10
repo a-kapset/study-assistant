@@ -7,6 +7,7 @@ always comes from the configuration the app was built with.
 import sys
 
 import structlog
+from structlog.tracebacks import ExceptionDictTransformer
 
 from study_assistant.settings import LogLevel
 
@@ -22,7 +23,9 @@ def configure_logging(level: LogLevel) -> None:
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
-            structlog.processors.dict_tracebacks,
+            # The traceback as data, without the values of local variables: those hold the learner's question,
+            # the course passages and the model's reply, which the logs must not keep.
+            structlog.processors.ExceptionRenderer(ExceptionDictTransformer(show_locals=False)),
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
+from opentelemetry.trace import NoOpTracer
 
 from study_assistant.answer.models import Answer
 from study_assistant.answer.prompts import passages_block
@@ -77,14 +78,14 @@ def _grounded(settings: Settings, embedder: FakeEmbedder, provider: Provider, pa
     """A grounded answerer on the real client, whose calls ``provider`` answers, over a store holding ``passages``."""
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(provider.handle))
     model = build_chat_model(settings.llm.answer, settings, client)
-    search = VectorSearch(FakeSearchStore(passages), embedder)
-    return Answerer(model, search, AskSettings(mode="grounded"), SEARCH)
+    search = VectorSearch(FakeSearchStore(passages), embedder, NoOpTracer())
+    return Answerer(model, search, AskSettings(mode="grounded"), SEARCH, NoOpTracer())
 
 
 def _ungrounded(model: BaseChatModel, embedder: FakeEmbedder, store: FakeSearchStore | None = None) -> Answerer:
     """An ungrounded answerer on ``model``; its search runs over ``store`` if it ever runs."""
-    search = VectorSearch(store or FakeSearchStore(_passages()), embedder)
-    return Answerer(model, search, AskSettings(mode="ungrounded"), SEARCH)
+    search = VectorSearch(store or FakeSearchStore(_passages()), embedder, NoOpTracer())
+    return Answerer(model, search, AskSettings(mode="ungrounded"), SEARCH, NoOpTracer())
 
 
 def _demo() -> CourseManifest:
