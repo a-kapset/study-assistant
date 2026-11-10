@@ -81,6 +81,7 @@ def test_unhandled_exception_answers_500_without_its_details(settings: Settings,
     assert CANARY not in response.text
 
 
+@pytest.mark.covers("US-002", "AC-8")
 def test_unhandled_error_log_keeps_no_local_values(
     settings: Settings, fake_db: Database, capsys: pytest.CaptureFixture[str]
 ) -> None:

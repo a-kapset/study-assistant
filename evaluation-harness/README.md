@@ -53,6 +53,7 @@ evaluation-harness/
 │   │   ├── __init__.py     # the name prefix every piece of test data carries
 │   │   ├── cleanup.py      # removes all test data from every store and lists what is left (no kind of data yet)
 │   │   └── __main__.py     # the clean / check command
+│   ├── traces.py           # reads the whole trace of a request from the stack's trace store (Jaeger) by its id
 │   ├── transport.py        # SutTransport: async HTTP client that never raises on HTTP or network errors
 │   └── observation.py      # Observation: one request/response record, or the transport error instead
 └── tests/
@@ -247,6 +248,12 @@ app cannot look green.
 
 Every request carries the harness's own `X-Request-ID`, and the app echoes it and writes it into its
 log lines, so a failing observation can be found in the app's logs by its `request_id`.
+
+Every response also names its trace in the `traceresponse` header. The trace tests read that trace from the
+stack's Jaeger (`JAEGER_PUBLISHED_PORT` in the root `.env`) through its stable query API
+`/api/v3/traces/<trace id>`, and wait until the request span has arrived: the app sends spans in batches, so a
+trace read too early lacks the stage that ended last. The same trace opens in a browser at
+`http://127.0.0.1:16686/trace/<trace id>`.
 
 ## LLM proxy
 

@@ -81,6 +81,7 @@ def _answerer(mode: AskMode, settings: Settings, embedder: FakeEmbedder, traces:
     return Answerer(model, search, AskSettings(mode=mode), SEARCH, tracer)
 
 
+@pytest.mark.covers("US-017", "AC-2")
 @pytest.mark.anyio
 async def test_a_failed_search_marks_its_span_as_failed(fake_embedder: FakeEmbedder, traces: Traces) -> None:
     """Searches a course that has no stored chunks, which the search refuses, and expects the search span to end with
@@ -100,6 +101,7 @@ async def test_a_failed_search_marks_its_span_as_failed(fake_embedder: FakeEmbed
     assert seen == (StatusCode.ERROR, "CourseNotSearchableError"), f"the failed search span ended as {seen}"
 
 
+@pytest.mark.covers("US-017", "AC-2")
 @pytest.mark.anyio
 @pytest.mark.parametrize("mode", ["grounded", "ungrounded"])
 async def test_a_failed_model_call_marks_the_answer_span_as_failed(
@@ -122,6 +124,7 @@ async def test_a_failed_model_call_marks_the_answer_span_as_failed(
     assert stage_statuses == expected, f"stage spans after a failed model call ({raised.value!r}): {stage_statuses}"
 
 
+@pytest.mark.covers("US-017", "AC-3")
 def test_a_failed_stage_keeps_the_error_text_out_of_its_span(traces: Traces) -> None:
     """Runs a stage that raises an error whose message holds the learner's question, and expects the question
     nowhere in the span: not in its status text, its attributes or its events.
@@ -140,6 +143,7 @@ def test_a_failed_stage_keeps_the_error_text_out_of_its_span(traces: Traces) -> 
     assert not [text for text in written if CANARY in text], f"the error text reached the span: {written}"
 
 
+@pytest.mark.covers("US-017", "AC-4")
 def test_a_response_names_the_trace_of_its_request(settings: Settings, fake_db: FakeDatabase, traces: Traces) -> None:
     """Calls the app and expects the standard traceresponse header to carry the trace id of that request's span.
 
@@ -155,6 +159,7 @@ def test_a_response_names_the_trace_of_its_request(settings: Settings, fake_db: 
     assert header.split("-")[1:2] == [trace_id], f"traceresponse {header!r} does not name trace {trace_id}"
 
 
+@pytest.mark.covers("US-017", "AC-4")
 def test_the_request_span_keeps_the_request_id(settings: Settings, fake_db: FakeDatabase, traces: Traces) -> None:
     """Calls the app with a request id and expects the request's span to hold that id.
 

@@ -95,6 +95,8 @@ class StackSettings(BaseSettings):
     # the held-out check embeds questions with the same model and the same prefix as the app's search.
     embedder_published_port: int = Field(ge=1, le=65535)
     app_embedding__query_prefix: str
+    # The stack's trace store (Jaeger) as published on this machine: the api tests read the app's traces there.
+    jaeger_published_port: int = Field(ge=1, le=65535)
 
 
 def load_stack_settings(env_file: Path) -> StackSettings:
