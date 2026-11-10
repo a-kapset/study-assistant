@@ -72,7 +72,7 @@ What is planned and what is done, in the order of work.
 
 **11. Uploads and OCR**
 - [ ] App: OCR service (Tesseract), learner uploads, failed pages reported
-- [ ] Evaluation harness: OCR metamorphic suite (text PDF and its scan, rescaling); how OCR errors reach the answers
+- [ ] Evaluation harness: metamorphic relation — a text PDF and its scan give the same search results and answers; OCR character error rate; one learner's upload is never found by another learner
 
 **12. Agents**
 - [ ] App: tutor agent with a course-search tool; glossary tool; examiner agent with read-only text-to-SQL; router with an entry guard; conversation memory; agent-level injection guard; supervisor variant
