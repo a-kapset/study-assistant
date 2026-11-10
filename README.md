@@ -57,7 +57,8 @@ What is planned and what is done, in the order of work.
 - [x] Evaluation harness: fault injection in the LLM proxy; failure classifier (infrastructure, model or app); spending limit through the provider
 
 **7. Tracing**
-- [ ] App: OpenTelemetry traces per request and per stage
+- [x] App: OpenTelemetry traces per request and per stage
+- [x] Evaluation harness: the trace of a request read back from the trace store; each stage present with the status of its outcome, also when the model provider fails; no learner text in any span
 
 **8. Hybrid search and reranker**
 - [ ] App: lexical search, hybrid fusion, cross-encoder reranker; a lexical-only result marked as degraded when the embedding server is down
