@@ -33,7 +33,7 @@ from study_assistant.ingest.service import CorpusStore, CourseIngestor
 from study_assistant.llm.providers import build_chat_model
 from study_assistant.logging_setup import configure_logging
 from study_assistant.retrieval.repository import PostgresSearchStore, SearchStore
-from study_assistant.retrieval.service import VectorSearch
+from study_assistant.retrieval.service import CourseSearch
 from study_assistant.settings import Settings
 from study_assistant.tracing import TRACER_NAME
 
@@ -80,7 +80,10 @@ def build_app(
         chat_model = build_chat_model(settings.llm.answer, settings, http_client)
     size = ChunkSize(size=settings.ingest.chunk_size, overlap=settings.ingest.chunk_overlap)
     ingestor = CourseIngestor(corpus, embedder, settings.courses.source_dir, size)
-    search = VectorSearch(search_store if search_store is not None else PostgresSearchStore(db), embedder, tracer)
+    store_for_search = search_store if search_store is not None else PostgresSearchStore(db)
+    search = CourseSearch(
+        store_for_search, embedder, tracer, strategy=settings.search.strategy, window=settings.search.max_k
+    )
     # The grounded mode searches with the same search that serves /v1/search, so its passages are those the search
     # quality is measured on.
     answerer = Answerer(chat_model, search, settings.ask, settings.search, tracer)

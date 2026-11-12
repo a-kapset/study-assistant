@@ -20,7 +20,7 @@ from study_assistant.courses.registry import load_course
 from study_assistant.llm.providers import LlmError, LlmRefusedError, build_chat_model
 from study_assistant.retrieval.models import SearchHit
 from study_assistant.retrieval.repository import Passage
-from study_assistant.retrieval.service import VectorSearch
+from study_assistant.retrieval.service import CourseSearch
 from study_assistant.settings import AskSettings, SearchSettings, Settings
 
 from .conftest import FakeSearchStore, responses_api_reply, scored_passages
@@ -78,13 +78,13 @@ def _grounded(settings: Settings, embedder: FakeEmbedder, provider: Provider, pa
     """A grounded answerer on the real client, whose calls ``provider`` answers, over a store holding ``passages``."""
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(provider.handle))
     model = build_chat_model(settings.llm.answer, settings, client)
-    search = VectorSearch(FakeSearchStore(passages), embedder, NoOpTracer())
+    search = CourseSearch(FakeSearchStore(passages), embedder, NoOpTracer(), strategy="vector", window=10)
     return Answerer(model, search, AskSettings(mode="grounded"), SEARCH, NoOpTracer())
 
 
 def _ungrounded(model: BaseChatModel, embedder: FakeEmbedder, store: FakeSearchStore | None = None) -> Answerer:
     """An ungrounded answerer on ``model``; its search runs over ``store`` if it ever runs."""
-    search = VectorSearch(store or FakeSearchStore(_passages()), embedder, NoOpTracer())
+    search = CourseSearch(store or FakeSearchStore(_passages()), embedder, NoOpTracer(), strategy="vector", window=10)
     return Answerer(model, search, AskSettings(mode="ungrounded"), SEARCH, NoOpTracer())
 
 

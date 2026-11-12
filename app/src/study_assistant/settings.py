@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, SecretStr, field_val
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from study_assistant.courses.models import COURSE_ID_PATTERN
+from study_assistant.retrieval.models import SearchStrategy
 
 ENV_PREFIX = "APP_"
 NESTED_DELIMITER = "__"
@@ -141,6 +142,9 @@ class SearchSettings(BaseModel):
     # other, so the useful range is narrow: on the first course, real exam questions scored 0.84-0.93 against
     # their best chunk, unrelated questions 0.76-0.83.
     min_score: float = Field(default=0.83, ge=-1, le=1)
+    # "vector": passages ranked by meaning only. "hybrid": the ranking by meaning and a ranking by the question's
+    # words, fused by their places in the two rankings.
+    strategy: SearchStrategy = "vector"
 
     @model_validator(mode="after")
     def _default_within_max(self) -> Self:

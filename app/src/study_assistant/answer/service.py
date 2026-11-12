@@ -17,7 +17,7 @@ from study_assistant.answer.prompts import grounded_instructions, passages_block
 from study_assistant.courses.models import CourseManifest
 from study_assistant.llm.providers import LlmError, ainvoke
 from study_assistant.retrieval.models import SearchHit
-from study_assistant.retrieval.service import VectorSearch
+from study_assistant.retrieval.service import CourseSearch
 from study_assistant.settings import AskSettings, SearchSettings
 from study_assistant.tracing import stage_span
 
@@ -61,7 +61,7 @@ class Answerer:
     def __init__(
         self,
         model: BaseChatModel,
-        search: VectorSearch,
+        search: CourseSearch,
         ask: AskSettings,
         search_settings: SearchSettings,
         tracer: Tracer,

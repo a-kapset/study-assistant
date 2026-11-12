@@ -380,11 +380,18 @@ banks are not chunked.
 
 ## Search
 
-`POST /v1/search` with `course_id` and `query` returns the course's passages closest to the question by cosine
-similarity, closest first, each with its section, file, pages, text, `score` and `rank`. Passages below the
-lowest score are left out; when none is left the status is `empty`, otherwise `ok`. The answer repeats the
+`POST /v1/search` with `course_id` and `query` returns the course's best passages for the question, best first,
+each with its section, file, pages, text, cosine similarity `score` and `rank`. Passages below the lowest score
+are left out; when none is left the status is `empty`, otherwise `ok`. The answer repeats the strategy, the
 number of hits asked for (`k`), the lowest score (`min_score`) and the embedding space it used, so a client can
-record what produced it. `k` and `min_score` may be sent with the request; otherwise `APP_SEARCH__DEFAULT_K`
+record what produced it.
+
+`APP_SEARCH__STRATEGY` chooses how passages are ranked. `vector` (the default) ranks them by cosine similarity.
+`hybrid` ranks the passages that reach the lowest score twice, by similarity and by PostgreSQL full-text search
+on the question's words (any word counts, stemmed by the course language), and fuses the two rankings by
+reciprocal rank fusion (1 / (60 + place), added over the rankings); equal places are ordered by chunk id, and
+each ranking keeps `APP_SEARCH__MAX_K` passages, so fewer hits are always the first of more. The `search` span
+of the request's trace names the strategy, the hit ids and, for `hybrid`, how many passages each ranking held. `k` and `min_score` may be sent with the request; otherwise `APP_SEARCH__DEFAULT_K`
 and `APP_SEARCH__MIN_SCORE` apply, and `k` above `APP_SEARCH__MAX_K` is a 422. The default model scores almost
 any two texts above 0.7, so the useful lowest scores lie in a narrow range (see `.env.example`).
 
@@ -411,8 +418,8 @@ to `curl.exe`. Its `Invoke-RestMethod` also shows non-ASCII course text garbled,
 ```
 
 `APP_ASK__MODE` chooses how. In the default `grounded` mode the app first searches the course with the search
-settings (`APP_SEARCH__DEFAULT_K`, `APP_SEARCH__MIN_SCORE`). When no passage is close enough, the question is
-declined (`abstain_reason` `no_passages`, no citations) and the model is not called. Otherwise the model gets the
+settings (`APP_SEARCH__DEFAULT_K`, `APP_SEARCH__MIN_SCORE`, `APP_SEARCH__STRATEGY`). When no passage is close
+enough, the question is declined (`abstain_reason` `no_passages`, no citations) and the model is not called. Otherwise the model gets the
 passages, numbered and marked as course text in a message of their own, answers only from them and cites them by
 number; the app turns the numbers back into `citations` with section, file and pages, each passage once. A number
 that names no passage given to the model is left out and counted in `invalid_citations`. When the passages do not

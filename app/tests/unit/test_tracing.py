@@ -18,7 +18,7 @@ from study_assistant.composition import build_app
 from study_assistant.courses.registry import load_course
 from study_assistant.llm.providers import LlmError, LlmUnavailableError, build_chat_model
 from study_assistant.retrieval.repository import Coverage
-from study_assistant.retrieval.service import CourseNotSearchableError, VectorSearch
+from study_assistant.retrieval.service import CourseNotSearchableError, CourseSearch
 from study_assistant.settings import AskSettings, SearchSettings, Settings
 from study_assistant.tracing import TRACER_NAME, stage_span
 
@@ -60,6 +60,10 @@ def traces() -> Iterator[Traces]:
     store.provider.shutdown()
 
 
+# What the search span says about a search besides its status.
+SEARCH_SPAN_ATTRIBUTES = ("search.strategy", "search.hybrid.by_meaning", "search.hybrid.by_words", "search.hit_ids")
+
+
 def _failing_provider(_request: httpx2.Request) -> httpx2.Response:
     """Answer every model call the way a provider rejects a request, which the client does not repeat."""
     return httpx2.Response(400, json={"error": {"message": "bad request", "type": "invalid_request_error"}})
@@ -72,7 +76,7 @@ def _answerer(mode: AskMode, settings: Settings, embedder: FakeEmbedder, traces:
     the ungrounded mode uses the fake model, set to fail as an unreachable provider does.
     """
     tracer = traces.provider.get_tracer(TRACER_NAME)
-    search = VectorSearch(FakeSearchStore(scored_passages(0.9)), embedder, tracer)
+    search = CourseSearch(FakeSearchStore(scored_passages(0.9)), embedder, tracer, strategy="vector", window=10)
     if mode == "grounded":
         client = httpx2.AsyncClient(transport=httpx2.MockTransport(_failing_provider))
         model = build_chat_model(settings.llm.answer, settings, client)
@@ -91,7 +95,7 @@ async def test_a_failed_search_marks_its_span_as_failed(fake_embedder: FakeEmbed
     healthy search for a request that failed in it, and a reader of the trace would look for the fault elsewhere.
     """
     store = FakeSearchStore(scored_passages(0.9), coverage=Coverage(chunks=0, vectors=0))
-    search = VectorSearch(store, fake_embedder, traces.provider.get_tracer(TRACER_NAME))
+    search = CourseSearch(store, fake_embedder, traces.provider.get_tracer(TRACER_NAME), strategy="vector", window=10)
 
     with pytest.raises(CourseNotSearchableError):
         await search.search("demo", "How many dice?", k=3, min_score=0.85)
@@ -99,6 +103,33 @@ async def test_a_failed_search_marks_its_span_as_failed(fake_embedder: FakeEmbed
     span = traces.named("search")
     seen = (span.status.status_code, span.attributes.get("error.type") if span.attributes else None)
     assert seen == (StatusCode.ERROR, "CourseNotSearchableError"), f"the failed search span ended as {seen}"
+
+
+@pytest.mark.covers("US-018", "AC-2")
+@pytest.mark.anyio
+async def test_the_search_span_names_the_strategy_what_each_ranking_found_and_the_hits(
+    fake_embedder: FakeEmbedder, traces: Traces
+) -> None:
+    """Runs a hybrid search over three passages, two of which reach the lowest score, and reads its span.
+
+    Expects the strategy "hybrid", two passages in each ranking and the two hit ids in rank order. Catches a span
+    that does not say which strategy ran, so a trace of a hybrid search could not be told from one by meaning; and
+    missing ranking counts, which are the only sign of a ranking by words that finds nothing.
+    """
+    store = FakeSearchStore(scored_passages(0.9, 0.87, 0.5))
+    search = CourseSearch(store, fake_embedder, traces.provider.get_tracer(TRACER_NAME), strategy="hybrid", window=10)
+
+    await search.search("demo", "How many dice?", k=5, min_score=0.85)
+
+    attributes = dict(traces.named("search").attributes or {})
+    seen = {name: attributes.get(name) for name in SEARCH_SPAN_ATTRIBUTES}
+    expected = {
+        "search.strategy": "hybrid",
+        "search.hybrid.by_meaning": 2,
+        "search.hybrid.by_words": 2,
+        "search.hit_ids": ("c1", "c2"),
+    }
+    assert seen == expected, f"the search span should carry {expected}, carries {seen}"
 
 
 @pytest.mark.covers("US-017", "AC-2")

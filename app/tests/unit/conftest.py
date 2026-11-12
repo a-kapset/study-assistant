@@ -18,7 +18,7 @@ from study_assistant.db import Connection, DatabaseUnavailableError
 from study_assistant.embed.base import EmbeddingSpace
 from study_assistant.embed.remote import EmbeddingServiceUnavailableError
 from study_assistant.ingest.service import CorpusCounts, PreparedDocument, StoredCourse
-from study_assistant.retrieval.repository import Coverage, Passage
+from study_assistant.retrieval.repository import Coverage, Fused, HybridQuery, Passage
 from study_assistant.settings import (
     AdminSettings,
     DbSettings,
@@ -115,13 +115,14 @@ PASSAGE = Passage(
 
 class FakeSearchStore:
     """Stands in for the database: a fully embedded course whose passages are given closest first, as the real
-    store returns them, and a record of the number of hits each search asked for."""
+    store returns them, and a record of what each search asked for."""
 
     def __init__(self, passages: list[Passage], coverage: Coverage = EMBEDDED) -> None:
         """Hold the passages every search returns and the coverage every course has."""
         self.passages = passages
         self.course_coverage = coverage
         self.asked_k: list[int] = []
+        self.hybrid_queries: list[HybridQuery] = []
 
     async def coverage(self, course_id: str, space: EmbeddingSpace) -> Coverage:
         """Return the coverage set for this test, whatever the course."""
@@ -131,6 +132,13 @@ class FakeSearchStore:
         """Record ``k`` and return the first ``k`` passages."""
         self.asked_k.append(k)
         return self.passages[:k]
+
+    async def hybrid(self, course_id: str, space: EmbeddingSpace, query: HybridQuery) -> Fused:
+        """Record the query and return, as the real store does, the first ``query.k`` passages that reach the lowest
+        score, counting every passing passage as found by meaning and by words."""
+        self.hybrid_queries.append(query)
+        passing = [p for p in self.passages if p.score >= query.min_score]
+        return Fused(passages=passing[: query.k], by_meaning=len(passing), by_words=len(passing))
 
 
 def scored_passages(*scores: float) -> list[Passage]:

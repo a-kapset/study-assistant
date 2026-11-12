@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from study_assistant.composition import build_app
 from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
 from study_assistant.retrieval.repository import Coverage
-from study_assistant.retrieval.service import CourseNotSearchableError, VectorSearch
+from study_assistant.retrieval.service import CourseNotSearchableError, CourseSearch
 from study_assistant.settings import CoursesSettings, SearchSettings, Settings
 
 from .conftest import FakeSearchStore, scored_passages
@@ -28,11 +28,16 @@ SEARCH = "/v1/search"
 
 
 def _client(
-    settings: Settings, db: FakeDatabase, corpus: FakeCorpusStore, embedder: FakeEmbedder, store: FakeSearchStore
+    settings: Settings,
+    db: FakeDatabase,
+    corpus: FakeCorpusStore,
+    embedder: FakeEmbedder,
+    store: FakeSearchStore,
+    search: SearchSettings | None = None,
 ) -> TestClient:
-    """A client for an app serving the demo course, with the lowest score 0.85 and 5 hits by default."""
+    """A client for an app serving the demo course; by default with the lowest score 0.85 and 5 hits."""
     courses = CoursesSettings(manifest_dir=REPO_COURSES, source_dir=REPO_COURSES, enabled=("demo",))
-    search = SearchSettings(default_k=5, max_k=10, min_score=0.85)
+    search = search or SearchSettings(default_k=5, max_k=10, min_score=0.85)
     configured = settings.model_copy(update={"courses": courses, "search": search})
     return TestClient(build_app(configured, db, corpus, embedder, store))
 
@@ -48,7 +53,7 @@ async def test_passages_below_the_lowest_score_are_left_out_and_the_kept_ones_ar
     """
     store = FakeSearchStore(scored_passages(0.9, 0.85, 0.85, 0.8))
 
-    result = await VectorSearch(store, fake_embedder, NoOpTracer()).search(
+    result = await CourseSearch(store, fake_embedder, NoOpTracer(), strategy="vector", window=10).search(
         "demo", "How many dice?", k=4, min_score=0.85
     )
 
@@ -65,7 +70,9 @@ async def test_search_where_no_passage_reaches_the_lowest_score_is_empty(fake_em
     """
     store = FakeSearchStore(scored_passages(0.8, 0.7))
 
-    result = await VectorSearch(store, fake_embedder, NoOpTracer()).search("demo", "Bake bread", k=5, min_score=0.85)
+    result = await CourseSearch(store, fake_embedder, NoOpTracer(), strategy="vector", window=10).search(
+        "demo", "Bake bread", k=5, min_score=0.85
+    )
 
     assert (result.status, result.hits) == ("empty", []), f"expected an empty result, got {result.status}"
 
@@ -88,7 +95,9 @@ async def test_course_not_fully_embedded_in_the_space_is_refused(
     store = FakeSearchStore(scored_passages(0.9), coverage=coverage)
 
     with pytest.raises(CourseNotSearchableError):
-        await VectorSearch(store, fake_embedder, NoOpTracer()).search("demo", "How many dice?", k=5, min_score=0.85)
+        await CourseSearch(store, fake_embedder, NoOpTracer(), strategy="vector", window=10).search(
+            "demo", "How many dice?", k=5, min_score=0.85
+        )
 
 
 @pytest.mark.covers("US-006", "AC-3")
@@ -186,3 +195,53 @@ def test_default_number_of_hits_above_the_maximum_is_refused() -> None:
     """
     with pytest.raises(ValidationError, match="default_k"):
         SearchSettings(default_k=20, max_k=10)
+
+
+@pytest.mark.covers("US-018", "AC-1", "AC-2")
+@pytest.mark.parametrize(
+    ("configured", "served_by"),
+    [(SearchSettings(min_score=0.85), "vector"), (SearchSettings(min_score=0.85, strategy="hybrid"), "hybrid")],
+    ids=["not configured", "hybrid configured"],
+)
+def test_search_uses_the_configured_strategy_and_the_result_names_it(
+    settings: Settings,
+    fake_db: FakeDatabase,
+    fake_store: FakeCorpusStore,
+    fake_embedder: FakeEmbedder,
+    configured: SearchSettings,
+    served_by: str,
+) -> None:
+    """Builds the app once without a strategy in its settings and once with the hybrid strategy, and searches.
+
+    Expects the search by meaning when nothing is configured and the hybrid search when it is, each named in the
+    result. Catches an app that ignores the setting, a default that is not the search by meaning, and a result that
+    names one strategy while the other one ran, which would make a comparison of the two compare one with itself.
+    """
+    store = FakeSearchStore(scored_passages(0.9))
+    with _client(settings, fake_db, fake_store, fake_embedder, store, configured) as client:
+        response = client.post(SEARCH, json={"course_id": "demo", "query": "How many dice?"})
+
+    assert response.status_code == 200, f"the search failed: {response.json()}"
+    ran = "hybrid" if store.hybrid_queries else "vector"
+    named = response.json()["strategy"]
+    assert (ran, named) == (served_by, served_by), f"expected {served_by} to run and be named, ran {ran}, named {named}"
+
+
+@pytest.mark.covers("US-018", "AC-5")
+async def test_hybrid_rankings_keep_the_same_number_of_passages_whatever_number_of_hits_is_asked(
+    fake_embedder: FakeEmbedder,
+) -> None:
+    """Runs a hybrid search for 2 hits and one for 7, with the most hits a request may ask for set to 10.
+
+    Expects both to rank 10 passages by meaning and by words before fusion. Catches rankings cut to the number of
+    hits asked for: fusion would then see fewer passages for a small request, and its first hits could differ from
+    the first hits of a larger request for the same question.
+    """
+    store = FakeSearchStore(scored_passages(0.9))
+    search = CourseSearch(store, fake_embedder, NoOpTracer(), strategy="hybrid", window=10)
+
+    for k in (2, 7):
+        await search.search("demo", "How many dice?", k=k, min_score=0.85)
+
+    windows = [query.window for query in store.hybrid_queries]
+    assert windows == [10, 10], f"each ranking should keep 10 passages for any number of hits, kept {windows}"

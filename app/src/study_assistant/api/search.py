@@ -1,4 +1,4 @@
-"""Search: the passages of a course that are closest to a question."""
+"""Search: the passages of a course that best answer a question."""
 
 from collections.abc import Mapping
 from typing import Annotated
@@ -13,7 +13,7 @@ from study_assistant.courses.models import COURSE_ID_PATTERN, CourseManifest
 from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
 from study_assistant.errors import ErrorBody, ErrorEnvelope, error_response
 from study_assistant.retrieval.models import SearchResult
-from study_assistant.retrieval.service import CourseNotSearchableError, VectorSearch
+from study_assistant.retrieval.service import CourseNotSearchableError, CourseSearch
 from study_assistant.settings import SearchSettings
 
 # Longer than any question of the first course (about 900 characters); a longer text is not a question.
@@ -31,7 +31,7 @@ class SearchRequest(BaseModel):
     min_score: float | None = Field(default=None, ge=-1, le=1)
 
 
-def search_router(courses: Mapping[str, CourseManifest], search: VectorSearch, settings: SearchSettings) -> APIRouter:
+def search_router(courses: Mapping[str, CourseManifest], search: CourseSearch, settings: SearchSettings) -> APIRouter:
     """Build the router that serves ``POST /v1/search``."""
     log: structlog.typing.FilteringBoundLogger = structlog.get_logger(__name__)
     router = APIRouter()
@@ -48,7 +48,7 @@ def search_router(courses: Mapping[str, CourseManifest], search: VectorSearch, s
         },
     )
     async def search_course(body: SearchRequest, request: Request) -> SearchResult | JSONResponse:
-        """Return the passages of the course closest to the question, or "empty" when none is close enough.
+        """Return the course's best passages for the question, or "empty" when none is close enough.
 
         A course this app does not serve is a 404, a course that is not fully embedded in the configured space a
         409, an embedding server that answers with an error a 502, and one that cannot be reached a 503.
