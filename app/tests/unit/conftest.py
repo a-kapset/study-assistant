@@ -1,5 +1,5 @@
 """Shared unit-test setup: settings that do not depend on the shell, a database the tests can switch off,
-an embedder that needs no server, a chat model that needs no provider, and an in-memory corpus store."""
+an embedder and a reranker that need no server, a chat model that needs no provider, and an in-memory corpus store."""
 
 import zlib
 from collections.abc import AsyncGenerator, Callable, Sequence
@@ -19,6 +19,7 @@ from study_assistant.embed.base import EmbeddingSpace
 from study_assistant.embed.remote import EmbeddingServiceUnavailableError
 from study_assistant.ingest.service import CorpusCounts, PreparedDocument, StoredCourse
 from study_assistant.retrieval.repository import Coverage, Fused, HybridQuery, Passage
+from study_assistant.retrieval.rerank import RerankServiceUnavailableError
 from study_assistant.settings import (
     AdminSettings,
     DbSettings,
@@ -26,6 +27,7 @@ from study_assistant.settings import (
     EmbeddingSettings,
     LlmSettings,
     OpenAISettings,
+    RerankSettings,
     Settings,
 )
 
@@ -40,6 +42,12 @@ EMBEDDING = EmbeddingSettings(
 )
 # An address nothing listens on; unit tests never call the embedding server.
 EMBEDDING_SERVICE = EmbeddingServiceSettings(url=HttpUrl("http://embedder.invalid"))
+# A valid reranking model and an address nothing listens on; unit tests never call the rerank server.
+RERANK = RerankSettings(
+    model="cross-encoder/ms-marco-MiniLM-L6-v2",
+    revision="233902d25c440f23af6f7d6e94d2946bac0bee0a",
+    url=HttpUrl("http://reranker.invalid"),
+)
 # A valid answer model and an address nothing listens on; unit tests reach the provider only through a mock transport.
 LLM = LlmSettings(answer="openai/gpt-5.4-mini")
 OPENAI = OpenAISettings(api_key=SecretStr("unit-test-openai-key"), base_url=HttpUrl("http://llm.invalid/v1"))
@@ -104,6 +112,31 @@ class FakeEmbedder:
         """Answer while up; otherwise fail the way the real client does when the server cannot be reached."""
         if not self.up:
             raise EmbeddingServiceUnavailableError("ConnectError")
+
+
+class FakeReranker:
+    """Stands in for the rerank server: scores each passage by ``scores`` (keyed by passage text, 0.0 for any other
+    text), records every call, and has switches for a server that is down or fails."""
+
+    def __init__(self, scores: dict[str, float] | None = None) -> None:
+        """Start reachable, scoring by ``scores``, with nothing recorded yet."""
+        self.scores = scores or {}
+        self.calls: list[tuple[str, list[str]]] = []
+        self.up = True
+        self.error: Exception | None = None
+
+    async def ascore(self, query: str, texts: list[str]) -> list[float]:
+        """Record the question and the texts, then return their scores in the same order; raise ``error`` instead
+        when it is set."""
+        if self.error is not None:
+            raise self.error
+        self.calls.append((query, list(texts)))
+        return [self.scores.get(text, 0.0) for text in texts]
+
+    async def ping(self) -> None:
+        """Answer while up; otherwise fail the way the real client does when the server cannot be reached."""
+        if not self.up:
+            raise RerankServiceUnavailableError("ConnectError")
 
 
 # The coverage of a course whose 12 chunks all have a vector in the configured space.
@@ -347,6 +380,7 @@ def settings() -> Settings:
         db=DbSettings(password=SecretStr("unit-test-password")),
         embedding=EMBEDDING,
         embedding_service=EMBEDDING_SERVICE,
+        rerank=RERANK,
         llm=LLM,
         openai=OPENAI,
         admin=AdminSettings(api_key=SecretStr(ADMIN_KEY)),
@@ -363,6 +397,12 @@ def fake_db() -> FakeDatabase:
 def fake_embedder() -> FakeEmbedder:
     """A fresh, reachable fake embedder for one test."""
     return FakeEmbedder()
+
+
+@pytest.fixture
+def fake_reranker() -> FakeReranker:
+    """A fresh, reachable fake reranker for one test, scoring every text 0.0 until a test sets its scores."""
+    return FakeReranker()
 
 
 @pytest.fixture

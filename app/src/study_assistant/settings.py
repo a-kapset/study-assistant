@@ -145,6 +145,9 @@ class SearchSettings(BaseModel):
     # "vector": passages ranked by meaning only. "hybrid": the ranking by meaning and a ranking by the question's
     # words, fused by their places in the two rankings.
     strategy: SearchStrategy = "vector"
+    # Whether the passages the strategy found are put in a new order by the reranker (APP_RERANK__*), which reads the
+    # question and each passage together. Off by default: it costs up to about a second of CPU per search.
+    rerank: bool = False
 
     @model_validator(mode="after")
     def _default_within_max(self) -> Self:
@@ -191,6 +194,27 @@ class EmbeddingServiceSettings(BaseModel):
     url: HttpUrl
     # Longest wait for one request, in seconds. The client library waits up to ten minutes by default, so a server
     # that hangs would stop ingestion for that long; a batch of 32 chunks takes about 2 s on a CPU.
+    timeout_seconds: float = Field(default=30, gt=0, le=300)
+
+
+class RerankSettings(BaseModel):
+    """The reranking model and the server that runs it; set as APP_RERANK__<FIELD>.
+
+    A search uses it only when APP_SEARCH__RERANK is on. The model and revision have no defaults, so the model is
+    always chosen on purpose, as for the embedding model.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Hugging Face model id, e.g. "cross-encoder/ms-marco-MiniLM-L6-v2". The server runs the files of the folder
+    # named after the model and revision; the app shows both in its configuration, so a measured result can name
+    # the model that ordered its hits.
+    model: str = Field(pattern=MODEL_ID_PATTERN)
+    # Commit of the model's repository that the files are taken from.
+    revision: str = Field(pattern=MODEL_REVISION_PATTERN)
+    # Base address of the server, e.g. "http://reranker"; the client adds the API path itself.
+    url: HttpUrl
+    # Longest wait for one request, in seconds; 32 passages take about half a second on a CPU.
     timeout_seconds: float = Field(default=30, gt=0, le=300)
 
 
@@ -374,6 +398,9 @@ class Settings(BaseSettings):
 
     # APP_EMBEDDING_SERVICE__*: the server that computes the vectors.
     embedding_service: EmbeddingServiceSettings
+
+    # APP_RERANK__*: the reranking model and its server.
+    rerank: RerankSettings
 
     # APP_LLM__*: the chat model of each role.
     llm: LlmSettings

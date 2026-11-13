@@ -33,6 +33,7 @@ from study_assistant.ingest.service import CorpusStore, CourseIngestor
 from study_assistant.llm.providers import build_chat_model
 from study_assistant.logging_setup import configure_logging
 from study_assistant.retrieval.repository import PostgresSearchStore, SearchStore
+from study_assistant.retrieval.rerank import RemoteReranker, Reranker
 from study_assistant.retrieval.service import CourseSearch
 from study_assistant.settings import Settings
 from study_assistant.tracing import TRACER_NAME
@@ -47,6 +48,7 @@ def build_app(
     embedder: Embedder | None = None,
     search_store: SearchStore | None = None,
     chat_model: BaseChatModel | None = None,
+    reranker: Reranker | None = None,
     tracer_provider: TracerProvider | None = None,
 ) -> FastAPI:
     """Build the app from ``settings``: logging first, then the courses, the database, the models and the routes.
@@ -55,8 +57,9 @@ def build_app(
     overlap that is not below the chunk size and a model provider the app does not know. Nothing reads the
     environment or connects anywhere: the database opens when the server starts, the embedding server is first
     called by an ingestion or a readiness check, and the model provider by the first question. Tests pass their own
-    ``database``, corpus ``store``, ``embedder``, ``search_store`` and ``chat_model``; otherwise the app uses
-    PostgreSQL, the embedding server and the model provider as configured in ``settings``.
+    ``database``, corpus ``store``, ``embedder``, ``search_store``, ``chat_model`` and ``reranker``; otherwise the app
+    uses PostgreSQL, the embedding server, the model provider and the rerank server as configured in ``settings``.
+    The reranker is used only when the settings turn reranking on; otherwise none is made and a given one is unused.
 
     Every request is traced into ``tracer_provider``: the request itself, each database query, each call to the
     embedding server and the model provider, and the app's own stages (search, answer generation). The app shuts
@@ -78,11 +81,20 @@ def build_app(
         embedder = RemoteEmbedder.from_settings(settings.embedding, settings.embedding_service, http_client)
     if chat_model is None:
         chat_model = build_chat_model(settings.llm.answer, settings, http_client)
+    if not settings.search.rerank:
+        reranker = None
+    elif reranker is None:
+        reranker = RemoteReranker.from_settings(settings.rerank, http_client)
     size = ChunkSize(size=settings.ingest.chunk_size, overlap=settings.ingest.chunk_overlap)
     ingestor = CourseIngestor(corpus, embedder, settings.courses.source_dir, size)
     store_for_search = search_store if search_store is not None else PostgresSearchStore(db)
     search = CourseSearch(
-        store_for_search, embedder, tracer, strategy=settings.search.strategy, window=settings.search.max_k
+        store_for_search,
+        embedder,
+        tracer,
+        strategy=settings.search.strategy,
+        window=settings.search.max_k,
+        reranker=reranker,
     )
     # The grounded mode searches with the same search that serves /v1/search, so its passages are those the search
     # quality is measured on.
@@ -116,7 +128,7 @@ def build_app(
         http_capture_headers_server_response=[REQUEST_ID_HEADER],
         exclude_spans=["receive", "send"],
     )
-    app.include_router(health_router(db, embedder))
+    app.include_router(health_router(db, embedder, reranker))
     app.include_router(courses_router(courses, corpus, embedder.space))
     app.include_router(search_router(courses, search, settings.search))
     app.include_router(ask_router(courses, answerer))

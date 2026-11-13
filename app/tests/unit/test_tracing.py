@@ -2,6 +2,7 @@
 it, and a response that names its trace. Spans go to an in-memory exporter instead of a trace backend."""
 
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -18,11 +19,11 @@ from study_assistant.composition import build_app
 from study_assistant.courses.registry import load_course
 from study_assistant.llm.providers import LlmError, LlmUnavailableError, build_chat_model
 from study_assistant.retrieval.repository import Coverage
-from study_assistant.retrieval.service import CourseNotSearchableError, CourseSearch
+from study_assistant.retrieval.service import RERANK_SPAN, CourseNotSearchableError, CourseSearch
 from study_assistant.settings import AskSettings, SearchSettings, Settings
 from study_assistant.tracing import TRACER_NAME, stage_span
 
-from .conftest import FakeChatModel, FakeDatabase, FakeEmbedder, FakeSearchStore, scored_passages
+from .conftest import FakeChatModel, FakeDatabase, FakeEmbedder, FakeReranker, FakeSearchStore, scored_passages
 
 # The repository's own course folder: app/tests/unit/<this file> -> repository root.
 REPO_COURSES = Path(__file__).resolve().parents[3] / "courses"
@@ -202,3 +203,38 @@ def test_the_request_span_keeps_the_request_id(settings: Settings, fake_db: Fake
     attributes = dict(traces.named("GET /health").attributes or {})
     kept = attributes.get("http.response.header.x_request_id")
     assert kept == ("case-007",), f"the request span holds request id {kept!r}; attributes: {attributes}"
+
+
+@pytest.mark.covers("US-018", "AC-8")
+@pytest.mark.anyio
+async def test_the_search_span_keeps_the_order_before_reranking_and_the_reranker_has_its_own_span(
+    fake_embedder: FakeEmbedder, traces: Traces
+) -> None:
+    """Runs a reranked search over three passages above the lowest score; the reranker puts the last one first.
+
+    Expects the search span to say that rerank ran, to list the candidates c1, c2, c3 in the strategy's order and
+    the hits c3, c1, c2 in the reranker's order, and a rerank span inside the search span. Catches candidates written
+    after the reordering (the trace could then not show that a passage was found and placed too low by the reranker,
+    rather than never found), a span that does not say rerank ran, and a reranker call outside a span of its own,
+    whose time could then not be told apart from the rest of the search.
+    """
+    passages = [replace(passage, text=passage.chunk_id) for passage in scored_passages(0.9, 0.88, 0.87)]
+    tracer = traces.provider.get_tracer(TRACER_NAME)
+    reranker = FakeReranker({"c3": 0.9, "c1": 0.5, "c2": 0.1})
+    search = CourseSearch(
+        FakeSearchStore(passages), fake_embedder, tracer, strategy="vector", window=10, reranker=reranker
+    )
+
+    await search.search("demo", "How many dice?", k=5, min_score=0.85)
+
+    search_span = traces.named("search")
+    attributes = dict(search_span.attributes or {})
+    seen = {name: attributes.get(name) for name in ("search.rerank", "search.rerank.candidate_ids", "search.hit_ids")}
+    expected = {
+        "search.rerank": True,
+        "search.rerank.candidate_ids": ("c1", "c2", "c3"),
+        "search.hit_ids": ("c3", "c1", "c2"),
+    }
+    assert seen == expected, f"the search span should carry {expected}, carries {seen}"
+    parent = traces.named(RERANK_SPAN).parent
+    assert parent is not None and parent.span_id == search_span.context.span_id, "the rerank span is not in the search"

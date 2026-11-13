@@ -127,14 +127,19 @@ jobs:
 
       - name: Download the model files
         if: steps.model-cache.outputs.cache-hit != 'true'
-        # Every file in models.sha256, from the pinned revision; model-check compares the hashes when the
-        # stack starts, so a damaged download stops the stack with the file's name.
+        # Every file in models.sha256, from the pinned revision of the server its path starts with; model-check
+        # compares the hashes when the stack starts, so a damaged download stops the stack with the file's name.
         run: |
           set -a; . ./.env; set +a
-          dir="models/${APP_EMBEDDING__MODEL}/${APP_EMBEDDING__REVISION}"
-          grep -v '^#' models.sha256 | while read -r _ file; do
-            curl -fsSL --retry 3 --create-dirs -o "${dir}/${file}" \
-              "https://huggingface.co/${APP_EMBEDDING__MODEL}/resolve/${APP_EMBEDDING__REVISION}/${file}"
+          grep -v '^#' models.sha256 | while read -r _ path; do
+            case "${path%%/*}" in
+              embedder) model="${APP_EMBEDDING__MODEL}"; revision="${APP_EMBEDDING__REVISION}" ;;
+              reranker) model="${APP_RERANK__MODEL}"; revision="${APP_RERANK__REVISION}" ;;
+              *) echo "unknown server in models.sha256: ${path}"; exit 1 ;;
+            esac
+            file="${path#*/}"
+            curl -fsSL --retry 3 --create-dirs -o "models/${model}/${revision}/${file}" \
+              "https://huggingface.co/${model}/resolve/${revision}/${file}"
           done
 
       - name: Start the stack
@@ -173,9 +178,9 @@ jobs:
         working-directory: evaluation-harness
         run: poetry run python -m evalharness.evaluation datasets/lumen_moths/retrieval_gold_v0.toml --require-target
 
-      - name: Reference vectors from the embedding server
+      - name: Reference vectors from the embedding server, scores from the rerank server
         working-directory: app
-        run: poetry run pytest -m embedding_server
+        run: poetry run pytest -m "embedding_server or rerank_server"
 
       - name: No harness test data left
         working-directory: evaluation-harness

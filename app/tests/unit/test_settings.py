@@ -15,6 +15,7 @@ from study_assistant.settings import (
     MigrationSettings,
     OpenAISettings,
     ReaderRoleSettings,
+    RerankSettings,
     ServerRoleSettings,
     Settings,
     UnknownSettingsError,
@@ -34,6 +35,11 @@ EMBEDDING_ENV = {
 }
 EMBEDDING_SERVICE_URL = "http://embedder:8080"
 ANSWER_MODEL = "openai/gpt-5.4-mini"
+RERANK_ENV = {
+    "APP_RERANK__MODEL": "cross-encoder/ms-marco-MiniLM-L6-v2",
+    "APP_RERANK__REVISION": "233902d25c440f23af6f7d6e94d2946bac0bee0a",
+    "APP_RERANK__URL": "http://reranker",
+}
 # A value that must never appear in an error message.
 CANARY = "canary-value-7f3a"
 
@@ -46,11 +52,13 @@ def _set_embedding_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _set_app_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set every variable the app server needs and nothing more: password, admin key, embedding model and server,
-    answer model and the model provider's key."""
+    reranking model and server, answer model and the model provider's key."""
     monkeypatch.setenv("APP_DB__PASSWORD", "from-env")
     monkeypatch.setenv("APP_ADMIN__API_KEY", "admin-key-from-env")
     _set_embedding_env(monkeypatch)
     monkeypatch.setenv("APP_EMBEDDING_SERVICE__URL", EMBEDDING_SERVICE_URL)
+    for name, value in RERANK_ENV.items():
+        monkeypatch.setenv(name, value)
     monkeypatch.setenv("APP_LLM__ANSWER", ANSWER_MODEL)
     monkeypatch.setenv("APP_OPENAI__API_KEY", "openai-key-from-env")
 
@@ -81,6 +89,10 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     _set_embedding_env(monkeypatch)
     monkeypatch.setenv("APP_EMBEDDING_SERVICE__URL", EMBEDDING_SERVICE_URL)
     monkeypatch.setenv("APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS", "5")
+    for name, value in RERANK_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("APP_RERANK__TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("APP_SEARCH__RERANK", "true")
     monkeypatch.setenv("APP_LLM__ANSWER", ANSWER_MODEL)
     monkeypatch.setenv("APP_OPENAI__API_KEY", "openai-key-from-env")
     monkeypatch.setenv("APP_OPENAI__BASE_URL", "http://llm-proxy:8090/v1")
@@ -97,6 +109,13 @@ def test_settings_are_read_from_app_variables(monkeypatch: pytest.MonkeyPatch) -
     assert (settings.ingest.chunk_size, settings.ingest.chunk_overlap) == (800, 80)
     assert settings.embedding == EmbeddingSettings.model_validate(_embedding())
     assert settings.embedding_service == EmbeddingServiceSettings(url=HttpUrl(EMBEDDING_SERVICE_URL), timeout_seconds=5)
+    assert settings.rerank == RerankSettings(
+        model=RERANK_ENV["APP_RERANK__MODEL"],
+        revision=RERANK_ENV["APP_RERANK__REVISION"],
+        url=HttpUrl(RERANK_ENV["APP_RERANK__URL"]),
+        timeout_seconds=7,
+    )
+    assert settings.search.rerank is True
     assert settings.llm.answer == ANSWER_MODEL
     assert settings.openai == OpenAISettings(
         api_key=SecretStr("openai-key-from-env"), base_url=HttpUrl("http://llm-proxy:8090/v1"), timeout_seconds=20

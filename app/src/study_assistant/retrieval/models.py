@@ -28,7 +28,8 @@ class SearchHit(BaseModel):
     page_end: int
     text: str
     # Cosine similarity between the question and the passage, from -1 to 1; higher is closer. Under the hybrid
-    # strategy too, so every hit can be checked against the lowest score; the order of the hits may differ from it.
+    # strategy and with the reranker too, so every hit can be checked against the lowest score; the order of the
+    # hits may then differ from it.
     score: float
     # Position in the result, starting at 1 for the best passage.
     rank: int
@@ -37,8 +38,9 @@ class SearchHit(BaseModel):
 class SearchResult(BaseModel):
     """The hits of one search, best first, with the values the search really used.
 
-    The strategy, the number of hits asked for, the lowest score and the embedding space are returned with the hits,
-    so a client can record exactly what produced them and never compares results made under different settings.
+    The strategy, whether the reranker ran, the number of hits asked for, the lowest score and the embedding space
+    are returned with the hits, so a client can record exactly what produced them and never compares results made
+    under different settings.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -46,6 +48,9 @@ class SearchResult(BaseModel):
     course_id: str
     # The ranking that produced the hits, so results of the two strategies are never mistaken for each other.
     strategy: SearchStrategy
+    # Whether the reranker put the hits in their order. The hits are then the strategy's passages in the reranker's
+    # order, and results with and without it are never mistaken for each other.
+    reranked: bool
     embedding_space: str
     k: int
     min_score: float

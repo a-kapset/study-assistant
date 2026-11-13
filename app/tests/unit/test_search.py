@@ -1,6 +1,7 @@
 """The rules of a search, on an in-memory store: the lowest score, the status, which courses can be searched, the
-values a request may leave out, and how each failure is answered."""
+values a request may leave out, the reranker's order, and how each failure is answered."""
 
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,11 +12,13 @@ from pydantic import ValidationError
 
 from study_assistant.composition import build_app
 from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
-from study_assistant.retrieval.repository import Coverage
+from study_assistant.retrieval.models import SearchStrategy
+from study_assistant.retrieval.repository import Coverage, Passage
+from study_assistant.retrieval.rerank import RerankServiceRequestError, RerankServiceUnavailableError
 from study_assistant.retrieval.service import CourseNotSearchableError, CourseSearch
-from study_assistant.settings import CoursesSettings, SearchSettings, Settings
+from study_assistant.settings import AskSettings, CoursesSettings, SearchSettings, Settings
 
-from .conftest import FakeSearchStore, scored_passages
+from .conftest import FakeReranker, FakeSearchStore, scored_passages
 
 if TYPE_CHECKING:
     from .conftest import FakeCorpusStore, FakeDatabase, FakeEmbedder
@@ -34,12 +37,20 @@ def _client(
     embedder: FakeEmbedder,
     store: FakeSearchStore,
     search: SearchSettings | None = None,
+    reranker: FakeReranker | None = None,
 ) -> TestClient:
-    """A client for an app serving the demo course; by default with the lowest score 0.85 and 5 hits."""
+    """A client for an app serving the demo course, answering grounded questions; by default with the lowest score
+    0.85 and 5 hits. ``reranker`` is used only when ``search`` turns reranking on."""
     courses = CoursesSettings(manifest_dir=REPO_COURSES, source_dir=REPO_COURSES, enabled=("demo",))
     search = search or SearchSettings(default_k=5, max_k=10, min_score=0.85)
-    configured = settings.model_copy(update={"courses": courses, "search": search})
-    return TestClient(build_app(configured, db, corpus, embedder, store))
+    configured = settings.model_copy(update={"courses": courses, "search": search, "ask": AskSettings(mode="grounded")})
+    return TestClient(build_app(configured, db, corpus, embedder, store, reranker=reranker))
+
+
+def _named_passages(*scores: float) -> list[Passage]:
+    """Passages with the given cosine scores, closest first, each with its chunk id as its text, so a fake reranker
+    can score each one apart."""
+    return [replace(passage, text=passage.chunk_id) for passage in scored_passages(*scores)]
 
 
 @pytest.mark.covers("US-006", "AC-1")
@@ -245,3 +256,122 @@ async def test_hybrid_rankings_keep_the_same_number_of_passages_whatever_number_
 
     windows = [query.window for query in store.hybrid_queries]
     assert windows == [10, 10], f"each ranking should keep 10 passages for any number of hits, kept {windows}"
+
+
+@pytest.mark.covers("US-018", "AC-6")
+@pytest.mark.parametrize("strategy", ["vector", "hybrid"])
+async def test_the_reranker_orders_the_strategys_passages_and_the_hits_are_taken_after_it(
+    strategy: SearchStrategy, fake_embedder: FakeEmbedder
+) -> None:
+    """Gives each strategy six passages above the lowest score, c1 closest by meaning and c6 furthest; the reranker
+    scores c6 best and c3 second. Asks for 2 hits.
+
+    Expects the hits c6 and c3, each still with its cosine score, and the result marked as reranked. Catches the
+    hits cut to 2 before reranking (the reranker would only swap c1 and c2, and a passage it rates best but the
+    strategy places low could never be found), the reranker's score written over the cosine (a hit could then not
+    be checked against the lowest score), and reranking that runs for one strategy only.
+    """
+    store = FakeSearchStore(_named_passages(0.95, 0.93, 0.91, 0.89, 0.87, 0.86))
+    reranker = FakeReranker({"c6": 0.9, "c3": 0.8})
+    search = CourseSearch(store, fake_embedder, NoOpTracer(), strategy=strategy, window=10, reranker=reranker)
+
+    result = await search.search("demo", "How many dice?", k=2, min_score=0.85)
+
+    hits = [(hit.chunk_id, hit.score) for hit in result.hits]
+    assert (hits, result.reranked) == ([("c6", 0.86), ("c3", 0.91)], True), f"reranked hits: {hits}, {result}"
+
+
+@pytest.mark.covers("US-018", "AC-6")
+@pytest.mark.parametrize("strategy", ["vector", "hybrid"])
+async def test_the_reranker_gets_the_whole_window_above_the_lowest_score_whatever_number_of_hits_is_asked(
+    strategy: SearchStrategy, fake_embedder: FakeEmbedder
+) -> None:
+    """Runs a reranked search for 1 hit and one for 3 over passages scored 0.9, 0.84 and 0.88, with the lowest score
+    0.85 and the most hits a request may ask for set to 10.
+
+    Expects the reranker to get c1 and c3 both times: every passage of the window that reaches the lowest score,
+    and no other. Catches a reranker fed only the number of hits asked for (its first hit for 1 could then differ
+    from its first hit for 3, so a smaller result would not be the beginning of a larger one) and a passage below
+    the lowest score reaching the reranker, which could then place it among the hits.
+    """
+    store = FakeSearchStore(_named_passages(0.9, 0.84, 0.88))
+    reranker = FakeReranker()
+    search = CourseSearch(store, fake_embedder, NoOpTracer(), strategy=strategy, window=10, reranker=reranker)
+
+    for k in (1, 3):
+        await search.search("demo", "How many dice?", k=k, min_score=0.85)
+
+    given = [texts for _query, texts in reranker.calls]
+    assert given == [["c1", "c3"], ["c1", "c3"]], f"the reranker should get c1 and c3 for any k, got {given}"
+
+
+@pytest.mark.covers("US-018", "AC-6")
+@pytest.mark.parametrize(("rerank", "calls"), [(False, 0), (True, 1)], ids=["not configured", "configured"])
+def test_reranking_is_switched_by_configuration_and_the_result_says_whether_it_ran(
+    settings: Settings,
+    fake_db: FakeDatabase,
+    fake_store: FakeCorpusStore,
+    fake_embedder: FakeEmbedder,
+    fake_reranker: FakeReranker,
+    rerank: bool,
+    calls: int,
+) -> None:
+    """Builds the app with a reranker once with reranking left at its default and once with it switched on, and
+    searches.
+
+    Expects no call to the reranker and ``reranked`` false by default, one call and ``reranked`` true when it is on.
+    Catches an app that ignores the setting, a default that reranks (every search would pay up to a second of CPU
+    and depend on one more server), and a result that says the opposite of what ran, which would make a comparison
+    with and without the reranker compare one variant with itself.
+    """
+    configured = SearchSettings(min_score=0.85, rerank=True) if rerank else SearchSettings(min_score=0.85)
+    store = FakeSearchStore(_named_passages(0.9))
+    with _client(settings, fake_db, fake_store, fake_embedder, store, configured, fake_reranker) as client:
+        response = client.post(SEARCH, json={"course_id": "demo", "query": "How many dice?"})
+
+    assert response.status_code == 200, f"the search failed: {response.json()}"
+    seen = (len(fake_reranker.calls), response.json()["reranked"])
+    assert seen == (calls, rerank), f"expected {calls} reranker calls and reranked={rerank}, got {seen}"
+
+
+@pytest.mark.covers("US-018", "AC-7")
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [(SEARCH, {"query": "How many dice?"}), ("/v1/ask", {"question": "How many dice?"})],
+    ids=["search", "ask"],
+)
+@pytest.mark.parametrize(
+    ("error", "status", "code"),
+    [
+        (RerankServiceRequestError(500), 502, "rerank_failed"),
+        (RerankServiceUnavailableError("ConnectError"), 503, "rerank_unavailable"),
+    ],
+    ids=["server error", "server unreachable"],
+)
+def test_a_failed_reranker_is_answered_with_its_status_and_code(
+    settings: Settings,
+    fake_db: FakeDatabase,
+    fake_store: FakeCorpusStore,
+    fake_embedder: FakeEmbedder,
+    fake_reranker: FakeReranker,
+    path: str,
+    body: dict[str, str],
+    error: Exception,
+    status: int,
+    code: str,
+) -> None:
+    """Switches reranking on and lets the rerank server answer with an error, then be unreachable, for a search and
+    for a grounded question.
+
+    Expects 502 ``rerank_failed`` and 503 ``rerank_unavailable`` in the error envelope from both endpoints. Catches a
+    rerank failure escaping as a 500, which blames the app and hides that the rerank server is down, and one of the
+    two endpoints answering it differently.
+    """
+    fake_reranker.error = error
+    configured = SearchSettings(min_score=0.85, rerank=True)
+    store = FakeSearchStore(_named_passages(0.9))
+    with _client(settings, fake_db, fake_store, fake_embedder, store, configured, fake_reranker) as client:
+        response = client.post(path, json={"course_id": "demo", **body})
+
+    answered = (response.status_code, response.json()["error"]["code"])
+    assert answered == (status, code), f"expected {(status, code)}, got {answered}"

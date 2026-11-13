@@ -13,6 +13,7 @@ from study_assistant.courses.models import COURSE_ID_PATTERN, CourseManifest
 from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
 from study_assistant.errors import ErrorBody, ErrorEnvelope, error_response
 from study_assistant.retrieval.models import SearchResult
+from study_assistant.retrieval.rerank import RerankServiceRequestError, RerankServiceUnavailableError
 from study_assistant.retrieval.service import CourseNotSearchableError, CourseSearch
 from study_assistant.settings import SearchSettings
 
@@ -51,7 +52,7 @@ def search_router(courses: Mapping[str, CourseManifest], search: CourseSearch, s
         """Return the course's best passages for the question, or "empty" when none is close enough.
 
         A course this app does not serve is a 404, a course that is not fully embedded in the configured space a
-        409, an embedding server that answers with an error a 502, and one that cannot be reached a 503.
+        409, an embedding or rerank server that answers with an error a 502, and one that cannot be reached a 503.
         """
         if body.course_id not in courses:
             raise HTTPException(status_code=404, detail=f"No course '{body.course_id}' is served by this app")
@@ -71,6 +72,11 @@ def search_router(courses: Mapping[str, CourseManifest], search: CourseSearch, s
         except EmbeddingServiceUnavailableError as exc:
             message = f"the embedding server could not be reached ({exc})"
             return _failed(request, body.course_id, 503, "embedding_unavailable", message)
+        except RerankServiceRequestError as exc:
+            return _failed(request, body.course_id, 502, "rerank_failed", str(exc))
+        except RerankServiceUnavailableError as exc:
+            message = f"the rerank server could not be reached ({exc})"
+            return _failed(request, body.course_id, 503, "rerank_unavailable", message)
         # The question itself is not logged: it is the user's text.
         log.info("search_done", course_id=body.course_id, status=result.status, hits=len(result.hits), k=k)
         return result

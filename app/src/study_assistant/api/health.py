@@ -11,6 +11,7 @@ from study_assistant.db import Database, DatabaseUnavailableError
 from study_assistant.embed.base import Embedder
 from study_assistant.embed.remote import EmbeddingServiceUnavailableError
 from study_assistant.errors import ErrorBody, ErrorDetail, ErrorEnvelope, code_for, error_response
+from study_assistant.retrieval.rerank import Reranker, RerankServiceUnavailableError
 
 
 class HealthResponse(BaseModel):
@@ -28,8 +29,9 @@ class ReadyResponse(BaseModel):
     checks: dict[str, Literal["ok"]]
 
 
-def health_router(database: Database, embedder: Embedder) -> APIRouter:
-    """Build the router that serves ``GET /health`` and ``GET /ready``."""
+def health_router(database: Database, embedder: Embedder, reranker: Reranker | None) -> APIRouter:
+    """Build the router that serves ``GET /health`` and ``GET /ready``; ``reranker`` is checked only when searches use
+    one (``None`` otherwise)."""
     router = APIRouter()
     log: structlog.typing.FilteringBoundLogger = structlog.get_logger(__name__)
 
@@ -40,8 +42,8 @@ def health_router(database: Database, embedder: Embedder) -> APIRouter:
 
     @router.get("/ready", response_model=ReadyResponse, responses={503: {"model": ErrorEnvelope}})
     async def ready(request: Request) -> ReadyResponse | JSONResponse:
-        """Answer 200 when the database and the embedding server answer, otherwise 503 in the error envelope naming
-        every failed check."""
+        """Answer 200 when the database, the embedding server and, when searches use it, the rerank server answer,
+        otherwise 503 in the error envelope naming every failed check."""
         failed: list[str] = []
         try:
             await database.ping()
@@ -53,6 +55,14 @@ def health_router(database: Database, embedder: Embedder) -> APIRouter:
         except EmbeddingServiceUnavailableError as exc:
             log.warning("readiness_check_failed", check="embedder", error=str(exc))
             failed.append("embedder")
+        checks = ["db", "embedder"]
+        if reranker is not None:
+            checks.append("reranker")
+            try:
+                await reranker.ping()
+            except RerankServiceUnavailableError as exc:
+                log.warning("readiness_check_failed", check="reranker", error=str(exc))
+                failed.append("reranker")
         if failed:
             error = ErrorBody(
                 code=code_for(503),
@@ -60,6 +70,6 @@ def health_router(database: Database, embedder: Embedder) -> APIRouter:
                 details=[ErrorDetail(loc=["checks", check], msg="unavailable") for check in failed],
             )
             return error_response(503, error, request.state.request_id)
-        return ReadyResponse(status="ok", checks={"db": "ok", "embedder": "ok"})
+        return ReadyResponse(status="ok", checks=dict.fromkeys(checks, "ok"))
 
     return router

@@ -4,10 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from study_assistant.composition import build_app
-from study_assistant.settings import Settings
+from study_assistant.settings import SearchSettings, Settings
 
 if TYPE_CHECKING:
-    from .conftest import FakeDatabase, FakeEmbedder
+    from .conftest import FakeDatabase, FakeEmbedder, FakeReranker
 
 
 @pytest.mark.covers("US-001", "AC-2")
@@ -101,3 +101,34 @@ def test_the_database_is_opened_at_startup_and_closed_at_shutdown(settings: Sett
         assert fake_db.events == ["open"]
 
     assert fake_db.events == ["open", "close"]
+
+
+@pytest.mark.covers("US-018", "AC-7")
+@pytest.mark.parametrize(
+    ("rerank", "status", "failed"),
+    [(False, 200, None), (True, 503, [{"loc": ["checks", "reranker"], "msg": "unavailable"}])],
+    ids=["reranking off", "reranking on"],
+)
+def test_ready_checks_the_reranker_only_when_searches_use_it(
+    settings: Settings,
+    fake_db: FakeDatabase,
+    fake_embedder: FakeEmbedder,
+    fake_reranker: FakeReranker,
+    rerank: bool,
+    status: int,
+    failed: list[dict[str, object]] | None,
+) -> None:
+    """Makes the rerank server unreachable, with reranking off and then on.
+
+    Expects 200 while reranking is off, and a 503 naming only the reranker once it is on. Catches readiness that
+    ignores the reranker (the app would report ready while every search fails with 503) and readiness that always
+    asks it (an app that never reranks would report not ready because of a server it does not use).
+    """
+    fake_reranker.up = False
+    configured = settings.model_copy(update={"search": SearchSettings(rerank=rerank)})
+
+    with TestClient(build_app(configured, fake_db, embedder=fake_embedder, reranker=fake_reranker)) as client:
+        response = client.get("/ready")
+
+    seen = (response.status_code, response.json().get("error", {}).get("details"))
+    assert seen == (status, failed), f"expected {(status, failed)} with reranking {rerank}, got {seen}"

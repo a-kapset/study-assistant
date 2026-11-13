@@ -68,9 +68,9 @@ services:
       db:
         condition: service_healthy
 
-  # Checks the model files before the embedding server may read them. The expected SHA-256 of every file the server
-  # needs is committed in models.sha256, so a missing, damaged or different file is named here and the server never
-  # starts with it. Runs once and exits, like the migration run; no network is needed.
+  # Checks the model files before the embedding and rerank servers may read them. The expected SHA-256 of every file
+  # the servers need is committed in models.sha256, so a missing, damaged or different file is named here and neither
+  # server starts with it. Runs once and exits, like the migration run; no network is needed.
   model-check:
     image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
     working_dir: /model
@@ -79,9 +79,10 @@ services:
     command: ["sh", "-c", "grep -v '^#' /hashes/models.sha256 | sha256sum -c -"]
     network_mode: none
     volumes:
-      # The folder is named after the configured model and revision, so a revision changed in .env without its
+      # Each folder is named after the configured model and revision, so a revision changed in .env without its
       # files fails here instead of serving the old model under the new name.
-      - ./models/${APP_EMBEDDING__MODEL}/${APP_EMBEDDING__REVISION}:/model:ro
+      - ./models/${APP_EMBEDDING__MODEL}/${APP_EMBEDDING__REVISION}:/model/embedder:ro
+      - ./models/${APP_RERANK__MODEL:?set APP_RERANK__MODEL in .env, see .env.example}/${APP_RERANK__REVISION:?set APP_RERANK__REVISION in .env, see .env.example}:/model/reranker:ro
       - ./models.sha256:/hashes/models.sha256:ro
 
   # The embedding server: runs the model and turns texts into vectors for the app (Hugging Face Text Embeddings
@@ -106,6 +107,29 @@ services:
         condition: service_completed_successfully
     healthcheck:
       # Healthy once the model is loaded and the server answers; loading takes a few seconds.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # The rerank server: runs the cross-encoder that can put the passages of a search in a new order (the same server
+  # software as the embedder, with another model). It always runs, so reranking is switched on by configuration
+  # and an app restart; the app calls it only when APP_SEARCH__RERANK is on.
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9@sha256:2538ea1c9640d3763b15af668039d24172d063b42337b0c27796fc2be180c78d
+    # Like the embedder, it runs onnx/model.onnx on the ONNX Runtime backend.
+    command: ["--model-id", "/data/model"]
+    environment:
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - ./models/${APP_RERANK__MODEL}/${APP_RERANK__REVISION}:/data/model:ro
+    ports:
+      # Reachable from this machine only, for the check that calls the server through the app's client.
+      - "127.0.0.1:${RERANKER_PUBLISHED_PORT:?set RERANKER_PUBLISHED_PORT in .env, see .env.example}:80"
+    depends_on:
+      model-check:
+        condition: service_completed_successfully
+    healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
       interval: 2s
       timeout: 3s
@@ -142,6 +166,7 @@ services:
       APP_SEARCH__MAX_K: ${APP_SEARCH__MAX_K:?set APP_SEARCH__MAX_K in .env, see .env.example}
       APP_SEARCH__MIN_SCORE: ${APP_SEARCH__MIN_SCORE:?set APP_SEARCH__MIN_SCORE in .env, see .env.example}
       APP_SEARCH__STRATEGY: ${APP_SEARCH__STRATEGY:?set APP_SEARCH__STRATEGY in .env, see .env.example}
+      APP_SEARCH__RERANK: ${APP_SEARCH__RERANK:?set APP_SEARCH__RERANK in .env, see .env.example}
       APP_ASK__MODE: ${APP_ASK__MODE:?set APP_ASK__MODE in .env, see .env.example}
       # The embedding model; the vectors' space is named after it.
       APP_EMBEDDING__MODEL: ${APP_EMBEDDING__MODEL}
@@ -152,6 +177,11 @@ services:
       # Where the embedding server is and how long one request to it may take.
       APP_EMBEDDING_SERVICE__URL: ${APP_EMBEDDING_SERVICE__URL:?set APP_EMBEDDING_SERVICE__URL in .env, see .env.example}
       APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS: ${APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS:?set APP_EMBEDDING_SERVICE__TIMEOUT_SECONDS in .env, see .env.example}
+      # The reranking model, where its server is and how long one request to it may take.
+      APP_RERANK__MODEL: ${APP_RERANK__MODEL}
+      APP_RERANK__REVISION: ${APP_RERANK__REVISION}
+      APP_RERANK__URL: ${APP_RERANK__URL:?set APP_RERANK__URL in .env, see .env.example}
+      APP_RERANK__TIMEOUT_SECONDS: ${APP_RERANK__TIMEOUT_SECONDS:?set APP_RERANK__TIMEOUT_SECONDS in .env, see .env.example}
       # The model that answers questions, and how the app reaches its provider.
       APP_LLM__ANSWER: ${APP_LLM__ANSWER:?set APP_LLM__ANSWER in .env, see .env.example}
       APP_OPENAI__API_KEY: ${APP_OPENAI__API_KEY:?set APP_OPENAI__API_KEY in .env, see .env.example}
@@ -176,6 +206,9 @@ services:
         condition: service_completed_successfully
       # Ingestion needs vectors, so the app starts once the embedding server has loaded its model.
       embedder:
+        condition: service_healthy
+      # So that switching reranking on needs only an app restart, whose readiness then checks this server.
+      reranker:
         condition: service_healthy
       # Its spans have somewhere to go from the first request on.
       jaeger:

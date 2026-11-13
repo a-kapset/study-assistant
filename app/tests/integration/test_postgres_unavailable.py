@@ -20,6 +20,7 @@ from study_assistant.settings import (
     EmbeddingSettings,
     LlmSettings,
     OpenAISettings,
+    RerankSettings,
     Settings,
 )
 
@@ -62,6 +63,12 @@ def client() -> Iterator[TestClient]:
         ),
         # Nothing listens there; these tests never reach the embedding server.
         embedding_service=EmbeddingServiceSettings(url=HttpUrl("http://embedder.invalid")),
+        # Nor the rerank server: reranking is off by default.
+        rerank=RerankSettings(
+            model="cross-encoder/ms-marco-MiniLM-L6-v2",
+            revision="233902d25c440f23af6f7d6e94d2946bac0bee0a",
+            url=HttpUrl("http://reranker.invalid"),
+        ),
         # Nor is the model provider called: no test here asks a question.
         llm=LlmSettings(answer="openai/gpt-5.4-mini"),
         openai=OpenAISettings(

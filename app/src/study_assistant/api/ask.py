@@ -15,6 +15,7 @@ from study_assistant.courses.models import COURSE_ID_PATTERN, CourseManifest
 from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
 from study_assistant.errors import ErrorBody, ErrorEnvelope, error_response
 from study_assistant.llm.providers import LlmError, LlmUnavailableError
+from study_assistant.retrieval.rerank import RerankServiceRequestError, RerankServiceUnavailableError
 from study_assistant.retrieval.service import CourseNotSearchableError
 
 
@@ -47,7 +48,7 @@ def ask_router(courses: Mapping[str, CourseManifest], answerer: Answerer) -> API
         """Return the answer to the question about the course, with the passages it cites.
 
         A course this app does not serve is a 404 and nothing is called. A search that cannot run answers as
-        ``/v1/search`` does: 409 for a course not fully embedded, 502 / 503 for the embedding server. A model
+        ``/v1/search`` does: 409 for a course not fully embedded, 502 / 503 for the embedding or rerank server. A model
         provider that cannot be reached is a 503; one that answers with an error, a refusal or a reply without
         text or in the wrong form is a 502.
         """
@@ -63,6 +64,11 @@ def ask_router(courses: Mapping[str, CourseManifest], answerer: Answerer) -> API
         except EmbeddingServiceUnavailableError as exc:
             message = f"the embedding server could not be reached ({exc})"
             return _failed(request, body.course_id, 503, "embedding_unavailable", message)
+        except RerankServiceRequestError as exc:
+            return _failed(request, body.course_id, 502, "rerank_failed", str(exc))
+        except RerankServiceUnavailableError as exc:
+            message = f"the rerank server could not be reached ({exc})"
+            return _failed(request, body.course_id, 503, "rerank_unavailable", message)
         except LlmUnavailableError as exc:
             message = f"the model provider could not be reached ({exc})"
             return _failed(request, body.course_id, 503, "llm_unavailable", message)

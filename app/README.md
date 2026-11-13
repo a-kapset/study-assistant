@@ -19,6 +19,7 @@ How the app is tested, at which level and why: [TESTING.md](../TESTING.md).
   image, ONNX Runtime backend) as a separate Compose service, called through LangChain's
   [`OpenAIEmbeddings`](https://docs.langchain.com/oss/python/integrations/embeddings/index) against its
   OpenAI-compatible endpoint; the app image holds no model and no PyTorch
+- Reranking: a second TEI service with a cross-encoder, called on its `/rerank` endpoint over HTTP
 - PostgreSQL 18 with [pgvector](https://github.com/pgvector/pgvector), reached through
   [psycopg 3](https://www.psycopg.org/psycopg3/) and its connection pool
 - Traces: the [OpenTelemetry](https://opentelemetry.io/docs/languages/python/) SDK with its FastAPI, psycopg and
@@ -65,7 +66,8 @@ app/
 │   ├── retrieval/          # finding the course passages closest to a question
 │   │   ├── models.py       # the search result: hits with score and rank, status ok / empty, the values used
 │   │   ├── repository.py   # the two search statements: a course's coverage by vectors, its closest passages
-│   │   └── service.py      # vector search in one course: refuse a course not fully embedded, keep hits above the lowest score
+│   │   ├── rerank.py       # the rerank client: question and passages to the rerank server, scores back in their order
+│   │   └── service.py      # search in one course: refuse a course not fully embedded, keep hits above the lowest score, rerank
 │   ├── llm/                # chat models
 │   │   └── providers.py    # the only module that knows a model provider: builds each role's model from "provider/model", turns provider failures into typed errors
 │   ├── answer/             # answers to learners' questions
@@ -88,6 +90,7 @@ app/
     ├── integration/        # the real database driver without a server: startup and readiness while the database is down;
     │                       # the corpus SQL and the migration run on a throwaway PostgreSQL (pytest -m database);
     │                       # the running embedding server against reference vectors (pytest -m embedding_server);
+    │                       # the running rerank server through the app's client (pytest -m rerank_server);
     │                       # data/embedder_reference.json: the reference vectors
     └── unit/               # in-process tests: the API through FastAPI's TestClient, parsing on the demo course PDF,
                             # the embedding client on a fake HTTP server
@@ -113,9 +116,9 @@ curl.exe -i http://127.0.0.1:8000/ready
 
 The stack starts in order: the database, then `migrate`, a one-shot run of the same image that applies new
 migration files as the database owner and prepares the app's role and the read-only role; next to it
-`model-check` checks the model files and `embedder` loads the model; then the app, only after `migrate` has
-exited without an error and `embedder` is healthy. `--wait` returns once the database, the embedding server and
-the app are healthy (the app counts as healthy when `/ready` answers 200); `docker compose ps -a` shows `migrate`
+`model-check` checks the model files, and `embedder` and `reranker` load their models; then the app, only after
+`migrate` has exited without an error and both model servers are healthy. `--wait` returns once the database, the
+model servers and the app are healthy (the app counts as healthy when `/ready` answers 200); `docker compose ps -a` shows `migrate`
 and `model-check` as exited with code 0. The model files must be in place first (see "Model files" below).
 
 Once the app is healthy, `ingest`, another one-shot run of the same image, asks the app to ingest every course
@@ -182,21 +185,23 @@ After a restore the ingestion run reports every document as unchanged.
 
 ### Model files
 
-The embedding server reads the files of the pinned model revision from `models/<model>/<revision>/` in the
-repository root (not committed, about 490 MB). Before it starts, `model-check` compares every file with the SHA-256
-committed in [`models.sha256`](../models.sha256); a missing or changed file is named in
-`docker compose logs model-check` and the server does not start. The server never downloads anything itself.
+The embedding server and the rerank server read the files of their pinned model revisions from
+`models/<model>/<revision>/` in the repository root (not committed, about 490 MB and 92 MB). Before they start,
+`model-check` compares every file with the SHA-256 committed in [`models.sha256`](../models.sha256), where each path
+starts with the server that reads it (`embedder/`, `reranker/`); a missing or changed file is named in
+`docker compose logs model-check` and neither server starts. The servers never download anything themselves.
 
 Download them once from the repository root, in a throwaway container:
 
 ```powershell
-docker run --rm -v "${PWD}/models:/models" python:3.14.8-slim-trixie sh -c "pip install -q huggingface-hub==2.2.0 && hf download intfloat/multilingual-e5-small 1_Pooling/config.json config.json modules.json onnx/model.onnx sentence_bert_config.json sentencepiece.bpe.model special_tokens_map.json tokenizer.json tokenizer_config.json --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3 --local-dir /models/intfloat/multilingual-e5-small/614241f622f53c4eeff9890bdc4f31cfecc418b3"
+docker run --rm -v "${PWD}/models:/models" python:3.14.8-slim-trixie sh -c "pip install -q huggingface-hub==2.2.0 && hf download intfloat/multilingual-e5-small 1_Pooling/config.json config.json modules.json onnx/model.onnx sentence_bert_config.json sentencepiece.bpe.model special_tokens_map.json tokenizer.json tokenizer_config.json --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3 --local-dir /models/intfloat/multilingual-e5-small/614241f622f53c4eeff9890bdc4f31cfecc418b3 && hf download cross-encoder/ms-marco-MiniLM-L6-v2 config.json onnx/model.onnx special_tokens_map.json tokenizer.json tokenizer_config.json vocab.txt --revision 233902d25c440f23af6f7d6e94d2946bac0bee0a --local-dir /models/cross-encoder/ms-marco-MiniLM-L6-v2/233902d25c440f23af6f7d6e94d2946bac0bee0a"
 ```
 
 To change the model or its revision: download the new revision's files the same way; check that the SHA-256 of
 `onnx/model.onnx` equals the one Hugging Face shows for that file; write the new hashes into `models.sha256`
-(`docker run --rm -v "${PWD}/models/<model>/<revision>:/m:ro" -w /m busybox:1.37.0 sha256sum <files>`); change
-`APP_EMBEDDING__*` in `.env` and `.env.example`; commit both files together. The new revision is a new embedding
+under the server's prefix (`docker run --rm -v "${PWD}/models/<model>/<revision>:/m:ro" -w /m busybox:1.37.0
+sha256sum <files>`); change `APP_EMBEDDING__*` (or `APP_RERANK__*`) in `.env` and `.env.example`; commit both files
+together. The rest of this paragraph is about the embedding model. The new revision is a new embedding
 space, so the next ingestion computes every vector again. A new model or revision also needs new reference vectors
 for the reference-vector check (see "Reference vectors" under "Development checks"). If `model-check` fails while nothing
 was changed, the local files are damaged: download them again and leave `models.sha256` as it is.
@@ -391,7 +396,18 @@ record what produced it.
 on the question's words (any word counts, stemmed by the course language), and fuses the two rankings by
 reciprocal rank fusion (1 / (60 + place), added over the rankings); equal places are ordered by chunk id, and
 each ranking keeps `APP_SEARCH__MAX_K` passages, so fewer hits are always the first of more. The `search` span
-of the request's trace names the strategy, the hit ids and, for `hybrid`, how many passages each ranking held. `k` and `min_score` may be sent with the request; otherwise `APP_SEARCH__DEFAULT_K`
+of the request's trace names the strategy, the hit ids and, for `hybrid`, how many passages each ranking held.
+
+`APP_SEARCH__RERANK=true` adds a rerank stage on top of either strategy: the strategy gives its
+`APP_SEARCH__MAX_K` best passages that reach the lowest score, the rerank server (a cross-encoder that reads the
+question and each passage together, `APP_RERANK__*`) scores them, and the first `k` of its order are the hits;
+equal scores keep the strategy's order. Every hit keeps its cosine `score`, and the result says `reranked`. The
+`search` span says whether rerank ran (`search.rerank`) and lists the passages in the strategy's order before
+reranking (`search.rerank.candidate_ids`), and the call is a `rerank` span of its own. Reranking is off by default:
+on a CPU it adds about 1.5 s for 40 passages. A rerank server that cannot be reached is a 503
+`rerank_unavailable`, one that answers with an error a 502 `rerank_failed`; with reranking on, `/ready` checks it.
+
+`k` and `min_score` may be sent with the request; otherwise `APP_SEARCH__DEFAULT_K`
 and `APP_SEARCH__MIN_SCORE` apply, and `k` above `APP_SEARCH__MAX_K` is a 422. The default model scores almost
 any two texts above 0.7, so the useful lowest scores lie in a narrow range (see `.env.example`).
 
@@ -418,7 +434,7 @@ to `curl.exe`. Its `Invoke-RestMethod` also shows non-ASCII course text garbled,
 ```
 
 `APP_ASK__MODE` chooses how. In the default `grounded` mode the app first searches the course with the search
-settings (`APP_SEARCH__DEFAULT_K`, `APP_SEARCH__MIN_SCORE`, `APP_SEARCH__STRATEGY`). When no passage is close
+settings (`APP_SEARCH__DEFAULT_K`, `APP_SEARCH__MIN_SCORE`, `APP_SEARCH__STRATEGY`, `APP_SEARCH__RERANK`). When no passage is close
 enough, the question is declined (`abstain_reason` `no_passages`, no citations) and the model is not called. Otherwise the model gets the
 passages, numbered and marked as course text in a message of their own, answers only from them and cites them by
 number; the app turns the numbers back into `citations` with section, file and pages, each passage once. A number
@@ -452,10 +468,10 @@ curl.exe -X POST -H "Content-Type: application/json" --data-binary "@ask.json" h
 |---|---|---|
 | `GET` | `/health` | Liveness: `{"status": "ok"}` while the process is serving HTTP |
 | `GET` | `/v1/config` | Effective configuration: app version and settings, every secret masked |
-| `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}` when the database and the embedding server answer, otherwise 503 in the error envelope naming each failed check |
+| `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}` when the database and the embedding server answer (with reranking on, also `"reranker"`), otherwise 503 in the error envelope naming each failed check |
 | `GET` | `/v1/courses` | The enabled courses in the configured order: `id`, `title`, `description`, `language` |
 | `GET` | `/v1/courses/{course_id}` | One course, its stored `corpus` counts (documents, sections, learning objectives, chunks), the configured `embedding_space` and the number of the course's `vectors` in it (0 after a change of model until the next ingestion); 404 for a course not served |
-| `POST` | `/v1/search` | The passages of a course closest to a question: `status` (`ok` / `empty`), `hits` with score and rank, the `k`, `min_score` and `embedding_space` used; 404 for a course not served, 409 for a course not fully embedded (see "Search") |
+| `POST` | `/v1/search` | The passages of a course closest to a question: `status` (`ok` / `empty`), `hits` with score and rank, the `strategy`, `reranked`, `k`, `min_score` and `embedding_space` used; 404 for a course not served, 409 for a course not fully embedded, 502 / 503 when the embedding or rerank server fails (see "Search") |
 | `POST` | `/v1/ask` | An answer to a question about a course: `answer`, `abstain_reason`, `citations` (passage, section, file, pages), `invalid_citations`; grounded on the course's passages or not by `APP_ASK__MODE`; 404 for a course not served, 409 / 502 / 503 when the search or the model provider cannot run (see "Ask") |
 | `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count |
 
@@ -516,12 +532,12 @@ poetry run mypy .
 poetry run pytest
 ```
 
-A plain `pytest` needs no server and no model files. The database tests and the reference-vector check below
+A plain `pytest` needs no server and no model files. The database tests and the model-server checks below
 run only when asked for.
 
 CI (`.github/workflows/ci.yml`) runs all of them on every push to `main` and every pull request: the checks and
-unit tests, `pytest -m database`, and `pytest -m embedding_server` on a stack started from `compose.yaml` with the
-two invented courses. It downloads the model files of `models.sha256` once and keeps them in the Actions cache.
+unit tests, `pytest -m database`, and `pytest -m "embedding_server or rerank_server"` on a stack started from
+`compose.yaml` with the two invented courses. It downloads the model files of `models.sha256` once and keeps them in the Actions cache.
 
 ### Database tests
 
@@ -585,6 +601,18 @@ It downloads about 700 MB (the libraries and the model). For another model, add 
 --query-prefix "<prefix>"`. Run with the defaults, the command gives exactly the vectors in the committed file;
 `git diff` on the file then shows no change. Commit the new file together with the `.env.example` change, then
 run the check against the stack with the new model.
+
+### Rerank server
+
+`tests/integration/test_rerank_server.py` sends a question and 40 invented passages, the one answer among them at
+place 35, through the app's rerank client to the running rerank server, and expects 40 scores with the highest at
+place 35. The unit tests of the client play a server that answers best first and takes at most 32 texts per
+request; this check confirms both on the real server, and that its model still tells an answer from unrelated
+text. It needs the stack and runs only when asked for (marker `rerank_server`; without a server it fails):
+
+```powershell
+poetry run pytest -m rerank_server
+```
 
 The same checks, a secret scan and a check that app code contains no course-specific names run as
 pre-commit hooks from the repository root:
