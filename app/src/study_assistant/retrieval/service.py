@@ -1,12 +1,20 @@
 """Search within one course: the question's vector, the best passages by the configured strategy, the lowest score
-every hit needs, and, when it is on, a new order of those passages by the reranker."""
+every hit needs, and, when it is on, a new order of those passages by the reranker.
 
+When the embedding server or the rerank server cannot be reached, the search still answers on a weaker path and
+says so: without the vector it ranks the passages by the question's words only, without the reranker it keeps the
+strategy's order. A server that answers with an error is not such a case: the error passes through, because a
+broken request or reply is a fault to fix, not an outage to wait out.
+"""
+
+import structlog
 from opentelemetry.trace import Span, Tracer
 
 from study_assistant.embed.base import Embedder
-from study_assistant.retrieval.models import SearchHit, SearchResult, SearchStrategy
+from study_assistant.embed.remote import EmbeddingServiceUnavailableError
+from study_assistant.retrieval.models import DegradedReason, SearchHit, SearchResult, SearchStatus, SearchStrategy
 from study_assistant.retrieval.repository import HybridQuery, Passage, SearchStore
-from study_assistant.retrieval.rerank import Reranker
+from study_assistant.retrieval.rerank import Reranker, RerankServiceUnavailableError
 from study_assistant.tracing import stage_span
 
 # The constant of reciprocal rank fusion: a passage scores 1 / (60 + place) in each ranking. 60 is the value of the
@@ -61,28 +69,45 @@ class CourseSearch:
         self._strategy: SearchStrategy = strategy
         self._window = window
         self._reranker = reranker
+        self._log: structlog.typing.FilteringBoundLogger = structlog.get_logger(__name__)
 
     async def search(self, course_id: str, query: str, k: int, min_score: float) -> SearchResult:
         """Return up to ``k`` passages of the course scoring at least ``min_score``, best first.
 
         The course is checked before the question is embedded: a course that is not fully in the embedder's
         space raises ``CourseNotSearchableError``, so a result always covers the whole course. The result is
-        "empty" when no passage reaches ``min_score``. Errors of the embedding and rerank servers pass through
-        unchanged. The whole search is one span of the request's trace, marked as failed when the search raises; it
-        names the strategy, whether the reranker ran and the hits, never the question.
+        "empty" when no passage reaches ``min_score``. An embedding server that cannot be reached gives a "degraded"
+        result ranked by the question's words only, without the lowest score and without the reranker; a rerank
+        server that cannot be reached gives a "degraded" result in the strategy's order. Other errors of both
+        servers pass through unchanged. The whole search is one span of the request's trace, marked as failed when
+        the search raises; it names the strategy, whether the reranker was to run, the status, the reason of a
+        degraded result and the hits, never the question.
         """
         with stage_span(self._tracer, "search") as span:
             span.set_attribute("search.strategy", self._strategy)
             span.set_attribute("search.rerank", self._reranker is not None)
-            return await self._search(course_id, query, k, min_score, span)
+            result = await self._search(course_id, query, k, min_score, span)
+            span.set_attribute("search.status", result.status)
+            if result.degraded_reason is not None:
+                span.set_attribute("search.degraded_reason", result.degraded_reason)
+                self._log.warning("search_degraded", course_id=course_id, reason=result.degraded_reason)
+            span.set_attribute("search.hit_ids", [hit.chunk_id for hit in result.hits])
+            return result
 
     async def _search(self, course_id: str, query: str, k: int, min_score: float, span: Span) -> SearchResult:
-        """Run the search that ``search`` describes and record its outcome on ``span``."""
+        """Run the search that ``search`` describes; ``span`` gets the counts of a hybrid search and the candidates
+        given to the reranker."""
         space = self._embedder.space
         coverage = await self._store.coverage(course_id, space)
         if coverage.chunks == 0 or coverage.vectors < coverage.chunks:
             raise CourseNotSearchableError(course_id, coverage.chunks, coverage.vectors)
-        vector = await self._embedder.aembed_query(query)
+        try:
+            vector = await self._embedder.aembed_query(query)
+        except EmbeddingServiceUnavailableError:
+            # Ranked by words only. The reranker is left out too: this path is measured as one thing, and an answer
+            # is not written from it anyway.
+            passages = await self._store.lexical(course_id, query, k)
+            return self._result(course_id, k, min_score, passages, reranked=False, reason="embedder_unavailable")
         # The reranker chooses the hits from the whole window, so the strategy gives it that many passages.
         found = self._window if self._reranker is not None else k
         if self._strategy == "hybrid":
@@ -95,17 +120,36 @@ class CourseSearch:
             passages = fused.passages
         else:
             # The passages come closest first, so keeping those that reach the score keeps the order.
-            passages = [p for p in await self._store.nearest(course_id, space, vector, found) if p.score >= min_score]
-        if self._reranker is not None:
-            passages = (await self._rerank(self._reranker, query, passages, span))[:k]
+            nearest = await self._store.nearest(course_id, space, vector, found)
+            passages = [p for p in nearest if p.score is not None and p.score >= min_score]
+        if self._reranker is None:
+            return self._result(course_id, k, min_score, passages, reranked=False, reason=None)
+        try:
+            reranked = await self._rerank(self._reranker, query, passages, span)
+        except RerankServiceUnavailableError:
+            return self._result(course_id, k, min_score, passages[:k], reranked=False, reason="reranker_unavailable")
+        return self._result(course_id, k, min_score, reranked[:k], reranked=True, reason=None)
+
+    def _result(
+        self,
+        course_id: str,
+        k: int,
+        min_score: float,
+        passages: list[Passage],
+        *,
+        reranked: bool,
+        reason: DegradedReason | None,
+    ) -> SearchResult:
+        """Build the result of ``passages`` in their order; with a ``reason`` it is "degraded", else "ok" or "empty"."""
         hits = [_hit(passage, rank) for rank, passage in enumerate(passages, start=1)]
-        span.set_attribute("search.hit_ids", [hit.chunk_id for hit in hits])
+        status: SearchStatus = "degraded" if reason is not None else "ok" if hits else "empty"
         return SearchResult(
-            status="ok" if hits else "empty",
+            status=status,
+            degraded_reason=reason,
             course_id=course_id,
             strategy=self._strategy,
-            reranked=self._reranker is not None,
-            embedding_space=space.id,
+            reranked=reranked,
+            embedding_space=self._embedder.space.id,
             k=k,
             min_score=min_score,
             hits=hits,

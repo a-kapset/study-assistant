@@ -12,10 +12,10 @@ from study_assistant.answer.models import Answer
 from study_assistant.answer.service import Answerer
 from study_assistant.api.search import MAX_QUERY_LENGTH
 from study_assistant.courses.models import COURSE_ID_PATTERN, CourseManifest
-from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
+from study_assistant.embed.remote import EmbeddingServiceRequestError
 from study_assistant.errors import ErrorBody, ErrorEnvelope, error_response
 from study_assistant.llm.providers import LlmError, LlmUnavailableError
-from study_assistant.retrieval.rerank import RerankServiceRequestError, RerankServiceUnavailableError
+from study_assistant.retrieval.rerank import RerankServiceRequestError
 from study_assistant.retrieval.service import CourseNotSearchableError
 
 
@@ -48,7 +48,9 @@ def ask_router(courses: Mapping[str, CourseManifest], answerer: Answerer) -> API
         """Return the answer to the question about the course, with the passages it cites.
 
         A course this app does not serve is a 404 and nothing is called. A search that cannot run answers as
-        ``/v1/search`` does: 409 for a course not fully embedded, 502 / 503 for the embedding or rerank server. A model
+        ``/v1/search`` does: 409 for a course not fully embedded, 502 for an embedding or rerank server that answers
+        with an error. When the embedding server cannot be reached the question is declined without calling the
+        model; when only the rerank server cannot be reached it is answered from the strategy's passages. A model
         provider that cannot be reached is a 503; one that answers with an error, a refusal or a reply without
         text or in the wrong form is a 502.
         """
@@ -61,14 +63,8 @@ def ask_router(courses: Mapping[str, CourseManifest], answerer: Answerer) -> API
             return _failed(request, body.course_id, 409, "course_not_searchable", str(exc))
         except EmbeddingServiceRequestError as exc:
             return _failed(request, body.course_id, 502, "embedding_failed", str(exc))
-        except EmbeddingServiceUnavailableError as exc:
-            message = f"the embedding server could not be reached ({exc})"
-            return _failed(request, body.course_id, 503, "embedding_unavailable", message)
         except RerankServiceRequestError as exc:
             return _failed(request, body.course_id, 502, "rerank_failed", str(exc))
-        except RerankServiceUnavailableError as exc:
-            message = f"the rerank server could not be reached ({exc})"
-            return _failed(request, body.course_id, 503, "rerank_unavailable", message)
         except LlmUnavailableError as exc:
             message = f"the model provider could not be reached ({exc})"
             return _failed(request, body.course_id, 503, "llm_unavailable", message)

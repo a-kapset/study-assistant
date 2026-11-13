@@ -168,9 +168,8 @@ def test_more_hits_than_the_configured_maximum_are_refused(
         ("vardolin", Coverage(12, 12), None, 404, "not_found"),
         ("demo", Coverage(12, 0), None, 409, "course_not_searchable"),
         ("demo", Coverage(12, 12), EmbeddingServiceRequestError(500), 502, "embedding_failed"),
-        ("demo", Coverage(12, 12), EmbeddingServiceUnavailableError("ConnectError"), 503, "embedding_unavailable"),
     ],
-    ids=["course not served", "course not embedded", "server error", "server unreachable"],
+    ids=["course not served", "course not embedded", "server error"],
 )
 def test_each_failure_is_answered_with_its_status_and_code(
     settings: Settings,
@@ -184,10 +183,12 @@ def test_each_failure_is_answered_with_its_status_and_code(
     code: str,
 ) -> None:
     """Searches a course the app does not serve, a course without vectors in the configured space, and a served
-    course while the embedding server answers with an error or cannot be reached.
+    course while the embedding server answers with an error.
 
-    Expects 404, 409, 502 and 503 with their codes in the error envelope. Catches a failure answered with the wrong
-    status, and an unknown course that reaches the store, where it would look like a course without vectors.
+    Expects 404, 409 and 502 with their codes in the error envelope. Catches a failure answered with the wrong
+    status, an unknown course that reaches the store, where it would look like a course without vectors, and a
+    server that answers with an error taken for one that is down: a broken request would then hide behind a
+    degraded result instead of failing loudly.
     """
     fake_embedder.error = error
     store = FakeSearchStore(scored_passages(0.9), coverage=coverage)
@@ -340,15 +341,7 @@ def test_reranking_is_switched_by_configuration_and_the_result_says_whether_it_r
     [(SEARCH, {"query": "How many dice?"}), ("/v1/ask", {"question": "How many dice?"})],
     ids=["search", "ask"],
 )
-@pytest.mark.parametrize(
-    ("error", "status", "code"),
-    [
-        (RerankServiceRequestError(500), 502, "rerank_failed"),
-        (RerankServiceUnavailableError("ConnectError"), 503, "rerank_unavailable"),
-    ],
-    ids=["server error", "server unreachable"],
-)
-def test_a_failed_reranker_is_answered_with_its_status_and_code(
+def test_a_reranker_that_answers_with_an_error_is_a_502(
     settings: Settings,
     fake_db: FakeDatabase,
     fake_store: FakeCorpusStore,
@@ -356,22 +349,80 @@ def test_a_failed_reranker_is_answered_with_its_status_and_code(
     fake_reranker: FakeReranker,
     path: str,
     body: dict[str, str],
-    error: Exception,
-    status: int,
-    code: str,
 ) -> None:
-    """Switches reranking on and lets the rerank server answer with an error, then be unreachable, for a search and
-    for a grounded question.
+    """Switches reranking on and lets the rerank server answer with an error status, for a search and for a grounded
+    question.
 
-    Expects 502 ``rerank_failed`` and 503 ``rerank_unavailable`` in the error envelope from both endpoints. Catches a
-    rerank failure escaping as a 500, which blames the app and hides that the rerank server is down, and one of the
-    two endpoints answering it differently.
+    Expects 502 ``rerank_failed`` in the error envelope from both endpoints. Catches a rerank failure escaping as a
+    500, which blames the app, one of the two endpoints answering it differently, and a server that answers with an
+    error taken for one that is down: a broken request would then hide behind a degraded result.
     """
-    fake_reranker.error = error
+    fake_reranker.error = RerankServiceRequestError(500)
     configured = SearchSettings(min_score=0.85, rerank=True)
     store = FakeSearchStore(_named_passages(0.9))
     with _client(settings, fake_db, fake_store, fake_embedder, store, configured, fake_reranker) as client:
         response = client.post(path, json={"course_id": "demo", **body})
 
     answered = (response.status_code, response.json()["error"]["code"])
-    assert answered == (status, code), f"expected {(status, code)}, got {answered}"
+    assert answered == (502, "rerank_failed"), f"expected (502, 'rerank_failed'), got {answered}"
+
+
+@pytest.mark.covers("US-018", "AC-9")
+def test_an_unreachable_embedder_gives_a_degraded_result_ranked_by_words_without_the_reranker(
+    settings: Settings,
+    fake_db: FakeDatabase,
+    fake_store: FakeCorpusStore,
+    fake_embedder: FakeEmbedder,
+    fake_reranker: FakeReranker,
+) -> None:
+    """Switches reranking on, makes the embedding server unreachable and gives the store two passages found by words,
+    w2 first; the reranker would put w1 first.
+
+    Expects 200 with status "degraded", reason "embedder_unavailable", the hits w2 and w1 in the order by words with
+    no score, and ``reranked`` false. Catches an outage answered as an error (the learner would get nothing while
+    the database could still serve the course), a result that looks normal (a client would take the weaker hits for
+    the usual ones), a rank by words passed off as a cosine score, and the reranker run on this path, which would
+    mix two fallbacks in one measured result.
+    """
+    fake_embedder.error = EmbeddingServiceUnavailableError("ConnectError")
+    by_words = [replace(passage, score=None) for passage in _named_passages(0.0, 0.0)][::-1]
+    fake_reranker.scores = {"c1": 0.9}
+    store = FakeSearchStore(_named_passages(0.9), by_words=by_words)
+    configured = SearchSettings(min_score=0.85, rerank=True)
+    with _client(settings, fake_db, fake_store, fake_embedder, store, configured, fake_reranker) as client:
+        response = client.post(SEARCH, json={"course_id": "demo", "query": "How many dice?"})
+
+    assert response.status_code == 200, f"the search failed: {response.json()}"
+    result = response.json()
+    seen = (
+        result["status"],
+        result["degraded_reason"],
+        [(hit["chunk_id"], hit["score"]) for hit in result["hits"]],
+        result["reranked"],
+    )
+    expected = ("degraded", "embedder_unavailable", [("c2", None), ("c1", None)], False)
+    assert seen == expected, f"expected {expected}, got {seen}"
+
+
+@pytest.mark.covers("US-018", "AC-10")
+@pytest.mark.parametrize("strategy", ["vector", "hybrid"])
+async def test_an_unreachable_reranker_gives_a_degraded_result_in_the_strategys_order(
+    strategy: SearchStrategy, fake_embedder: FakeEmbedder, fake_reranker: FakeReranker
+) -> None:
+    """Gives each strategy three passages above the lowest score, c1 closest, makes the rerank server unreachable and
+    asks for 2 hits.
+
+    Expects status "degraded", reason "reranker_unavailable", the hits c1 and c2 with their cosine scores, and
+    ``reranked`` false. Catches an outage of an optional stage answered as an error (search and ask would stop
+    although the strategy's result exists), a result marked as reranked when it was not (a comparison with and
+    without the reranker would mix the two), and the whole window returned instead of the 2 hits asked for.
+    """
+    fake_reranker.error = RerankServiceUnavailableError("ConnectError")
+    store = FakeSearchStore(_named_passages(0.95, 0.9, 0.88))
+    search = CourseSearch(store, fake_embedder, NoOpTracer(), strategy=strategy, window=10, reranker=fake_reranker)
+
+    result = await search.search("demo", "How many dice?", k=2, min_score=0.85)
+
+    seen = (result.status, result.degraded_reason, [(hit.chunk_id, hit.score) for hit in result.hits], result.reranked)
+    expected = ("degraded", "reranker_unavailable", [("c1", 0.95), ("c2", 0.9)], False)
+    assert seen == expected, f"expected {expected}, got {seen}"

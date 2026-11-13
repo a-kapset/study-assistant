@@ -13,6 +13,8 @@ from study_assistant.embed.remote import EmbeddingServiceUnavailableError
 from study_assistant.errors import ErrorBody, ErrorDetail, ErrorEnvelope, code_for, error_response
 from study_assistant.retrieval.rerank import Reranker, RerankServiceUnavailableError
 
+type CheckState = Literal["ok", "unavailable"]
+
 
 class HealthResponse(BaseModel):
     """Liveness: the process is up and serving HTTP. Dependencies are not checked here."""
@@ -22,11 +24,16 @@ class HealthResponse(BaseModel):
 
 
 class ReadyResponse(BaseModel):
-    """Readiness: every dependency the app needs to serve requests has answered."""
+    """Readiness: the app can serve requests, and how well.
+
+    "ok" when every dependency answered; "degraded" when the database answered but the embedding or rerank server
+    did not, so searches run on a weaker path and say so. A client that measures search quality reads this before a
+    run, so it never measures the weaker path by mistake.
+    """
 
     model_config = ConfigDict(extra="forbid")
-    status: Literal["ok"]
-    checks: dict[str, Literal["ok"]]
+    status: Literal["ok", "degraded"]
+    checks: dict[str, CheckState]
 
 
 def health_router(database: Database, embedder: Embedder, reranker: Reranker | None) -> APIRouter:
@@ -42,34 +49,42 @@ def health_router(database: Database, embedder: Embedder, reranker: Reranker | N
 
     @router.get("/ready", response_model=ReadyResponse, responses={503: {"model": ErrorEnvelope}})
     async def ready(request: Request) -> ReadyResponse | JSONResponse:
-        """Answer 200 when the database, the embedding server and, when searches use it, the rerank server answer,
-        otherwise 503 in the error envelope naming every failed check."""
-        failed: list[str] = []
+        """Check the database, the embedding server and, when searches use it, the rerank server.
+
+        Only the database decides readiness: without it nothing can be served, so 503 in the error envelope, naming
+        every failed check. The model servers have a fallback in the search, so while the database answers the
+        reply is 200 with each check's state and "degraded" when one of them is down: a load balancer keeps sending
+        requests that the app can still serve.
+        """
+        checks: dict[str, CheckState] = {}
         try:
             await database.ping()
+            checks["db"] = "ok"
         except DatabaseUnavailableError as exc:
             log.warning("readiness_check_failed", check="db", error=str(exc))
-            failed.append("db")
+            checks["db"] = "unavailable"
         try:
             await embedder.ping()
+            checks["embedder"] = "ok"
         except EmbeddingServiceUnavailableError as exc:
             log.warning("readiness_check_failed", check="embedder", error=str(exc))
-            failed.append("embedder")
-        checks = ["db", "embedder"]
+            checks["embedder"] = "unavailable"
         if reranker is not None:
-            checks.append("reranker")
             try:
                 await reranker.ping()
+                checks["reranker"] = "ok"
             except RerankServiceUnavailableError as exc:
                 log.warning("readiness_check_failed", check="reranker", error=str(exc))
-                failed.append("reranker")
-        if failed:
+                checks["reranker"] = "unavailable"
+        if checks["db"] != "ok":
+            failed = [check for check, state in checks.items() if state != "ok"]
             error = ErrorBody(
                 code=code_for(503),
                 message="The app is not ready",
                 details=[ErrorDetail(loc=["checks", check], msg="unavailable") for check in failed],
             )
             return error_response(503, error, request.state.request_id)
-        return ReadyResponse(status="ok", checks=dict.fromkeys(checks, "ok"))
+        status: Literal["ok", "degraded"] = "ok" if all(state == "ok" for state in checks.values()) else "degraded"
+        return ReadyResponse(status=status, checks=checks)
 
     return router

@@ -217,7 +217,9 @@ async def test_hybrid_leaves_out_a_passage_below_the_lowest_score_even_when_it_h
 
     fused = await search_store.hybrid("demo", embedder.space, _hybrid(word, min_score=min_score))
 
-    below = [(p.chunk_id, p.score) for p in fused.passages if p.score < min_score or p.chunk_id == last]
+    below = [
+        (p.chunk_id, p.score) for p in fused.passages if p.score is None or p.score < min_score or p.chunk_id == last
+    ]
     assert below == [], f"passages below the lowest score {min_score} entered through their words: {below}"
 
 
@@ -269,3 +271,51 @@ async def test_hybrid_hits_of_a_smaller_request_are_the_first_hits_of_a_larger_o
 
     first, expected = [p.chunk_id for p in small.passages], [p.chunk_id for p in large.passages][:3]
     assert first == expected, f"3 hits should be the first 3 of 12 ({expected}), got {first}"
+
+
+@pytest.mark.covers("US-018", "AC-9")
+async def test_lexical_returns_only_the_requested_courses_passages_holding_a_word_of_the_question_without_a_score(
+    postgres: MigratedDatabase,
+    store: PostgresCorpusStore,
+    search_store: PostgresSearchStore,
+    embedder: FixedLengthEmbedder,
+    tmp_path: Path,
+) -> None:
+    """Ingests the demo course and a copy of it with the same texts, takes two demo chunks with a word of their own
+    each, and searches the demo course by words for a question holding both words and a word no chunk holds.
+
+    Expects exactly those two chunks, each without a score. Catches a search by words that reads another course
+    (each chunk would come twice, once per course), one that needs every word of the question in a passage (it
+    would find nothing), and a rank by words passed on as a similarity score.
+    """
+    await _ingest_two_courses(store, embedder, tmp_path)
+    by_meaning = await _demo_by_meaning(postgres, embedder)
+    first, last = by_meaning[0][0], by_meaning[-1][0]
+    question = f"{_word_only_in(postgres, first)} {_word_only_in(postgres, last)} zyxwvut"
+
+    passages = await search_store.lexical("demo", question, DEMO_CHUNKS)
+
+    found = sorted((p.chunk_id, p.score) for p in passages)
+    expected = sorted([(first, None), (last, None)])
+    assert found == expected, f"'{question}' should find {expected} by words, found {found}"
+
+
+@pytest.mark.covers("US-018", "AC-9")
+async def test_lexical_finds_nothing_for_a_question_of_stop_words_only(
+    store: PostgresCorpusStore,
+    search_store: PostgresSearchStore,
+    embedder: FixedLengthEmbedder,
+    tmp_path: Path,
+) -> None:
+    """Ingests the demo course and searches it by words for a question made only of words the course language
+    ignores ("what is it").
+
+    Expects no passage and no error. Catches a statement that fails on the empty word query such a question gives
+    (a learner's short question would end in a 500 while the embedding server is down) and one that then matches
+    every passage.
+    """
+    await _ingest_two_courses(store, embedder, tmp_path)
+
+    passages = await search_store.lexical("demo", "what is it", DEMO_CHUNKS)
+
+    assert passages == [], f"a question of stop words found {[p.chunk_id for p in passages]}"

@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from study_assistant.composition import build_app
-from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
+from study_assistant.embed.remote import EmbeddingServiceRequestError
 from study_assistant.retrieval.repository import Coverage
 from study_assistant.settings import AskSettings, CoursesSettings, Settings
 
@@ -123,9 +123,8 @@ def test_provider_failure_is_502_without_an_answer(
     [
         (Coverage(12, 0), None, 409, "course_not_searchable"),
         (Coverage(12, 12), EmbeddingServiceRequestError(500), 502, "embedding_failed"),
-        (Coverage(12, 12), EmbeddingServiceUnavailableError("ConnectError"), 503, "embedding_unavailable"),
     ],
-    ids=["course not embedded", "embedding server error", "embedding server unreachable"],
+    ids=["course not embedded", "embedding server error"],
 )
 def test_search_failure_is_answered_as_search_does(
     coverage: Coverage,
@@ -139,10 +138,10 @@ def test_search_failure_is_answered_as_search_does(
     fake_chat_model: FakeChatModel,
 ) -> None:
     """Asks a grounded question about a course without vectors in the configured space, and while the embedding
-    server answers with an error or cannot be reached, and expects 409, 502 and 503 with the codes /v1/search uses.
+    server answers with an error, and expects 409 and 502 with the codes /v1/search uses.
 
     Catches a search failure escaping as a 500, which blames the app and hides that the course needs ingesting or
-    the embedding server is down, and codes that differ from the search endpoint's for the same failure.
+    the embedding server is broken, and codes that differ from the search endpoint's for the same failure.
     """
     fake_embedder.error = error
     courses = CoursesSettings(manifest_dir=REPO_COURSES, source_dir=REPO_COURSES, enabled=("demo",))

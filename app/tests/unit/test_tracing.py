@@ -17,6 +17,7 @@ from opentelemetry.trace import StatusCode
 from study_assistant.answer.service import GENERATE_SPAN, Answerer
 from study_assistant.composition import build_app
 from study_assistant.courses.registry import load_course
+from study_assistant.embed.remote import EmbeddingServiceUnavailableError
 from study_assistant.llm.providers import LlmError, LlmUnavailableError, build_chat_model
 from study_assistant.retrieval.repository import Coverage
 from study_assistant.retrieval.service import RERANK_SPAN, CourseNotSearchableError, CourseSearch
@@ -238,3 +239,34 @@ async def test_the_search_span_keeps_the_order_before_reranking_and_the_reranker
     assert seen == expected, f"the search span should carry {expected}, carries {seen}"
     parent = traces.named(RERANK_SPAN).parent
     assert parent is not None and parent.span_id == search_span.context.span_id, "the rerank span is not in the search"
+
+
+@pytest.mark.covers("US-018", "AC-12")
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("embedder_up", "expected"),
+    [(True, ("ok", None, StatusCode.UNSET)), (False, ("degraded", "embedder_unavailable", StatusCode.UNSET))],
+    ids=["embedder up", "embedder down"],
+)
+async def test_the_search_span_names_the_status_and_the_reason_of_a_degraded_search(
+    fake_embedder: FakeEmbedder, traces: Traces, embedder_up: bool, expected: tuple[object, ...]
+) -> None:
+    """Runs a search with the embedding server up, then with it unreachable, and reads the search span.
+
+    Expects the status "ok" and no reason first, then "degraded" with "embedder_unavailable"; both spans end without
+    an error, because the search answered. Catches a trace that cannot tell a degraded search from a normal one (a
+    request served on the weaker path would look healthy to anyone reading traces), and a degraded search marked as
+    failed, which would count a served request among the failures.
+    """
+    if not embedder_up:
+        fake_embedder.error = EmbeddingServiceUnavailableError("ConnectError")
+    by_words = [replace(passage, score=None) for passage in scored_passages(0.0)]
+    store = FakeSearchStore(scored_passages(0.9), by_words=by_words)
+    search = CourseSearch(store, fake_embedder, traces.provider.get_tracer(TRACER_NAME), strategy="vector", window=10)
+
+    await search.search("demo", "How many dice?", k=3, min_score=0.85)
+
+    span = traces.named("search")
+    attributes = dict(span.attributes or {})
+    seen = (attributes.get("search.status"), attributes.get("search.degraded_reason"), span.status.status_code)
+    assert seen == expected, f"the search span should carry {expected}, carries {seen}"

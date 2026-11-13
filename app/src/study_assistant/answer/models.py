@@ -5,9 +5,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-# Why an answer declines: no course passage was close enough, so the model was not called ("no_passages"), or the
-# model read the passages found and said they do not answer the question ("model_declined").
-AbstainReason = Literal["no_passages", "model_declined"]
+# Why an answer declines: no course passage was close enough, so the model was not called ("no_passages"); the
+# search could only rank passages by the question's words, which says too little about whether they answer it, so
+# the model was not called either ("search_degraded"); or the model read the passages found and said they do not
+# answer the question ("model_declined").
+AbstainReason = Literal["no_passages", "search_degraded", "model_declined"]
 
 
 class Citation(BaseModel):

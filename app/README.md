@@ -404,8 +404,8 @@ question and each passage together, `APP_RERANK__*`) scores them, and the first 
 equal scores keep the strategy's order. Every hit keeps its cosine `score`, and the result says `reranked`. The
 `search` span says whether rerank ran (`search.rerank`) and lists the passages in the strategy's order before
 reranking (`search.rerank.candidate_ids`), and the call is a `rerank` span of its own. Reranking is off by default:
-on a CPU it adds about 1.5 s for 40 passages. A rerank server that cannot be reached is a 503
-`rerank_unavailable`, one that answers with an error a 502 `rerank_failed`; with reranking on, `/ready` checks it.
+on a CPU it adds about 1.5 s for 40 passages. A rerank server that answers with an error is a 502 `rerank_failed`;
+with reranking on, `/ready` checks it.
 
 `k` and `min_score` may be sent with the request; otherwise `APP_SEARCH__DEFAULT_K`
 and `APP_SEARCH__MIN_SCORE` apply, and `k` above `APP_SEARCH__MAX_K` is a 422. The default model scores almost
@@ -413,7 +413,16 @@ any two texts above 0.7, so the useful lowest scores lie in a narrow range (see 
 
 A course that is not ingested, or whose chunks do not all have a vector in the configured space (after a
 change of model), is refused with 409 `course_not_searchable` instead of being searched in part; ingesting it
-again fixes it. An embedding server that cannot be reached is a 503, one that answers with an error a 502.
+again fixes it. An embedding server that answers with an error is a 502 `embedding_failed`.
+
+When a model server cannot be reached, the search still answers and says so with the status `degraded` and a
+`degraded_reason`. Without the embedding server (`embedder_unavailable`) the passages are ranked by the question's
+words alone, over the whole course: `score` is null, the lowest score is not applied and the reranker is not used.
+Without the rerank server (`reranker_unavailable`) the hits are the strategy's first `k` in its own order, with
+`reranked` false. The `search` span carries `search.status` and `search.degraded_reason`, and the log line
+`search_degraded` names the course and the reason. In the stack, an embedding server whose container is stopped
+makes each such search take about 13 s: the stack's name lookup fails only after 4 s, and the client tries three
+times.
 
 ```powershell
 '{"course_id": "demo", "query": "How many barges does each player receive?"}' | Set-Content search.json
@@ -451,7 +460,10 @@ nothing stored by the provider, waiting at most `APP_OPENAI__TIMEOUT_SECONDS` pe
 call twice.
 
 A course not served is a 404 and nothing is called. A search that cannot run answers as in "Search": 409
-`course_not_searchable`, 502 `embedding_failed`, 503 `embedding_unavailable`. A provider that cannot be reached or
+`course_not_searchable`, 502 `embedding_failed` or `rerank_failed`. A search degraded by the embedding server
+declines the question without calling the model (`abstain_reason` `search_degraded`): passages found by words alone
+have no lowest score, so a question outside the course would still get some. A search that only lost the rerank
+server is answered as usual from the strategy's passages. A provider that cannot be reached or
 does not answer in time is a 503 `llm_unavailable`; one that answers with an error (a wrong key gives 401, too
 many calls 429), a refusal, or a reply without text or not in the asked-for form is a 502 `llm_failed`. With the
 placeholder key of `.env.example` every question that reaches the model is a 502. Each such question is a paid
@@ -468,11 +480,11 @@ curl.exe -X POST -H "Content-Type: application/json" --data-binary "@ask.json" h
 |---|---|---|
 | `GET` | `/health` | Liveness: `{"status": "ok"}` while the process is serving HTTP |
 | `GET` | `/v1/config` | Effective configuration: app version and settings, every secret masked |
-| `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}` when the database and the embedding server answer (with reranking on, also `"reranker"`), otherwise 503 in the error envelope naming each failed check |
+| `GET` | `/ready` | Readiness: 200 `{"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}` when the database and the embedding server answer (with reranking on, also `"reranker"`); 200 with `"status": "degraded"` and the server `"unavailable"` when only a model server is down, since searches then still answer on a weaker path; 503 in the error envelope naming each failed check when the database is down |
 | `GET` | `/v1/courses` | The enabled courses in the configured order: `id`, `title`, `description`, `language` |
 | `GET` | `/v1/courses/{course_id}` | One course, its stored `corpus` counts (documents, sections, learning objectives, chunks), the configured `embedding_space` and the number of the course's `vectors` in it (0 after a change of model until the next ingestion); 404 for a course not served |
-| `POST` | `/v1/search` | The passages of a course closest to a question: `status` (`ok` / `empty`), `hits` with score and rank, the `strategy`, `reranked`, `k`, `min_score` and `embedding_space` used; 404 for a course not served, 409 for a course not fully embedded, 502 / 503 when the embedding or rerank server fails (see "Search") |
-| `POST` | `/v1/ask` | An answer to a question about a course: `answer`, `abstain_reason`, `citations` (passage, section, file, pages), `invalid_citations`; grounded on the course's passages or not by `APP_ASK__MODE`; 404 for a course not served, 409 / 502 / 503 when the search or the model provider cannot run (see "Ask") |
+| `POST` | `/v1/search` | The passages of a course closest to a question: `status` (`ok` / `empty` / `degraded`) and `degraded_reason`, `hits` with score and rank, the `strategy`, `reranked`, `k`, `min_score` and `embedding_space` used; 404 for a course not served, 409 for a course not fully embedded, 502 when the embedding or rerank server answers with an error (see "Search") |
+| `POST` | `/v1/ask` | An answer to a question about a course: `answer`, `abstain_reason`, `citations` (passage, section, file, pages), `invalid_citations`; grounded on the course's passages or not by `APP_ASK__MODE`; 404 for a course not served, 409 / 502 when the search cannot run, 502 / 503 when the model provider fails (see "Ask") |
 | `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count |
 
 

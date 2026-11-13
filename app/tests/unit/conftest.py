@@ -150,9 +150,13 @@ class FakeSearchStore:
     """Stands in for the database: a fully embedded course whose passages are given closest first, as the real
     store returns them, and a record of what each search asked for."""
 
-    def __init__(self, passages: list[Passage], coverage: Coverage = EMBEDDED) -> None:
-        """Hold the passages every search returns and the coverage every course has."""
+    def __init__(
+        self, passages: list[Passage], coverage: Coverage = EMBEDDED, by_words: list[Passage] | None = None
+    ) -> None:
+        """Hold the passages every search by meaning returns, those a search by words alone returns (best match
+        first, none by default) and the coverage every course has."""
         self.passages = passages
+        self.by_words = by_words or []
         self.course_coverage = coverage
         self.asked_k: list[int] = []
         self.hybrid_queries: list[HybridQuery] = []
@@ -170,8 +174,12 @@ class FakeSearchStore:
         """Record the query and return, as the real store does, the first ``query.k`` passages that reach the lowest
         score, counting every passing passage as found by meaning and by words."""
         self.hybrid_queries.append(query)
-        passing = [p for p in self.passages if p.score >= query.min_score]
+        passing = [p for p in self.passages if p.score is not None and p.score >= query.min_score]
         return Fused(passages=passing[: query.k], by_meaning=len(passing), by_words=len(passing))
+
+    async def lexical(self, course_id: str, text: str, k: int) -> list[Passage]:
+        """Return the first ``k`` passages found by words, as the real store does: best match first, no score."""
+        return self.by_words[:k]
 
 
 def scored_passages(*scores: float) -> list[Passage]:

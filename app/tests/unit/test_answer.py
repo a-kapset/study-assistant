@@ -14,16 +14,18 @@ from opentelemetry.trace import NoOpTracer
 
 from study_assistant.answer.models import Answer
 from study_assistant.answer.prompts import passages_block
-from study_assistant.answer.service import Answerer, EmptyAnswerError, MalformedAnswerError
+from study_assistant.answer.service import SEARCH_DEGRADED_ANSWER, Answerer, EmptyAnswerError, MalformedAnswerError
 from study_assistant.courses.models import CourseManifest
 from study_assistant.courses.registry import load_course
+from study_assistant.embed.remote import EmbeddingServiceUnavailableError
 from study_assistant.llm.providers import LlmError, LlmRefusedError, build_chat_model
 from study_assistant.retrieval.models import SearchHit
 from study_assistant.retrieval.repository import Passage
+from study_assistant.retrieval.rerank import RerankServiceUnavailableError
 from study_assistant.retrieval.service import CourseSearch
 from study_assistant.settings import AskSettings, SearchSettings, Settings
 
-from .conftest import FakeSearchStore, responses_api_reply, scored_passages
+from .conftest import FakeReranker, FakeSearchStore, responses_api_reply, scored_passages
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
@@ -300,3 +302,59 @@ async def test_unusable_grounded_reply_is_an_error(
 
     with pytest.raises(error):
         await answerer.answer(_demo(), QUESTION)
+
+
+@pytest.mark.covers("US-018", "AC-11")
+async def test_a_search_ranked_by_words_only_is_declined_without_calling_the_model(
+    settings: Settings, fake_embedder: FakeEmbedder
+) -> None:
+    """Makes the embedding server unreachable while the course holds passages that match the question's words, and
+    asks a grounded question.
+
+    Expects the "search_degraded" decline with its text, no citations and no request to the model provider. Catches
+    an answer written from passages that no lowest score has checked: a question outside the course still matches
+    some of its words, and the model could answer it as if the course covered it. Also catches this decline
+    reported as "no_passages", which would hide from the learner and the operator that a server is down.
+    """
+    fake_embedder.error = EmbeddingServiceUnavailableError("ConnectError")
+    provider = Provider.replying({"answer": "Two dice.", "citations": [1], "abstained": False})
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(provider.handle))
+    model = build_chat_model(settings.llm.answer, settings, client)
+    by_words = [replace(passage, score=None) for passage in _passages()]
+    store = FakeSearchStore(_passages(), by_words=by_words)
+    search = CourseSearch(store, fake_embedder, NoOpTracer(), strategy="vector", window=10)
+    answerer = Answerer(model, search, AskSettings(mode="grounded"), SEARCH, NoOpTracer())
+
+    answer = await answerer.answer(_demo(), QUESTION)
+
+    expected = Answer(
+        answer=SEARCH_DEGRADED_ANSWER, abstain_reason="search_degraded", citations=[], invalid_citations=0
+    )
+    assert (answer, len(provider.requests)) == (expected, 0), f"expected the degraded decline, got {answer}"
+
+
+@pytest.mark.covers("US-018", "AC-11")
+async def test_a_search_that_lost_only_the_reranker_is_answered_from_the_strategys_passages(
+    settings: Settings, fake_embedder: FakeEmbedder
+) -> None:
+    """Switches reranking on, makes the rerank server unreachable and lets the model cite passage 1.
+
+    Expects one call to the model and an answer that cites the passage closest by meaning, without a decline.
+    Catches every degraded search declined alike: the learner would lose answers whenever the optional rerank
+    server is down, although the passages above the lowest score are the usual ones without reranking.
+    """
+    provider = Provider.replying({"answer": "Two dice.", "citations": [1], "abstained": False})
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(provider.handle))
+    model = build_chat_model(settings.llm.answer, settings, client)
+    reranker = FakeReranker()
+    reranker.error = RerankServiceUnavailableError("ConnectError")
+    passages = _passages()
+    search = CourseSearch(
+        FakeSearchStore(passages), fake_embedder, NoOpTracer(), strategy="vector", window=10, reranker=reranker
+    )
+    answerer = Answerer(model, search, AskSettings(mode="grounded"), SEARCH, NoOpTracer())
+
+    answer = await answerer.answer(_demo(), QUESTION)
+
+    seen = (len(provider.requests), answer.abstain_reason, [citation.chunk_id for citation in answer.citations])
+    assert seen == (1, None, [passages[0].chunk_id]), f"expected an answer citing {passages[0].chunk_id}, got {seen}"

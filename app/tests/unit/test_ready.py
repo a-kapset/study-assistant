@@ -46,21 +46,24 @@ def test_ready_answers_503_in_the_envelope_naming_the_database(
 
 
 @pytest.mark.covers("US-001", "AC-2")
-def test_ready_answers_503_naming_the_embedder_when_only_it_is_down(
+def test_ready_answers_200_degraded_naming_the_embedder_when_only_it_is_down(
     settings: Settings, fake_db: FakeDatabase, fake_embedder: FakeEmbedder
 ) -> None:
-    """Keeps the database up, makes the embedding server unreachable and expects a 503 naming only the embedder.
+    """Keeps the database up, makes the embedding server unreachable and expects 200 with the status "degraded" and
+    the embedder check "unavailable".
 
-    Catches readiness that looks at the database alone: the app would report ready while no course can be ingested
-    or searched.
+    Catches readiness that ignores the embedder (a client about to measure search quality would measure the weaker
+    path by words without knowing it) and readiness that fails on it (a load balancer would stop sending requests the
+    app can still serve on that path).
     """
     fake_embedder.up = False
 
     with TestClient(build_app(settings, fake_db, embedder=fake_embedder)) as client:
         response = client.get("/ready")
 
-    assert response.status_code == 503
-    assert response.json()["error"]["details"] == [{"loc": ["checks", "embedder"], "msg": "unavailable"}]
+    seen = (response.status_code, response.json())
+    expected = (200, {"status": "degraded", "checks": {"db": "ok", "embedder": "unavailable"}})
+    assert seen == expected, f"expected {expected}, got {seen}"
 
 
 @pytest.mark.covers("US-001", "AC-1")
@@ -103,10 +106,13 @@ def test_the_database_is_opened_at_startup_and_closed_at_shutdown(settings: Sett
     assert fake_db.events == ["open", "close"]
 
 
-@pytest.mark.covers("US-018", "AC-7")
+@pytest.mark.covers("US-001", "AC-2")
 @pytest.mark.parametrize(
-    ("rerank", "status", "failed"),
-    [(False, 200, None), (True, 503, [{"loc": ["checks", "reranker"], "msg": "unavailable"}])],
+    ("rerank", "body"),
+    [
+        (False, {"status": "ok", "checks": {"db": "ok", "embedder": "ok"}}),
+        (True, {"status": "degraded", "checks": {"db": "ok", "embedder": "ok", "reranker": "unavailable"}}),
+    ],
     ids=["reranking off", "reranking on"],
 )
 def test_ready_checks_the_reranker_only_when_searches_use_it(
@@ -115,14 +121,14 @@ def test_ready_checks_the_reranker_only_when_searches_use_it(
     fake_embedder: FakeEmbedder,
     fake_reranker: FakeReranker,
     rerank: bool,
-    status: int,
-    failed: list[dict[str, object]] | None,
+    body: dict[str, object],
 ) -> None:
     """Makes the rerank server unreachable, with reranking off and then on.
 
-    Expects 200 while reranking is off, and a 503 naming only the reranker once it is on. Catches readiness that
-    ignores the reranker (the app would report ready while every search fails with 503) and readiness that always
-    asks it (an app that never reranks would report not ready because of a server it does not use).
+    Expects 200 "ok" without a reranker check while reranking is off, and 200 "degraded" with the reranker
+    "unavailable" once it is on. Catches readiness that ignores the reranker (a run that compares results with and
+    without it would measure the order without it twice) and readiness that always asks it (an app that never
+    reranks would report degraded because of a server it does not use).
     """
     fake_reranker.up = False
     configured = settings.model_copy(update={"search": SearchSettings(rerank=rerank)})
@@ -130,5 +136,5 @@ def test_ready_checks_the_reranker_only_when_searches_use_it(
     with TestClient(build_app(configured, fake_db, embedder=fake_embedder, reranker=fake_reranker)) as client:
         response = client.get("/ready")
 
-    seen = (response.status_code, response.json().get("error", {}).get("details"))
-    assert seen == (status, failed), f"expected {(status, failed)} with reranking {rerank}, got {seen}"
+    seen = (response.status_code, response.json())
+    assert seen == (200, body), f"expected {(200, body)} with reranking {rerank}, got {seen}"

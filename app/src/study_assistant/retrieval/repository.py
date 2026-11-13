@@ -19,7 +19,7 @@ class Coverage:
 
 @dataclass(frozen=True)
 class Passage:
-    """A stored chunk with its cosine similarity to the question."""
+    """A stored chunk with its cosine similarity to the question; None when it was found by words only."""
 
     chunk_id: str
     section_id: str | None
@@ -27,7 +27,7 @@ class Passage:
     page_start: int
     page_end: int
     text: str
-    score: float
+    score: float | None
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,11 @@ class SearchStore(Protocol):
         """Return the passages of the course that reach the lowest score, ranked by meaning and by words together."""
         ...
 
+    async def lexical(self, course_id: str, text: str, k: int) -> list[Passage]:
+        """Return up to ``k`` passages of the course that hold any word of ``text``, best match first, without a
+        score: the search used when the question cannot be turned into a vector."""
+        ...
+
 
 # Every chunk of the course, joined with its vector if it has one, so one statement gives both counts.
 _COVERAGE = """
@@ -98,22 +103,28 @@ ORDER BY v.embedding <=> %(vector)s::vector
 LIMIT %(k)s
 """
 
+# The question's stems joined by OR, for the ranking by words of both statements below. plainto_tsquery joins them
+# by AND, and a chunk rarely holds every word of a question, so the ranking by words would be empty for most
+# questions. The course's language picks the configuration, the same one that built the chunks' text_search column.
+_WORDS = """
+words AS (
+    SELECT CAST(replace(plainto_tsquery(text_search_config(language), %(text)s)::text, ' & ', ' | ') AS tsquery)
+           AS query
+    FROM courses WHERE course_id = %(course)s
+)"""
+
 # The hybrid search in one statement, after the hybrid search example of pgvector-python:
-# - words: the question's stems joined by OR. plainto_tsquery joins them by AND, and a chunk rarely holds every
-#   word of a question, so the ranking by words would be empty for most questions. The course's language picks
-#   the configuration, the same one that built the chunks' text_search column.
+# - words: see above.
 # - passing: the course's passages that reach the lowest score; both rankings are made from them only, so every
 #   hit reaches the lowest score and a question no passage reaches stays empty.
 # - by_meaning / by_words: each ranking's first places; row_number with the chunk id as the second key gives every
 #   passage its own place, so equal scores cannot swap places between two runs.
 # - the fused score adds 1 / (constant + place) over the rankings a passage is in; equal fused scores are ordered
 #   by chunk id for the same reason.
-_HYBRID = """
-WITH words AS (
-    SELECT CAST(replace(plainto_tsquery(text_search_config(language), %(text)s)::text, ' & ', ' | ') AS tsquery)
-           AS query
-    FROM courses WHERE course_id = %(course)s
-),
+_HYBRID = (
+    "WITH"
+    + _WORDS
+    + """,
 passing AS (
     SELECT v.chunk_id, 1 - (v.embedding <=> %(vector)s::vector) AS score
     FROM {table} v
@@ -140,6 +151,23 @@ FROM fused f JOIN passing p USING (chunk_id) JOIN chunks c USING (chunk_id)
 ORDER BY f.fused DESC, f.chunk_id
 LIMIT %(k)s
 """
+)
+
+# The ranking by words alone, over every chunk of the course: without the question's vector there is no lowest
+# score to filter by. Equal ranks are ordered by chunk id, so two runs give the same order. The score column is
+# NULL: a rank by words is not a similarity and must not be read as one. No index is needed at the size of a
+# course: a sequential read of about 800 chunks takes about 13 ms.
+_LEXICAL = (
+    "WITH"
+    + _WORDS
+    + """
+SELECT c.chunk_id, c.section_id, c.source_file, c.page_start, c.page_end, c.text, NULL
+FROM chunks c CROSS JOIN words w
+WHERE c.course_id = %(course)s AND c.text_search @@ w.query
+ORDER BY ts_rank_cd(c.text_search, w.query) DESC, c.chunk_id
+LIMIT %(k)s
+"""
+)
 
 
 class PostgresSearchStore:
@@ -185,9 +213,17 @@ class PostgresSearchStore:
             return Fused(passages=[], by_meaning=0, by_words=0)
         return Fused(passages=[_passage(row[:7]) for row in rows], by_meaning=rows[0][7], by_words=rows[0][8])
 
+    async def lexical(self, course_id: str, text: str, k: int) -> list[Passage]:
+        """Return up to ``k`` passages of the course that hold any word of ``text``, best match first, without a
+        score. A question of stop words only matches nothing."""
+        async with self._database.connection() as conn:
+            cur = await conn.execute(_LEXICAL, {"course": course_id, "text": text, "k": k})
+            rows = await cur.fetchall()
+        return [_passage(row) for row in rows]
+
 
 def _passage(row: tuple[Any, ...]) -> Passage:
-    """Turn a row of chunk id, section id, file, first and last page, text and score into a passage."""
+    """Turn a row of chunk id, section id, file, first and last page, text and score (or NULL) into a passage."""
     chunk_id, section_id, source_file, page_start, page_end, text, score = row
     return Passage(
         chunk_id=chunk_id,
@@ -196,7 +232,7 @@ def _passage(row: tuple[Any, ...]) -> Passage:
         page_start=page_start,
         page_end=page_end,
         text=text,
-        score=float(score),
+        score=None if score is None else float(score),
     )
 
 

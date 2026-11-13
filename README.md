@@ -63,7 +63,7 @@ What is planned and what is done, in the order of work.
 **8. Hybrid search and reranker**
 - [x] App: lexical search and hybrid fusion, chosen by configuration and named in every result and trace
 - [x] App: cross-encoder reranker on top of either search, switched by configuration and visible in every result and trace
-- [ ] App: a lexical-only result marked as degraded when the embedding server is down
+- [x] App: a search result marked as degraded when a model server is down: ranked by words alone without the embedding server, in the search's own order without the rerank server
 - [ ] Evaluation harness: variants compared with paired statistics; retrieval relations (threshold, k); latency per stage; a degraded result never reported as normal
 
 **9. Mutant experiment**

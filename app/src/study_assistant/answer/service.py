@@ -26,6 +26,11 @@ GENERATE_SPAN = "generate_answer"
 
 # What the learner reads when no course passage is close enough to the question.
 NO_PASSAGES_ANSWER = "The course material has no passage close enough to this question, so it is not answered."
+# What the learner reads when the search could not compare the question with the course by meaning.
+SEARCH_DEGRADED_ANSWER = (
+    "The course search is running in a reduced mode right now, so this question is not answered. "
+    "Please try again later."
+)
 
 
 class EmptyAnswerError(LlmError):
@@ -102,13 +107,22 @@ class Answerer:
     async def _answer_from_passages(self, course: CourseManifest, question: str) -> Answer:
         """Search the course, and answer only from the passages found, or decline when none is close enough.
 
+        A search ranked by words only, because the embedding server could not be reached, is declined without
+        calling the model: those passages have no lowest score, so a question outside the course would still get
+        some, and the model could answer from them as if the course covered it. A search that only lost the
+        reranker keeps the strategy's passages above the lowest score and is answered as usual.
+
         The passages go to the model in their own message, after the instructions and before the question, so
         neither the course text nor the learner's question becomes part of the instructions. A reply that does not
         have the asked-for form raises ``MalformedAnswerError``; one without answer text ``EmptyAnswerError``. The
         model call and the reading of its reply are one span of the request's trace, after the search's own span.
         """
         result = await self._search.search(course.id, question, self._k, self._min_score)
-        if result.status != "ok":
+        if result.degraded_reason == "embedder_unavailable":
+            return Answer(
+                answer=SEARCH_DEGRADED_ANSWER, abstain_reason="search_degraded", citations=[], invalid_citations=0
+            )
+        if not result.hits:
             # Nothing close enough was found: the model is not called, so it cannot answer from what it knows.
             return Answer(answer=NO_PASSAGES_ANSWER, abstain_reason="no_passages", citations=[], invalid_citations=0)
         messages: list[BaseMessage] = [
