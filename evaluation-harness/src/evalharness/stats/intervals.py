@@ -25,7 +25,7 @@ type TargetVerdict = Literal["met", "not_confirmed", "below"]
 
 @dataclass(frozen=True)
 class Interval:
-    """The lower and upper end of a 95 % confidence interval."""
+    """The lower and upper end of a confidence interval: 95 % unless the caller asked for another level."""
 
     low: float
     high: float
@@ -39,12 +39,13 @@ def share_interval(successes: int, n: int) -> Interval:
     return Interval(low=float(interval.low), high=float(interval.high))
 
 
-def mean_interval(values: Sequence[float]) -> Interval | None:
+def mean_interval(values: Sequence[float], confidence: float = CONFIDENCE) -> Interval | None:
     """Return a bootstrap interval of the mean of ``values`` (one value per question), or None when there is none.
 
     Questions are resampled with replacement and the mean is recomputed each time. With fewer than two values, or
     when all values are equal (e.g. every question of a small slice found its answer first), resampling cannot vary
-    the mean, and an interval of zero width would claim a certainty the sample does not give.
+    the mean, and an interval of zero width would claim a certainty the sample does not give. ``confidence`` is the
+    level of the interval; only a comparison planned together with others asks for more than the usual 95 %.
     """
     if len(values) < 2 or min(values) == max(values):
         return None
@@ -53,7 +54,7 @@ def mean_interval(values: Sequence[float]) -> Interval | None:
         fmean,
         vectorized=False,
         n_resamples=_BOOTSTRAP_RESAMPLES,
-        confidence_level=CONFIDENCE,
+        confidence_level=confidence,
         rng=_BOOTSTRAP_SEED,
     )
     return Interval(low=float(result.confidence_interval.low), high=float(result.confidence_interval.high))

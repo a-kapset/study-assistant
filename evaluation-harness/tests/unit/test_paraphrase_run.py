@@ -2,6 +2,7 @@
 running stack."""
 
 import json
+from collections.abc import Callable
 
 import httpx2
 import pytest
@@ -10,10 +11,13 @@ from pydantic import HttpUrl
 from evalharness.datasets.paraphrase_set import ParaphrasePair, ParaphraseSet, RelationRules
 from evalharness.evaluation.paraphrase_record import ParaphraseRunRecord
 from evalharness.evaluation.paraphrase_run import run
+from evalharness.evaluation.retrieval import RunRefused
 from evalharness.settings import HarnessSettings
 from evalharness.transport import SutTransport
 
 COURSE = "evalharness_course"
+
+type Handler = Callable[[httpx2.Request], httpx2.Response]
 RULES = RelationRules(min_meaningful_change=0.05, min_overlap=0.6, stable_share_min=0.7)
 
 
@@ -49,10 +53,12 @@ def _app(request: httpx2.Request) -> httpx2.Response:
 
     A question finds five passages, the first from the gold section 1.1. A rewording finds nothing with the app's
     own lowest score; asked with no lowest score it finds three of the question's passages and two others. The
-    settings request gets a minimal settings object.
+    settings request gets a minimal settings object, the readiness request the status "ok".
     """
     if request.url.path == "/v1/config":
         return httpx2.Response(200, json={"app_version": "0.1.0", "settings": {"git_commit": "evalharness_app"}})
+    if request.url.path == "/ready":
+        return httpx2.Response(200, json={"status": "ok", "checks": {"db": "ok", "embedder": "ok"}})
     body = json.loads(request.content)
     if body["query"].startswith("question"):
         chunks = [("c1", "1.1"), ("c2", "2.1"), ("c3", "2.1"), ("c4", "2.1"), ("c5", "2.1")]
@@ -70,6 +76,9 @@ def _app(request: httpx2.Request) -> httpx2.Response:
         json={
             "status": "ok" if hits else "empty",
             "course_id": COURSE,
+            "strategy": "vector",
+            "reranked": False,
+            "degraded_reason": None,
             "embedding_space": "evalharness_space",
             "k": 5,
             "min_score": body.get("min_score", 0.83),
@@ -78,11 +87,11 @@ def _app(request: httpx2.Request) -> httpx2.Response:
     )
 
 
-async def _run(pairs: tuple[ParaphrasePair, ...]) -> ParaphraseRunRecord:
-    """Run the pairs against the fake app and the fake corpus."""
+async def _run(pairs: tuple[ParaphrasePair, ...], app: Handler = _app) -> ParaphraseRunRecord:
+    """Run the pairs against the fake app ``app`` and the fake corpus."""
     settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
     pair_set = ParaphraseSet(course_id=COURSE, rules=RULES, pairs=pairs, sha256="0" * 64)
-    async with SutTransport(settings, transport=httpx2.MockTransport(_app)) as sut:
+    async with SutTransport(settings, transport=httpx2.MockTransport(app)) as sut:
         return await run(
             pair_set,
             sut,
@@ -110,6 +119,34 @@ async def test_the_diagnostic_pass_searches_without_a_lowest_score_and_tells_its
     assert (primary.lost, diagnostic.kept, diagnostic.stable) == (1, 1, 1), (
         f"primary {primary}, diagnostic {diagnostic}"
     )
+
+
+@pytest.mark.covers("US-015", "AC-8")
+async def test_a_paraphrase_run_on_a_degraded_stack_is_refused_before_the_first_search() -> None:
+    """Answers GET /ready with 200 and the status "degraded" (the rerank server is down); the searches themselves
+    would succeed. Expects the refusal "stack_not_ready" and no search sent.
+
+    A pass means the relation is never judged on a stack that answers on a weaker path than the configured one. A
+    failure means the paraphrase run starts without asking the app: its rewordings are then measured without the
+    reranker and the result is filed under the rerank variant. The retrieval run has the same check; this test
+    shows that the paraphrase run, a separate command, makes it too.
+    """
+    searches: list[str] = []
+
+    def app(request: httpx2.Request) -> httpx2.Response:
+        """Report a degraded stack at /ready; remember every search and answer it as the usual fake app."""
+        if request.url.path == "/ready":
+            checks = {"db": "ok", "embedder": "ok", "reranker": "unavailable"}
+            return httpx2.Response(200, json={"status": "degraded", "checks": checks})
+        if request.url.path == "/v1/search":
+            searches.append(request.url.path)
+        return _app(request)
+
+    with pytest.raises(RunRefused) as refused:
+        await _run((_pair("QA-1", term_removed=True),), app)
+
+    assert refused.value.code == "stack_not_ready", f"a degraded stack gave {refused.value.code}"
+    assert searches == [], f"the run sent {len(searches)} searches before it was refused"
 
 
 @pytest.mark.covers("US-015", "AC-5")

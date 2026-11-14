@@ -91,6 +91,9 @@ def _found(request: httpx2.Request, k: int = 5) -> httpx2.Response:
         json={
             "status": "ok",
             "course_id": COURSE,
+            "strategy": "vector",
+            "reranked": False,
+            "degraded_reason": None,
             "embedding_space": "evalharness_space",
             "k": body.get("k", k),
             "min_score": body.get("min_score", 0.83),
@@ -107,13 +110,20 @@ def _settings(request: httpx2.Request) -> httpx2.Response:
     return httpx2.Response(200, json={"app_version": "0.1.0", "settings": APP_SETTINGS})
 
 
-def _serving_config(handler: Handler, config: Handler) -> Handler:
-    """Answer GET /v1/config with ``config``, every other request with ``handler``."""
+def _ready(request: httpx2.Request) -> httpx2.Response:
+    """Answer GET /ready as an app whose database and embedding server answer."""
+    return httpx2.Response(200, json={"status": "ok", "checks": {"db": "ok", "embedder": "ok"}})
+
+
+def _serving_config(handler: Handler, config: Handler, ready: Handler) -> Handler:
+    """Answer GET /v1/config with ``config``, GET /ready with ``ready``, every other request with ``handler``."""
 
     def serve(request: httpx2.Request) -> httpx2.Response:
-        """Route the settings request apart from the searches."""
+        """Route the settings and the readiness request apart from the searches."""
         if request.url.path == "/v1/config":
             return config(request)
+        if request.url.path == "/ready":
+            return ready(request)
         return handler(request)
 
     return serve
@@ -125,12 +135,14 @@ async def _run(
     sections: set[str] | None = None,
     texts: tuple[str, ...] = ("Testing finds defects.",),
     config: Handler = _settings,
+    ready: Handler = _ready,
 ) -> RunRecord:
-    """Run every case of ``gold`` against a fake app answering searches with ``handler`` and its settings request
-    with ``config``; the corpus holds the gold sections."""
+    """Run every case of ``gold`` against a fake app answering searches with ``handler``, its settings request
+    with ``config`` and its readiness request with ``ready``; the corpus holds the gold sections."""
     corpus = _Corpus(sections if sections is not None else {case.gold_section for case in gold.cases}, texts)
     settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
-    async with SutTransport(settings, transport=httpx2.MockTransport(_serving_config(handler, config))) as sut:
+    transport = httpx2.MockTransport(_serving_config(handler, config, ready))
+    async with SutTransport(settings, transport=transport) as sut:
         return await run(
             gold,
             gold.cases,
@@ -259,6 +271,81 @@ async def test_a_run_whose_app_settings_cannot_be_read_is_refused_before_the_fir
 
     assert refused.value.code == "app_config_unreadable", f"an unreadable /v1/config gave {refused.value.code}"
     assert searches == [], f"the run sent {len(searches)} searches before it was refused"
+
+
+def _ready_degraded(request: httpx2.Request) -> httpx2.Response:
+    """Answer GET /ready as the app does while its rerank server is down: still 200, with the status "degraded"."""
+    checks = {"db": "ok", "embedder": "ok", "reranker": "unavailable"}
+    return httpx2.Response(200, json={"status": "degraded", "checks": checks})
+
+
+@pytest.mark.covers("US-007", "AC-12")
+async def test_a_run_on_a_degraded_stack_is_refused_before_the_first_search() -> None:
+    """Answers GET /ready with 200 and the status "degraded" (the rerank server is down); the searches themselves
+    would succeed. Expects the refusal "stack_not_ready" and no search sent.
+
+    A pass means a run never starts while the app would answer on a weaker path than the configured one. A failure
+    means the run does not ask the app, or reads only the status code (the app answers 200 while degraded): it then
+    measures the order without the reranker under the name of the rerank variant, after every search has waited for
+    the missing server. Nothing else stops the run early: every single search still answers 200. A stack whose
+    database is down (503) is not tried here: there every search fails, which the run already reports.
+    """
+    searches: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Remember every search and answer it with one found passage."""
+        searches.append(request.url.path)
+        return _found(request)
+
+    with pytest.raises(RunRefused) as refused:
+        await _run(_gold(_case("A-1", "1.1")), handler, ready=_ready_degraded)
+
+    assert refused.value.code == "stack_not_ready", f"a degraded stack gave {refused.value.code}"
+    assert searches == [], f"the run sent {len(searches)} searches before it was refused"
+
+
+def _reranked_by_hybrid(request: httpx2.Request) -> httpx2.Response:
+    """Answer a search as an app configured for hybrid search with the reranker on."""
+    content = json.loads(_found(request).content)
+    return httpx2.Response(200, json=content | {"strategy": "hybrid", "reranked": True})
+
+
+@pytest.mark.covers("US-007", "AC-13")
+async def test_the_record_names_the_search_path_the_app_reported() -> None:
+    """Runs one question against a fake app whose search results say "hybrid" and "reranked"; expects exactly these
+    two values in the run record.
+
+    A pass means a record says which search served its questions, read from the results themselves. A failure means
+    the record keeps nothing or another value, so two runs of one app commit with different search settings look
+    like a repeat, and a comparison of two variants would compare a variant with itself without any error.
+    """
+    record = await _run(_gold(_case("A-1", "1.1")), _reranked_by_hybrid)
+
+    assert (record.strategy, record.reranked) == ("hybrid", True), (
+        f"the app reported hybrid search with rerank, the record holds {(record.strategy, record.reranked)}"
+    )
+
+
+def _without_reranker(request: httpx2.Request) -> httpx2.Response:
+    """Answer a search as the app does when its rerank server went down: 200, the passage found, status "degraded"."""
+    content = json.loads(_found(request).content)
+    weaker = {"status": "degraded", "degraded_reason": "reranker_unavailable", "reranked": False}
+    return httpx2.Response(200, json=content | weaker)
+
+
+@pytest.mark.covers("US-007", "AC-13")
+async def test_a_search_answered_on_a_weaker_path_keeps_the_apps_reason() -> None:
+    """Runs one question against a fake app that answers 200 with the answer section found, but on the path without
+    the reranker (status "degraded", reason "reranker_unavailable"). Expects that reason in the question's record.
+
+    A pass means a search served by a fallback stays told apart from the others after the run, although it has hits
+    and a normal score. A failure means the reason is dropped: the question is then counted as a result of the
+    configured search, and a comparison has nothing to refuse the run by.
+    """
+    record = await _run(_gold(_case("A-1", "1.1")), _without_reranker)
+
+    reason = record.cases[0].passes["primary"].degraded_reason
+    assert reason == "reranker_unavailable", f"a search answered without the reranker was recorded with {reason!r}"
 
 
 @pytest.mark.covers("US-007", "AC-9")

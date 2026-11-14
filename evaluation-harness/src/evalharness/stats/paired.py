@@ -13,7 +13,7 @@ from typing import Literal
 
 from scipy.stats import binomtest
 
-from evalharness.stats.intervals import Interval, mean_interval
+from evalharness.stats.intervals import CONFIDENCE, Interval, mean_interval
 
 # "better" / "worse": the whole interval of the change lies above / below zero. "no_meaningful_change": the interval
 # includes zero and stays closer to it than the smallest change worth acting on. "underpowered": the interval
@@ -24,7 +24,7 @@ type ChangeVerdict = Literal["better", "worse", "no_meaningful_change", "underpo
 
 @dataclass(frozen=True)
 class Change:
-    """The change of a mean over the same questions, and its 95 % interval; None when every question changed alike."""
+    """The change of a mean over the same questions, and its interval; None when every question changed alike."""
 
     change: float
     interval: Interval | None
@@ -42,15 +42,28 @@ class FlipCount:
     p_value: float | None
 
 
-def paired_change(before: Sequence[float], after: Sequence[float]) -> Change:
+def planned_confidence(planned: int) -> float:
+    """Return the level each interval needs when ``planned`` comparisons are judged together (Bonferroni).
+
+    Every comparison has its own chance of a false "better" or "worse". With several comparisons planned for one
+    decision, the allowed 5 % is shared equally among them, so all of them together still go wrong at most 5 % of
+    the time: one comparison keeps 95 %, four need 98.75 % each.
+    """
+    if planned < 1:
+        raise ValueError(f"{planned} planned comparisons: at least the one being made is planned")
+    return 1 - (1 - CONFIDENCE) / planned
+
+
+def paired_change(before: Sequence[float], after: Sequence[float], confidence: float = CONFIDENCE) -> Change:
     """Return the mean of the per-question differences ``after - before`` with its bootstrap interval.
 
-    The two sequences hold the scores of the same questions in the same order.
+    The two sequences hold the scores of the same questions in the same order. ``confidence`` is the level of the
+    interval: 95 % for a single comparison, the level of ``planned_confidence`` for one of several planned ones.
     """
     if len(before) != len(after):
         raise ValueError(f"{len(before)} scores before and {len(after)} after: not the same questions")
     differences = [new - old for old, new in zip(before, after, strict=True)]
-    return Change(change=fmean(differences), interval=mean_interval(differences))
+    return Change(change=fmean(differences), interval=mean_interval(differences, confidence))
 
 
 def flip_count(before: Sequence[bool], after: Sequence[bool]) -> FlipCount:

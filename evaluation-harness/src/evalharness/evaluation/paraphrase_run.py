@@ -11,7 +11,8 @@ overlap.
 
 Run it from evaluation-harness/ on the stack with the course ingested; no model is called. The run is written to
 runs/relations/ as a new JSON file and its summary is printed. Exit code 0 when the run completed, whatever its
-verdicts; 2 when it was refused.
+verdicts; 2 when it was refused: a gold section is missing from the stored course, or the app reports that a server
+its search uses is down.
 """
 
 import argparse
@@ -37,9 +38,12 @@ from evalharness.evaluation.retrieval import (
     RunRefused,
     Searched,
     SearchResult,
+    check_ready,
     pass_result,
     read_app_settings,
     search,
+    search_path,
+    weaker_path_counts,
 )
 from evalharness.relations.paraphrase import (
     PairOutcome,
@@ -87,6 +91,7 @@ async def run(
     check_gold_sections(pairs, corpus.section_ids(course_id))
     snapshot = corpus.snapshot(course_id)
     app_settings = await read_app_settings(sut)
+    await check_ready(sut)
     searched: dict[PassName, list[tuple[Searched, Searched]]] = {}
     for name, extra in _PASSES.items():
         searched[name] = [
@@ -122,6 +127,8 @@ async def run(
         embedding_space=reported.embedding_space if reported is not None else None,
         k=reported.k if reported is not None else None,
         min_score=reported.min_score if reported is not None else None,
+        strategy=reported.strategy if reported is not None else None,
+        reranked=reported.reranked if reported is not None else None,
         summaries={name: summaries(pairs.pairs, records, name, pairs.rules.min_overlap) for name in _PASSES},
         pairs=records,
     )
@@ -206,9 +213,14 @@ def print_summary(record: ParaphraseRunRecord, pairs: ParaphraseSet, path: Path)
         f"harness {record.harness_commit[:8]}{dirty}"
     )
     print(f"record: {path}")
+    print(f"search: {search_path(record.strategy, record.reranked)}")
     labels: dict[PassName, str] = {"primary": f"min_score={record.min_score}", "diagnostic": "no lowest score"}
     for name, label in labels.items():
         print(f"\n{name} pass (k={record.k}, {label})")
+        both = [side for pair in record.pairs for side in (pair.passes[name].question, pair.passes[name].rewording)]
+        weaker = weaker_path_counts(both)
+        if weaker:
+            print(f"  answered on a weaker path, not the configured search: {weaker}; repeat the run")
         print(
             f"  {'slice':<26}{'pairs':>6}{'recall q':>10}{'recall rw':>11}{'kept':>6}{'lost':>6}{'gained':>8}"
             f"{'neither':>9}{'stable':>8}{'failed':>8}"

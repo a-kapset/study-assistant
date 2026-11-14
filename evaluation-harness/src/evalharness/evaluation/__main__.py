@@ -24,7 +24,14 @@ import structlog
 from evalharness.corpus_db import CorpusReader
 from evalharness.datasets.retrieval_gold import GoldCase, GoldSet, GoldSetError, build_gold_set, load_declaration
 from evalharness.evaluation.record import PassName, RunRecord, recorded_held_out_uses, write_record
-from evalharness.evaluation.retrieval import RunRefused, bank_folder, run, select_cases
+from evalharness.evaluation.retrieval import (
+    RunRefused,
+    bank_folder,
+    run,
+    search_path,
+    select_cases,
+    weaker_path_counts,
+)
 from evalharness.oracles.retrieval import Summary
 from evalharness.settings import HarnessSettings, StackSettings, load_stack_settings
 from evalharness.stats.intervals import Interval, TargetVerdict, mean_interval, share_interval, share_verdict
@@ -110,6 +117,7 @@ def _print_summary(record: RunRecord, gold: GoldSet, path: Path) -> None:
     if record.held_out_use is not None:
         print(f"held-out use #{record.held_out_use}")
     print(f"record: {path}")
+    print(f"search: {search_path(record.strategy, record.reranked)}")
     labels: dict[PassName, str] = {
         "primary": f"min_score={record.min_score}",
         "diagnostic": "no lowest score",
@@ -132,6 +140,9 @@ def _print_summary(record: RunRecord, gold: GoldSet, path: Path) -> None:
         if reasons:
             listed = ", ".join(f"{reason} {n}" for reason, n in sorted(reasons.items()))
             print(f"  failed searches, left out of the shares: {listed}")
+        weaker = weaker_path_counts(case.passes[name] for case in record.cases)
+        if weaker:
+            print(f"  answered on a weaker path, not the configured search: {weaker}; repeat the run")
     main_result = record.summaries["primary"]["all"]
     if main_result.failed:
         print(f"\ninvalid: {main_result.failed} search(es) of the primary pass failed; no target verdict")

@@ -4,7 +4,14 @@ and the verdict. The bootstrap and binomial formulas themselves are scipy's and 
 import pytest
 
 from evalharness.stats.intervals import Interval
-from evalharness.stats.paired import Change, ChangeVerdict, change_verdict, flip_count, paired_change
+from evalharness.stats.paired import (
+    Change,
+    ChangeVerdict,
+    change_verdict,
+    flip_count,
+    paired_change,
+    planned_confidence,
+)
 
 # The S2b comparison with the second book: 146 questions, 4 found only after the change, 7 only before.
 _BEFORE = [False] * 4 + [True] * 7 + [True] * 126 + [False] * 9
@@ -98,4 +105,26 @@ def test_a_change_and_its_interval_come_from_the_per_question_differences() -> N
     assert change.interval is not None, "6 gained questions should give an interval"
     assert 0 < change.interval.low < change.change < change.interval.high < 3 * change.change, (
         f"interval {change.interval} is not around the per-question change {change.change:+.4f}"
+    )
+
+
+@pytest.mark.covers("US-013", "AC-5")
+def test_one_of_several_planned_comparisons_is_judged_by_a_wider_interval() -> None:
+    """Builds 146 questions where 7 are found only after the change and 1 only before, and judges the change twice:
+    as the only comparison, and as one of four planned together. Expects "better" alone and "underpowered" as one
+    of four.
+
+    A pass means the number of planned comparisons really widens the interval the verdict reads (95 % alone,
+    98.75 % for four). A failure means the level is not passed on to the interval, or is computed wrongly, so four
+    comparisons are each judged as if they were the only one: with four chances the odds that one of them shows
+    "better" by luck are about four times as high, and a search variant could be made the default on it.
+    """
+    before = [0.0] * 7 + [1.0] * 1 + [1.0] * 138
+    after = [1.0] * 7 + [0.0] * 1 + [1.0] * 138
+
+    alone = change_verdict(paired_change(before, after, planned_confidence(1)), 0.05)
+    one_of_four = change_verdict(paired_change(before, after, planned_confidence(4)), 0.05)
+
+    assert (alone, one_of_four) == ("better", "underpowered"), (
+        f"7 gained and 1 lost of 146 gave {alone!r} alone and {one_of_four!r} as one of four planned comparisons"
     )

@@ -525,11 +525,18 @@ Code: [`src/evalharness/stats/paired.py`](src/evalharness/stats/paired.py),
 [`src/evalharness/evaluation/compare.py`](src/evalharness/evaluation/compare.py).
 
 Two retrieval runs are compared only when they measured the same questions (same gold-set hash, course and exam
-sets) and their recorded corpus snapshot, embedding space, k and lowest score differ in exactly the one factor
-declared for the comparison, or in nothing when none is declared, and when neither run has a failed search in
-its primary pass. Both runs answered the same questions, so the
+sets) and their recorded corpus snapshot, embedding space, k, lowest score, search strategy, reranker flag and app
+commit differ in exactly the one factor declared for the comparison, or in nothing when none is declared. Neither
+run may have, in its primary pass, a failed search or a search the app answered on a weaker path because a model
+server was down (the record keeps the app's reason for every search): such a search did not measure the configured
+search. Both runs answered the same questions, so the
 comparison is made question by question, on the primary pass: a hard question is hard in both runs, and the
 per-question differences carry much less noise than two separately measured numbers.
+
+Two paraphrase runs of the same pair set are compared by the same rules and formulas, on their rewordings: the
+score of a pair is 1 when its rewording is a `hit` in the primary pass. The rewordings ask without the course's
+own term, which is the kind of question a change of the search is meant to help. The recall of the questions
+themselves is printed next to it, as MRR is for retrieval runs: with its change and interval, without a verdict.
 
 **Change of a metric**, $\Delta$ — the mean of the per-question differences, after minus before:
 
@@ -561,10 +568,32 @@ where
 - $q_j^{(b)}$ — the $j$-th question of resample $b$, drawn with replacement from the $n$ questions;
 - $B$ — 9 999 resamples, with a fixed seed, so the same two records always give the same interval;
 - $\Delta^{(b)}$ — the change recomputed on resample $b$;
-- $`\mathrm{BCa}_{95\%}`$ — the middle 95 % of the $B$ values, as for the bootstrap interval of a mean above;
+- $`\mathrm{BCa}_{95\%}`$ — the middle 95 % of the $B$ values, as for the bootstrap interval of a mean above; for
+  a comparison planned together with others, the level $c_m$ below takes the place of 95 %;
 - $\ell_\Delta$, $h_\Delta$ — the lower and upper end of that range.
 
 There is no interval when every $d_q$ is the same (in practice: no question changed).
+
+**Level of a planned comparison**, $c_m$ — the level of the interval the verdict reads when several comparisons
+were planned together for one decision (Bonferroni correction):
+
+```math
+c_m = 1 - \frac{\alpha}{m}
+```
+
+where
+
+- $\alpha$ — 0.05, the chance of a wrong "better" or "worse" accepted for one comparison judged by a 95 % interval;
+- $m$ — the comparisons planned together, given to the command as `--planned` (1 when left out);
+- $c_m$ — the level of $\mathrm{CI}_B(\Delta)$ for each of them: 0.95 for one comparison, 0.9875 for four.
+
+Each comparison has its own chance of a wrong verdict, so with $m$ of them the chance that at least one goes
+wrong grows to about $m \alpha$; sharing $\alpha$ among them keeps it at $\alpha$ for the whole decision. The
+price is a wider interval. Example: 7 questions gained and 1 lost of 146 is "better" as the only comparison
+($+0.007$ to $+0.082$) and "underpowered" as one of four ($0.000$ to $+0.103$). Only the number with a verdict is
+corrected; MRR and the questions' recall of a paraphrase comparison keep their 95 % interval and get no verdict.
+The number of planned comparisons is written down before the first of them is run, with the rule the verdicts
+feed.
 
 **McNemar's exact test**, $p$ — printed for recall next to the counts of flipped questions:
 
@@ -769,6 +798,14 @@ different questions are to each other. On the first course $\lambda = 0.929$.
 it) and for the pairs whose question did not.
 
 ## Changes
+
+- **2026-11-14 — search path in the records; comparisons by strategy and reranker; planned comparisons.** New: a
+  run records the search strategy and the reranker flag its searches reported, and for every search the app's
+  reason when a weaker path answered it; `strategy` and `rerank` are factors of a comparison; two paraphrase runs
+  can be compared, on their rewordings; the level $c_m$ of a planned comparison. A run with a search answered on
+  a weaker path is not compared. No formula of an earlier metric changed: without `--planned` every interval is
+  the 95 % one as before. Records written before this date have no search path, so they cannot be compared with
+  later ones.
 
 - **2026-11-09 — failure labels; failed searches leave the retrieval shares.** New: the failure label of every
   failed question of an answer run, the answer verdict `unusable_reply`. Recall@k, MRR, $\bar{P}$ and $\bar{I}$ are now averaged

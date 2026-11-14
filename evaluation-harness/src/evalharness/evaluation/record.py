@@ -41,6 +41,10 @@ class PassResult(_Strict):
     # Why the search gave no result: the code of the app's error response, "http_<status>" for an error response in
     # another format, or the transport error; None when the search ran.
     error: str | None
+    # Why the app answered this search on a weaker path than the configured one, as the app names it (a model
+    # server was down); None when the configured path answered, when the search failed, and in records written
+    # before runs read it.
+    degraded_reason: str | None = None
     # In the order the app returned them; empty when the search found nothing or failed.
     hits: tuple[HitRecord, ...]
     score: CaseScore
@@ -84,6 +88,11 @@ class RunRecord(_Strict):
     embedding_space: str | None
     k: int | None
     min_score: float | None
+    # The search path the app reported with them: its strategy, and whether a reranker ordered the hits. Taken from
+    # the responses, so they say what served the searches, not what was set. None when no search of the primary
+    # pass succeeded, and in records written before runs read them.
+    strategy: str | None = None
+    reranked: bool | None = None
     # Per pass: "all", then one entry per exam set, chapter and knowledge level, e.g. "set A", "chapter 1", "level K2".
     summaries: dict[PassName, dict[str, Summary]]
     cases: tuple[CaseRecord, ...]

@@ -112,6 +112,31 @@ pair.
   to −0.037), 11 lost (also QA-13), 2 gained; R2 with 3 of 5 shared 22 of 82 = 0.268 (0.184 to 0.373), with 2 of 5
   32 of 82 = 0.390 (0.292 to 0.498). Both violated, as now.
 
+### Results by search variant, 2026-11-14
+
+The same 76 pairs under three search settings of one app commit, k = 5, lowest score 0.83: search by meaning
+(`vector`, run `7f0b156c`, the same numbers as on 2026-11-07), by meaning and by words (`hybrid`, run `7da89ac5`),
+and by meaning with a cross-encoder reranker (run `9642f7d2`). What was compared, and what would change the app's
+default, was written down before the first of these runs: the recall of the rewordings, as one of four planned
+comparisons, so each verdict reads a 98.75 % interval.
+
+| Search | Recall of questions | Recall of rewordings | Kept | Lost | Gained | R1, change of recall (95 % interval) | R2, stable pairs (95 % interval) |
+|---|---|---|---|---|---|---|---|
+| `vector` | 0.974 | 0.868 | 64 | 10 | 2 | −0.105 (−0.197 to −0.026), violated | 30 of 76, 0.395 (0.292 to 0.507), violated |
+| `hybrid` | 1.000 | 0.868 | 66 | 10 | 0 | −0.132 (−0.224 to −0.066), violated | 33 of 76, 0.434 (0.329 to 0.546), violated |
+| `vector` with reranker | 1.000 | 0.855 | 65 | 11 | 0 | −0.145 (−0.237 to −0.079), violated | 40 of 76, 0.526 (0.416 to 0.635), violated |
+
+- **`hybrid` against `vector`, rewordings:** change 0.000 (98.75 % interval −0.079 to +0.079), 3 gained (QA-28, 64,
+  66), 3 lost (QA-15, 45, 80): underpowered.
+- **Reranker against none, rewordings:** change −0.013 (−0.092 to +0.053), 2 gained (QA-66, 77), 3 lost (QA-30,
+  45, 80): underpowered.
+- **Reading.** Neither variant repairs the relation: each finds a few of the lost rewordings and loses as many
+  others, so about one reworded question in seven still misses its section. Both find every question asked in
+  the course's own words (76 of 76 against 74), which makes R1 look worse for them: the gap between the two
+  wordings widens while the rewordings stay where they were. More pairs keep their passages with the reranker
+  (40 against 30), but that number was not one of the planned comparisons; it is a lead for a later planned
+  check, not a result. The default stays `vector` without the reranker.
+
 **Planted defects (mutants)**, on the first 82 pairs with the first rule (3 of 5). Each one run once on the stack,
 then the stack was restored.
 

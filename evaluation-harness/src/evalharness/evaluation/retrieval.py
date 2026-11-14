@@ -3,13 +3,14 @@
 Every question is searched twice. The primary pass sends it as a user does, so the app's own number of hits and
 lowest score apply. The diagnostic pass asks for the same number of hits with no lowest score, so the misses the
 lowest score causes can be told apart from the misses of the search itself. A run that could not measure what it
-claims is refused before the first search.
+claims is refused before the first search, also when the app reports that a server its search uses is down. Every
+search keeps the path that served it, so a result from a weaker path is never read as the configured one.
 """
 
 import re
 import uuid
-from collections import defaultdict
-from collections.abc import Sequence
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, NamedTuple, Protocol
@@ -30,6 +31,7 @@ type RunRefusedCode = Literal[
     "gold_section_missing",
     "gold_question_in_corpus",
     "app_config_unreadable",
+    "stack_not_ready",
 ]
 
 
@@ -76,7 +78,21 @@ class SearchResult(BaseModel):
     embedding_space: str
     k: int
     min_score: float
+    # The search path that served the result: its strategy, and whether a reranker ordered the hits.
+    strategy: str
+    reranked: bool
+    # Set when a model server was down and a weaker path than the configured one answered.
+    degraded_reason: str | None = None
     hits: list[_Hit]
+
+
+class _Ready(BaseModel):
+    """The part of the app's GET /ready response a run reads: the overall state and the state of each check."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: str
+    checks: dict[str, str] = {}
 
 
 class _ErrorBody(BaseModel):
@@ -193,6 +209,7 @@ async def run(
     check_questions_not_in_corpus(gold, corpus.chunk_texts(course_id))
     snapshot = corpus.snapshot(course_id)
     app_settings = await read_app_settings(sut)
+    await check_ready(sut)
 
     primary = [await search(sut, course_id, case.query, {}) for case in cases]
     reported = next((one.result for one in primary if one.result is not None), None)
@@ -220,6 +237,8 @@ async def run(
         embedding_space=reported.embedding_space if reported is not None else None,
         k=reported.k if reported is not None else None,
         min_score=reported.min_score if reported is not None else None,
+        strategy=reported.strategy if reported is not None else None,
+        reranked=reported.reranked if reported is not None else None,
         summaries={
             "primary": summaries(cases, [result.score for result in primary_results]),
             "diagnostic": summaries(cases, [result.score for result in diagnostic_results]),
@@ -272,6 +291,44 @@ async def read_app_settings(sut: SutTransport) -> dict[str, JsonValue]:
         raise RunRefused("app_config_unreadable", f"GET /v1/config has no settings object: {error}") from error
 
 
+async def check_ready(sut: SutTransport) -> None:
+    """Refuse the run unless the app reports that every server its search uses answers.
+
+    The app stays ready when a model server is down and then answers searches on a weaker path: the strategy's
+    order without the reranker, or by words only. A run started on such a stack would measure that path under the
+    name of the configured one, and only after every search had waited for the missing server.
+    """
+    observation = await sut.request("GET", "/ready")
+    if observation.transport_error is not None or observation.status_code != 200:
+        reason = observation.transport_error or f"status {observation.status_code}: {observation.body_text[:200]}"
+        raise RunRefused("stack_not_ready", f"GET /ready failed: {reason}")
+    try:
+        ready = _Ready.model_validate(observation.body_json)
+    except ValidationError as error:
+        raise RunRefused("stack_not_ready", f"GET /ready has no status: {error}") from error
+    if ready.status != "ok":
+        down = sorted(check for check, state in ready.checks.items() if state != "ok")
+        raise RunRefused(
+            "stack_not_ready", f"the app reports {ready.status!r}, not answering: {', '.join(down) or 'not named'}"
+        )
+
+
+def search_path(strategy: str | None, reranked: bool | None) -> str:
+    """Write the search path a run recorded, for the first lines of a summary."""
+    if strategy is None or reranked is None:
+        return "search path not recorded"
+    return f"strategy {strategy}, rerank {'on' if reranked else 'off'}"
+
+
+def weaker_path_counts(results: Iterable[PassResult]) -> str | None:
+    """Count the searches answered on a weaker path by the app's reason, e.g. "reranker_unavailable 3"; None when
+    the configured path answered every one."""
+    reasons = Counter(result.degraded_reason for result in results if result.degraded_reason is not None)
+    if not reasons:
+        return None
+    return ", ".join(f"{reason} {n}" for reason, n in sorted(reasons.items()))
+
+
 async def search(sut: SutTransport, course_id: str, query: str, extra: dict[str, JsonValue]) -> Searched:
     """Send one search of the course; the question goes as it is, with ``extra`` fields added to the request."""
     observation = await sut.request("POST", "/v1/search", json={"course_id": course_id, "query": query, **extra})
@@ -305,6 +362,7 @@ def pass_result(gold_section: str, searched: Searched, k: int) -> PassResult:
     return PassResult(
         request_id=searched.request_id,
         error=searched.error,
+        degraded_reason=result.degraded_reason if result is not None else None,
         hits=hits,
         score=score_case(gold_section, sections, k),
     )

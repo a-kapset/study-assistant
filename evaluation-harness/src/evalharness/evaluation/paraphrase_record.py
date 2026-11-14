@@ -59,6 +59,10 @@ class ParaphraseRunRecord(_Strict):
     embedding_space: str | None
     k: int | None
     min_score: float | None
+    # The search path the app reported with them: its strategy, and whether a reranker ordered the hits. None when
+    # no search of the primary pass succeeded, and in records written before runs read them.
+    strategy: str | None = None
+    reranked: bool | None = None
     # Per pass: "all", "key term removed" and "no key term in question".
     summaries: dict[PassName, dict[str, RelationSummary]]
     pairs: tuple[PairRecord, ...]

@@ -136,8 +136,12 @@ poetry run python -m evalharness.evaluation datasets/lumen_moths/retrieval_gold_
 Without `--sets` the run takes the sets the declaration's main result is measured on. Held-out sets run only
 with `--include-held-out`, and every such run is counted. A run is refused before the first search, with exit
 code 2, when the bank differs from the declared one, the stack serves another course, a set is unknown, an
-answer section is not a section of the stored course, or the start of a gold question appears word for word in the
-stored course text (a source that reprints the questions would let the search find the question itself). A
+answer section is not a section of the stored course, the start of a gold question appears word for word in the
+stored course text (a source that reprints the questions would let the search find the question itself), or the
+app's `/ready` does not say `ok`: with a model server down the app still answers, on a weaker search than the
+configured one, and the run would measure that. The summary names the search that served the run (strategy,
+reranker on or off), read from the search results, and counts apart any search the app answered on a weaker path
+while the run was going. A
 completed run exits with 0, whatever its numbers. The target verdict reads the interval: "met" when even its lower
 end reaches the target, "not confirmed" when only the measured value does, "below" otherwise; with
 `--require-target` the run exits with 1 unless the verdict is "met". CI runs the `lumen_moths` gold set that way: its number is a regression signal for
@@ -151,15 +155,45 @@ poetry run python -m evalharness.evaluation.compare runs/retrieval/<before>.json
 poetry run python -m evalharness.evaluation.compare runs/retrieval/<before>.json runs/retrieval/<after>.json
 ```
 
-`--factor` (`corpus`, `embedding_space`, `k`, `min_score`, `app`) names the one recorded value changed on purpose;
-`app` is the app's code, read from the commit in the app settings every run records from `/v1/config`. Leave it out
+`--factor` (`corpus`, `embedding_space`, `k`, `min_score`, `strategy`, `rerank`, `app`) names the one recorded
+value changed on purpose; `app` is the app's code, read from the commit in the app settings every run records from
+`/v1/config`. Leave it out
 for a repeated run. The comparison is refused, with exit code 2, when the runs measured other questions, when any
-other recorded value differs as well, when the gold declaration has no `[comparison] min_meaningful_change`, or when
+other recorded value differs as well, when a run has a failed search or a search the app answered on a weaker path,
+when the gold declaration has no `[comparison] min_meaningful_change`, or when
 the app's code of a run cannot be told: a record written before runs kept the app settings, an app built without
 `GIT_COMMIT` (`unknown`), or two runs of the same commit with uncommitted changes (`-dirty`). Build the stack with the
 `GIT_COMMIT` command of [app/README.md](../app/README.md#with-docker-the-app-and-its-database). It prints the change of recall with its interval, the
 questions gained and lost, McNemar's exact p and a verdict (better, worse, no meaningful change, underpowered,
 unchanged), and the change of MRR with its interval: [METRICS.md](METRICS.md#comparison-of-two-runs).
+
+### Comparing search variants
+
+The app's search strategy and its reranker are set by configuration, so a variant is the same image started with
+another value. A variable set in the shell wins over the root `.env`, and `up -d` creates the app's container
+again with it (`docker compose restart` would keep the old environment). From the repository root, with the stack
+running:
+
+```powershell
+$env:GIT_COMMIT = "$(git log -1 --format=%H -- app)$(if (git status --porcelain -- app) { '-dirty' })"
+$env:APP_SEARCH__STRATEGY = "hybrid"      # or: $env:APP_SEARCH__RERANK = "true"
+docker compose -f compose.yaml -f evaluation-harness/compose.proxy.yaml up -d --wait app
+Remove-Item Env:APP_SEARCH__STRATEGY      # after the runs, so the next start uses the value of .env again
+```
+
+Then make the runs of that variant (the retrieval run and, for the first course, the paraphrase run) and compare
+each with the run of the variant it is measured against:
+
+```powershell
+poetry run python -m evalharness.evaluation.compare runs/retrieval/<vector>.json runs/retrieval/<hybrid>.json --factor strategy --planned 4
+poetry run python -m evalharness.evaluation.compare runs/relations/<vector>.json runs/relations/<hybrid>.json --factor strategy --planned 4
+```
+
+Two paraphrase records are compared on their rewordings (the questions' own recall is printed without a verdict).
+`--planned` is the number of comparisons planned together for one decision, written down before the first run; the
+verdict then reads a wider interval (98.75 % for four), so that several chances to see "better" by luck do not
+add up. What decides, and which numbers are only looked at, is fixed before the first variant run as well; a
+finding in the numbers that were only looked at is confirmed by a new planned comparison, not acted on.
 
 ## Answer evaluation
 
@@ -231,8 +265,9 @@ The run needs the stack serving the course and calls no model. It searches both 
 own settings and again with no lowest score, writes a record to `runs/relations/`, and prints the counts per pass
 and slice, the answer-kept relation (change of recall with its interval, McNemar's p, verdict) for both passes,
 the top-k stable relation on the pass without a lowest score, and the pairs that lost their answer. A run is
-refused, with exit code 2, when a gold section is not a section of the stored course; a completed run exits with 0
-whatever its verdicts.
+refused, with exit code 2, when a gold section is not a section of the stored course or the app's `/ready` does
+not say `ok`; a completed run exits with 0 whatever its verdicts. Two paraphrase runs under different search
+settings are compared like two retrieval runs: see "Comparing search variants".
 
 ## Running the tests
 
