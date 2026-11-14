@@ -17,8 +17,9 @@ from pydantic import BaseModel, ConfigDict
 from evalharness.failures import CATEGORY, FailureLabel
 from evalharness.oracles.retrieval import is_relevant
 
-# Why the app declined, as its response states it.
-type AbstainReason = Literal["no_passages", "model_declined"]
+# Why the app declined, as its response states it. "search_degraded": the search ran without the embedding server,
+# so the app did not write an answer from its passages; such a case carries a failure label and is scored "failed".
+type AbstainReason = Literal["no_passages", "search_degraded", "model_declined"]
 # "cited_gold": answered and cited the gold section. "cited_other": answered without citing it. "answered_unsupported":
 # answered a question the course does not answer. "declined_no_passages" / "declined_by_model": declined, by search
 # finding nothing close enough or by the model. "unusable_reply": the model replied, but not with an answer the app

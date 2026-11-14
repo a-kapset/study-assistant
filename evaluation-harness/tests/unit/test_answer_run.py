@@ -251,18 +251,23 @@ def _line(request_id: str, model: str | None, cost: float | None, source: str = 
 class _App:
     """A fake app: search finds one passage of section 4.2, ask answers citing it; every ask is written to a ledger
     as one model call answered from a recording, the way the proxy writes it. Asks of the repetition named in
-    ``declines_in`` are declined by the model instead. Every request is remembered as (path, repetition)."""
+    ``declines_in`` are declined by the model instead. Its readiness says ``ready``. Every search and ask is
+    remembered as (path, repetition)."""
 
-    def __init__(self, ledger: list[LedgerLine], declines_in: int | None = None) -> None:
-        """Keep the ledger the asks are written to and the repetition whose asks are declined."""
+    def __init__(self, ledger: list[LedgerLine], declines_in: int | None = None, ready: str = "ok") -> None:
+        """Keep the ledger the asks are written to, the repetition whose asks are declined and the readiness state."""
         self._ledger = ledger
         self._declines_in = declines_in
+        self._ready = ready
         self.requests: list[tuple[str, int]] = []
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
-        """Answer a search or an ask of the fake course; the settings request is answered but not remembered."""
+        """Answer a search or an ask of the fake course; the settings and readiness requests are answered but not
+        remembered."""
         if request.url.path == "/v1/config":
             return httpx2.Response(200, json={"app_version": "0.1.0", "settings": {"git_commit": "evalharness_app"}})
+        if request.url.path == "/ready":
+            return httpx2.Response(200, json={"status": self._ready, "checks": {"db": "ok", "embedder": "ok"}})
         request_id = request.headers[REQUEST_ID_HEADER]
         repetition = repetition_of(request_id)
         self.requests.append((request.url.path, repetition))
@@ -449,9 +454,11 @@ async def test_a_failed_ask_is_recorded_with_the_label_its_model_calls_give() ->
     ledger: list[LedgerLine] = []
 
     def app(request: httpx2.Request) -> httpx2.Response:
-        """Serve the settings and a search; fail the ask the way the app does after a rate limit."""
+        """Serve the settings, the readiness and a search; fail the ask the way the app does after a rate limit."""
         if request.url.path == "/v1/config":
             return httpx2.Response(200, json={"settings": {"git_commit": "evalharness_app"}})
+        if request.url.path == "/ready":
+            return httpx2.Response(200, json={"status": "ok", "checks": {"db": "ok", "embedder": "ok"}})
         if request.url.path == "/v1/search":
             return httpx2.Response(200, json={"hits": [{"section_id": GOLD}]})
         line = _line(request.headers[REQUEST_ID_HEADER], None, None, source="upstream")
@@ -475,3 +482,66 @@ async def test_a_failed_ask_is_recorded_with_the_label_its_model_calls_give() ->
 
     case = record.cases[0]
     assert (case.failure_label, case.score.verdict) == ("rate_limited", "failed"), f"recorded as {case}"
+
+
+@pytest.mark.covers("US-016", "AC-9")
+@pytest.mark.covers("US-011", "AC-6")
+async def test_a_question_declined_on_a_search_without_the_embedder_is_a_failure_of_the_stack() -> None:
+    """Runs one answerable and one unanswerable question against a fake app that answers every ask as the real one
+    does while its embedding server cannot be reached: 200, declined with the reason "search_degraded", no model
+    call. Expects both questions labelled "degraded_retrieval" and scored "failed", and no target verdict.
+
+    A pass means an answer run that meets a stopped embedding server ends with a record, in which those questions
+    are an outage and not a result. A failure means either the run cannot read the app's third reason for
+    declining and stops with an error after its last question, losing every answer it collected, or the decline
+    is scored as an answer: an unanswerable question would then count as answered without support, the one
+    blocker of the set. The fake stands for the real response, which the api test with the stopped server reads.
+    """
+
+    def app(request: httpx2.Request) -> httpx2.Response:
+        """Serve the settings, the readiness and a search; decline every ask for a search by words only."""
+        if request.url.path == "/v1/config":
+            return httpx2.Response(200, json={"settings": {"git_commit": "evalharness_app"}})
+        if request.url.path == "/ready":
+            return httpx2.Response(200, json={"status": "ok", "checks": {"db": "ok", "embedder": "ok"}})
+        if request.url.path == "/v1/search":
+            return httpx2.Response(200, json={"hits": [{"section_id": GOLD}]})
+        return httpx2.Response(200, json={"abstain_reason": "search_degraded", "citations": [], "invalid_citations": 0})
+
+    settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
+    async with SutTransport(settings, transport=httpx2.MockTransport(app)) as sut:
+        record = await run(
+            _qa(("QA-1", GOLD), ("QA-2", None)),
+            sut,
+            _Corpus({GOLD}),
+            list,
+            qa_file="evalharness_qa.toml",
+            qa_bytes=b"evalharness",
+            harness_commit="evalharness_commit",
+            harness_dirty=False,
+        )
+
+    recorded = [(case.failure_label, case.score.verdict) for case in record.cases]
+    assert recorded == [("degraded_retrieval", "failed")] * 2, f"(label, verdict) of the two questions: {recorded}"
+    assert target_verdict(record.summaries[0], TARGETS) is None, (
+        "a run whose questions were declined for a stopped embedding server was judged against its targets"
+    )
+
+
+@pytest.mark.covers("US-011", "AC-11")
+async def test_an_answer_run_on_a_degraded_stack_is_refused_before_the_first_question() -> None:
+    """Runs one question against a fake app whose readiness says "degraded" with 200, while its searches and asks
+    would answer. Expects the refusal "stack_not_ready" and no search or ask sent.
+
+    A pass means an answer run never starts while a model server of the search is down. A failure means the run
+    does not ask the app first: every question then waits for the missing server and is declined or answered from
+    a weaker search, and the run ends as invalid, or as a result of another search, only after all that time.
+    """
+    app = _App([], ready="degraded")
+
+    with pytest.raises(RunRefused) as refused:
+        await _run(_qa(("QA-1", GOLD)), [], app=app)
+
+    assert (refused.value.code, app.requests) == ("stack_not_ready", []), (
+        f"a degraded stack gave {refused.value.code} after the requests {app.requests}"
+    )

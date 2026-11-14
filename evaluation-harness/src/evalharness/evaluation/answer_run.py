@@ -3,7 +3,8 @@ answer took.
 
 For every question a search with the app's own settings runs first: it returns the passages the answer step saw,
 so a case that went wrong can be placed at the search or after it. A run whose gold sections are not sections of
-the stored course is refused before the first question.
+the stored course is refused before the first question, and so is a run on a stack where a model server of the
+search is down: the app would decline or answer from a weaker search, and the run would measure that.
 
     poetry run python -m evalharness.evaluation.answer_run datasets/<course>/qa_v0.toml
 
@@ -30,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from evalharness.corpus_db import CorpusReader
 from evalharness.datasets.qa_set import QaSet, QaTargets, load_qa_set
 from evalharness.evaluation.answer_record import AnswerCaseRecord, AnswerRunRecord, write_answer_record
-from evalharness.evaluation.retrieval import Corpus, RunRefused, read_app_settings
+from evalharness.evaluation.retrieval import Corpus, RunRefused, check_ready, read_app_settings
 from evalharness.failures import CATEGORY, classify
 from evalharness.observation import Observation
 from evalharness.oracles.answer import (
@@ -127,6 +128,7 @@ async def run(
     check_gold_sections(qa, corpus.section_ids(qa.course_id))
     snapshot = corpus.snapshot(qa.course_id)
     app_settings = await read_app_settings(sut)
+    await check_ready(sut)
     searched = {}
     for case in qa.cases:
         searched[case.id] = await sut.request(

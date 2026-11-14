@@ -67,7 +67,8 @@ class _Hit(BaseModel):
 
     chunk_id: str
     section_id: str | None
-    score: float
+    # None for a passage found by the question's words only, when the app had no vector of the question.
+    score: float | None
 
 
 class SearchResult(BaseModel):
@@ -197,11 +198,13 @@ async def run(
     held_out_use: int | None,
     harness_commit: str,
     harness_dirty: bool,
+    allow_degraded: bool = False,
 ) -> RunRecord:
     """Check the corpus, make both passes over ``cases`` one search at a time, and return the run's record.
 
     The diagnostic pass asks for the number of hits the app used in the primary pass, so both passes are scored over
-    the same places; when no primary search succeeded, it asks for the declared number.
+    the same places; when no primary search succeeded, it asks for the declared number. With ``allow_degraded`` the
+    run also starts while a model server of the search is down, to measure the weaker path the app then answers on.
     """
     course_id = gold.declaration.course_id
     started_at = datetime.now(UTC)
@@ -209,7 +212,7 @@ async def run(
     check_questions_not_in_corpus(gold, corpus.chunk_texts(course_id))
     snapshot = corpus.snapshot(course_id)
     app_settings = await read_app_settings(sut)
-    await check_ready(sut)
+    await check_ready(sut, allow_degraded=allow_degraded)
 
     primary = [await search(sut, course_id, case.query, {}) for case in cases]
     reported = next((one.result for one in primary if one.result is not None), None)
@@ -291,12 +294,14 @@ async def read_app_settings(sut: SutTransport) -> dict[str, JsonValue]:
         raise RunRefused("app_config_unreadable", f"GET /v1/config has no settings object: {error}") from error
 
 
-async def check_ready(sut: SutTransport) -> None:
+async def check_ready(sut: SutTransport, *, allow_degraded: bool = False) -> None:
     """Refuse the run unless the app reports that every server its search uses answers.
 
     The app stays ready when a model server is down and then answers searches on a weaker path: the strategy's
     order without the reranker, or by words only. A run started on such a stack would measure that path under the
-    name of the configured one, and only after every search had waited for the missing server.
+    name of the configured one, and only after every search had waited for the missing server. A run that is to
+    measure the weaker path itself passes ``allow_degraded``: the state "degraded" is then accepted, while an app
+    that is not ready at all, or does not answer, still refuses the run.
     """
     observation = await sut.request("GET", "/ready")
     if observation.transport_error is not None or observation.status_code != 200:
@@ -306,7 +311,7 @@ async def check_ready(sut: SutTransport) -> None:
         ready = _Ready.model_validate(observation.body_json)
     except ValidationError as error:
         raise RunRefused("stack_not_ready", f"GET /ready has no status: {error}") from error
-    if ready.status != "ok":
+    if ready.status != "ok" and not (allow_degraded and ready.status == "degraded"):
         down = sorted(check for check, state in ready.checks.items() if state != "ok")
         raise RunRefused(
             "stack_not_ready", f"the app reports {ready.status!r}, not answering: {', '.join(down) or 'not named'}"

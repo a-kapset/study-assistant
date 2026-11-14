@@ -1,9 +1,12 @@
 """Fixtures and marking for tests that talk to a running system under test."""
 
+import subprocess
+import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import cast
 
+import httpx2
 import pytest
 from pydantic import JsonValue
 
@@ -17,6 +20,13 @@ _API_DIR = Path(__file__).parent
 _PROXY_URL = "http://llm-proxy:8100/v1"
 # Longest wait for a whole trace: the app sends its spans in batches every few seconds.
 _TRACE_WAIT_S = 15.0
+# The service of the embedding server in the stack's compose file.
+_EMBEDDER_SERVICE = "embedder"
+# Longest wait for one request while the embedding server is stopped: the app first tries the server several times
+# (about 13 s on a developer machine) and only then answers on its weaker path.
+_OUTAGE_REQUEST_TIMEOUT_S = 60.0
+# Longest wait until the app is ready again after the embedding server was started: the server loads its model first.
+_RECOVERY_WAIT_S = 180.0
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -69,6 +79,65 @@ async def proxy_in_front(sut: SutTransport) -> None:
     assert base_url == _PROXY_URL, (
         f"start the stack with evaluation-harness/compose.proxy.yaml, the app uses {base_url}"
     )
+
+
+@pytest.fixture(scope="module")
+def embedder_stopped() -> Iterator[None]:
+    """Stop the container of the stack's embedding server for the tests of one module, then start it again and
+    wait until the app reports that everything answers.
+
+    The outage is the real one: the container is stopped with Docker Compose, in the folder of the stack's .env
+    file, so the app meets a server that cannot be reached, not a prepared error. A server that does not come back
+    is an error of this fixture, so the tests and runs after it never work on a half-broken stack unnoticed.
+    """
+    settings = HarnessSettings()
+    _compose(settings, "stop")
+    try:
+        yield
+    finally:
+        _compose(settings, "start")
+        _wait_until_ready(settings)
+
+
+def _compose(settings: HarnessSettings, verb: str) -> None:
+    """Run ``docker compose <verb>`` on the embedding server of the stack; a failed command is an error with
+    Docker's own message."""
+    env_file = settings.stack_env_file.resolve()
+    result = subprocess.run(
+        ["docker", "compose", "--env-file", str(env_file), verb, _EMBEDDER_SERVICE],
+        cwd=env_file.parent,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"docker compose {verb} {_EMBEDDER_SERVICE} failed: {result.stderr.strip()}")
+
+
+def _wait_until_ready(settings: HarnessSettings) -> None:
+    """Ask the app's readiness until it says "ok"; raise when it does not within the recovery wait."""
+    deadline = time.monotonic() + _RECOVERY_WAIT_S
+    seen = "no answer"
+    while time.monotonic() < deadline:
+        try:
+            response = httpx2.get(f"{str(settings.sut_base_url).rstrip('/')}/ready", timeout=10.0)
+            seen = response.text[:200]
+            if response.status_code == 200 and response.json().get("status") == "ok":
+                return
+        except httpx2.HTTPError as error:
+            seen = type(error).__name__
+        time.sleep(1.0)
+    raise RuntimeError(
+        f"the embedding server was started again, but the app is not ready after {_RECOVERY_WAIT_S:.0f} s: {seen}"
+    )
+
+
+@pytest.fixture
+async def patient_sut(settings: HarnessSettings) -> AsyncIterator[SutTransport]:
+    """Open a transport that waits long enough for a request the app answers only after it has given up on a
+    stopped server; the usual wait would end first and the answer would never be seen."""
+    patient = settings.model_copy(update={"request_timeout_s": _OUTAGE_REQUEST_TIMEOUT_S})
+    async with SutTransport(patient) as transport:
+        yield transport
 
 
 @pytest.fixture

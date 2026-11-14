@@ -141,7 +141,8 @@ stored course text (a source that reprints the questions would let the search fi
 app's `/ready` does not say `ok`: with a model server down the app still answers, on a weaker search than the
 configured one, and the run would measure that. The summary names the search that served the run (strategy,
 reranker on or off), read from the search results, and counts apart any search the app answered on a weaker path
-while the run was going. A
+while the run was going; a run with such a search in its primary pass gets no target verdict, like a run with a
+failed search. A
 completed run exits with 0, whatever its numbers. The target verdict reads the interval: "met" when even its lower
 end reaches the target, "not confirmed" when only the measured value does, "below" otherwise; with
 `--require-target` the run exits with 1 unless the verdict is "met". CI runs the `lumen_moths` gold set that way: its number is a regression signal for
@@ -195,6 +196,34 @@ verdict then reads a wider interval (98.75 % for four), so that several chances 
 add up. What decides, and which numbers are only looked at, is fixed before the first variant run as well; a
 finding in the numbers that were only looked at is confirmed by a new planned comparison, not acted on.
 
+### Measuring the weaker path
+
+When the embedding server cannot be reached, the app searches by the question's words only and marks the result
+`degraded`. How good that search is can be measured on the same gold set: make the server unreachable for the
+app and allow the run to start on a degraded stack. The hits do not depend on how the server is unreachable, only
+the waiting does. With the server's container stopped the app waits about 13 s per search on a developer machine
+(the name lookup of a stopped service fails slowly, and the call is tried three times), which is above the default
+wait of 10 s (`EVAL_REQUEST_TIMEOUT_S`) and makes a run of 146 questions take an hour. An address nothing listens
+on is refused at once, so a search takes about 1.3 s. From the repository root, with the stack running:
+
+```powershell
+$env:APP_EMBEDDING_SERVICE__URL = "http://127.0.0.1:9"
+docker compose -f compose.yaml -f evaluation-harness/compose.proxy.yaml up -d --no-deps app
+Remove-Item Env:APP_EMBEDDING_SERVICE__URL
+
+cd evaluation-harness
+poetry run python -m evalharness.evaluation datasets/istqb_ctfl/retrieval_gold_v0.toml --allow-degraded
+cd ..
+
+docker compose -f compose.yaml -f evaluation-harness/compose.proxy.yaml up -d --no-deps app   # the address of .env again
+```
+
+`--allow-degraded` lifts only the refusal for a `/ready` that says `degraded`; an app that is not ready at all
+still refuses the run. The summary counts the searches by the app's reason (all of them `embedder_unavailable`
+when the server stayed down), prints recall and MRR with their intervals and gives no target verdict. The record
+cannot be a side of `compare`: read its numbers next to those of a run on the configured search. Both passes
+give the same hits here, since the search by words applies no lowest score.
+
 ## Answer evaluation
 
 A run asks every question of a course's Q&A set through `/v1/ask`, first searching for it with the app's own
@@ -232,10 +261,13 @@ verdicts, followed by the flip rate: the share of questions whose verdict was no
 with the list of those questions.
 
 A run is refused before the first question, with exit code 2, when a gold section is not a section of the stored
-course. A completed run exits with 0, whatever its numbers. Every failed question gets a failure label, and the
+course or the app's `/ready` does not say `ok`. A completed run exits with 0, whatever its numbers. Every failed
+question gets a failure label, and the
 summary counts them by category. A failure of the stack or the app (for example `replay_miss`: a recording that no
 longer matches the request, after a change of the prompt, the passages or the model) makes the run invalid: it gets
-no target verdict; record again and compare. A model reply the app could not use (`unusable_reply`) counts as a
+no target verdict; record again and compare. A question the app declines because its embedding server went down
+during the run (`degraded_retrieval`) is such a failure of the stack, not a decline. A search that lost only the
+rerank server leaves no mark in an answer, so with the reranker on, check `/ready` after the run as well. A model reply the app could not use (`unusable_reply`) counts as a
 question not answered, and the run keeps its verdict. In a retrieval run a failed search is listed with its reason;
 it leaves the shares and takes the target verdict away.
 
@@ -280,6 +312,12 @@ Start the system first for `-m api`, from the repository root (see [app/README.m
 `docker compose -f compose.yaml -f evaluation-harness/compose.proxy.yaml up -d --build --wait`.
 If the app is unreachable, the api tests fail with the transport error in the message; they are never skipped, so a run with no
 app cannot look green.
+
+The tests of `tests/api/test_degraded_search.py` stop the container of the stack's embedding server
+(`docker compose stop embedder`, run in the folder of the stack's `.env` file), check how the app answers without
+it, start it again and wait until `/ready` says `ok`; they add about a minute. They need the Docker command on the
+machine that runs the tests, and nothing else should use the stack meanwhile. If the server does not come back,
+the run ends with an error that says so.
 
 Every request carries the harness's own `X-Request-ID`, and the app echoes it and writes it into its
 log lines, so a failing observation can be found in the app's logs by its `request_id`.

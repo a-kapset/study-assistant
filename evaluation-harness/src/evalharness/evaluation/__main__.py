@@ -3,11 +3,14 @@
     poetry run python -m evalharness.evaluation datasets/<course>/<gold set>.toml
     poetry run python -m evalharness.evaluation <declaration> --sets D --include-held-out
     poetry run python -m evalharness.evaluation <declaration> --require-target
+    poetry run python -m evalharness.evaluation <declaration> --allow-degraded
 
 Run it from evaluation-harness/, like the tests. Without --sets the run takes the sets of the declared main result.
 The run is written to runs/retrieval/ as a new JSON file and its summary is printed. Exit code 0 when the run completed,
 whatever its numbers; 2 when it was refused. With --require-target (used in CI) a completed run exits with 1 unless
-even the lower end of its main result's 95 % interval reaches the target.
+even the lower end of its main result's 95 % interval reaches the target. With --allow-degraded the run also starts
+while a model server of the search is down: it then measures the weaker path the app answers on, and gets no
+target verdict.
 """
 
 import argparse
@@ -50,6 +53,11 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument(
         "--require-target", action="store_true", help="exit with 1 unless the main result meets its target (for CI)"
     )
+    parser.add_argument(
+        "--allow-degraded",
+        action="store_true",
+        help="start although a model server of the search is down, to measure the weaker path",
+    )
     args = parser.parse_args(argv)
     if args.require_target and args.sets:
         parser.error("--require-target compares the declared sets with their target; leave out --sets")
@@ -63,7 +71,7 @@ def main(argv: Sequence[str]) -> int:
         folder = bank_folder(declaration, stack.local_course_id, stack.local_course_sources, settings.stack_env_file)
         gold = build_gold_set(declaration, folder)
         cases = select_cases(gold, args.sets or declaration.primary.sets, args.include_held_out)
-        record = asyncio.run(_run(gold, cases, settings, stack, args.declaration))
+        record = asyncio.run(_run(gold, cases, settings, stack, args.declaration, args.allow_degraded))
     except (RunRefused, GoldSetError) as error:
         print(f"refused: {error}", file=sys.stderr)
         return 2
@@ -78,7 +86,12 @@ def main(argv: Sequence[str]) -> int:
 
 
 async def _run(
-    gold: GoldSet, cases: Sequence[GoldCase], settings: HarnessSettings, stack: StackSettings, declaration_file: Path
+    gold: GoldSet,
+    cases: Sequence[GoldCase],
+    settings: HarnessSettings,
+    stack: StackSettings,
+    declaration_file: Path,
+    allow_degraded: bool,
 ) -> RunRecord:
     """Make the run against the stack: searches over HTTP, the corpus read through the read-only role."""
     declaration = gold.declaration
@@ -98,6 +111,7 @@ async def _run(
                 held_out_use=held_out_use,
                 harness_commit=commit,
                 harness_dirty=dirty,
+                allow_degraded=allow_degraded,
             )
 
 
@@ -142,7 +156,7 @@ def _print_summary(record: RunRecord, gold: GoldSet, path: Path) -> None:
             print(f"  failed searches, left out of the shares: {listed}")
         weaker = weaker_path_counts(case.passes[name] for case in record.cases)
         if weaker:
-            print(f"  answered on a weaker path, not the configured search: {weaker}; repeat the run")
+            print(f"  answered on a weaker path, not the configured search: {weaker}")
     main_result = record.summaries["primary"]["all"]
     if main_result.failed:
         print(f"\ninvalid: {main_result.failed} search(es) of the primary pass failed; no target verdict")
@@ -151,6 +165,13 @@ def _print_summary(record: RunRecord, gold: GoldSet, path: Path) -> None:
     mrr_interval = mean_interval(ranks)
     mrr_range = _range(mrr_interval) if mrr_interval is not None else "none (every question scored the same)"
     print(f"\nMRR = {_value(main_result.mrr)}, 95% CI {mrr_range} (bootstrap over questions)")
+    weaker_searches = _weaker_path_searches(record)
+    if weaker_searches:
+        print(
+            f"no target verdict: {weaker_searches} of {main_result.n} search(es) of the primary pass were answered "
+            "on a weaker path; repeat the run unless that path was to be measured"
+        )
+        return
     verdict = target_verdict(record, gold)
     if verdict is not None:
         recall_range = _range(share_interval(_hits(main_result), main_result.n))
@@ -164,18 +185,25 @@ def _print_summary(record: RunRecord, gold: GoldSet, path: Path) -> None:
 
 def target_verdict(record: RunRecord, gold: GoldSet) -> TargetVerdict | None:
     """Judge the main result against the declared target by its 95 % interval; None when the run is not the
-    declared main result, or when a search of it failed.
+    declared main result, when a search of it failed, or when the app answered one on a weaker path.
 
     The target holds only for the declared sets at the declared k: recall at a larger k is easier to reach. A failed
-    search measured nothing, so the run measured fewer questions than the target is set for.
+    search measured nothing, so the run measured fewer questions than the target is set for. A search answered on a
+    weaker path (a model server was down) has hits and a normal-looking score, but it measured another search than
+    the configured one, so its questions cannot count for or against the target either.
     """
     primary = gold.declaration.primary
     if record.sets != tuple(sorted(primary.sets)) or record.k != primary.k:
         return None
     main_result = record.summaries["primary"]["all"]
-    if main_result.failed:
+    if main_result.failed or _weaker_path_searches(record):
         return None
     return share_verdict(_hits(main_result), main_result.n, primary.target)
+
+
+def _weaker_path_searches(record: RunRecord) -> int:
+    """Count the searches of the primary pass the app answered on a weaker path than the configured one."""
+    return sum(case.passes["primary"].degraded_reason is not None for case in record.cases)
 
 
 def _hits(summary: Summary) -> int:

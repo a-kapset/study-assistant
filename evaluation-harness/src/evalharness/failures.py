@@ -4,6 +4,10 @@ The app answers one code for several causes (a rate limit, a provider error and 
 "llm_failed"), so only the model calls behind the response tell them apart. Each label belongs to one category,
 and the category decides how a run counts the case: an infrastructure or app failure measured nothing about
 quality and leaves the quality numbers, while a model failure is the model's answer and counts as a wrong one.
+
+One failure comes as a successful response: when the embedding server cannot be reached, the app searches by words
+only and declines the question itself. That decline says nothing about the app's answers, so it is labelled as a
+failure of the stack. A search that lost only its rerank server leaves no mark in the answer and gets no label.
 """
 
 from collections.abc import Sequence
@@ -17,6 +21,7 @@ from evalharness.proxy.ledger import LedgerLine
 type FailureLabel = Literal[
     "no_response",
     "search_failed",
+    "degraded_retrieval",
     "provider_unreachable",
     "rate_limited",
     "budget_exceeded",
@@ -32,6 +37,7 @@ type FailureCategory = Literal["infrastructure", "model", "app"]
 CATEGORY: dict[FailureLabel, FailureCategory] = {
     "no_response": "infrastructure",
     "search_failed": "infrastructure",
+    "degraded_retrieval": "infrastructure",
     "provider_unreachable": "infrastructure",
     "rate_limited": "infrastructure",
     "budget_exceeded": "infrastructure",
@@ -45,6 +51,8 @@ CATEGORY: dict[FailureLabel, FailureCategory] = {
 
 # The app's codes for a search that could not run; an ask answers them the same way.
 _SEARCH_CODES = frozenset({"course_not_searchable", "embedding_failed", "embedding_unavailable"})
+# The app's reason for declining a question whose search ran without the embedding server.
+_SEARCH_DEGRADED = "search_degraded"
 # The provider's 429 codes for money, from its error-code guide: a spending or usage limit of the project or the
 # organisation, or no credit left. "insufficient_quota" is the older form of the last one. Any other 429 (the guide
 # names "slow_down"; replies also carry "rate_limit_exceeded") is a limit on the pace of calls.
@@ -73,16 +81,26 @@ class _ErrorEnvelope(BaseModel):
     error: _ErrorBody
 
 
+class _Declined(BaseModel):
+    """The one field of a successful answer the labels read: why the app declined, if it did."""
+
+    model_config = ConfigDict(extra="ignore")
+    abstain_reason: str | None = None
+
+
 def classify(observation: Observation, calls: Sequence[LedgerLine]) -> FailureLabel | None:
     """Label one request to the app from its response and the ledger lines of its model calls, oldest first.
 
     Returns None for a successful response whose model calls (if any) ended in a reply. A successful response whose
-    last model call failed is "error_as_answer": the app has shown something that is not the model's answer.
+    last model call failed is "error_as_answer": the app has shown something that is not the model's answer. A
+    successful response that declines because the search ran without the embedding server is "degraded_retrieval".
     """
     if observation.transport_error is not None:
         return "no_response"
     last = calls[-1] if calls else None
     if observation.status_code == 200:
+        if _abstain_reason(observation) == _SEARCH_DEGRADED:
+            return "degraded_retrieval"
         return "error_as_answer" if last is not None and last.status != 200 else None
     code = _app_code(observation)
     if code in _SEARCH_CODES:
@@ -98,6 +116,14 @@ def _app_code(observation: Observation) -> str | None:
     """Return the code of the app's error envelope; None when the body is not one."""
     try:
         return _ErrorEnvelope.model_validate(observation.body_json).error.code
+    except ValidationError:
+        return None
+
+
+def _abstain_reason(observation: Observation) -> str | None:
+    """Return why a successful answer declined; None when it did not, or when the body is not an answer."""
+    try:
+        return _Declined.model_validate(observation.body_json).abstain_reason
     except ValidationError:
         return None
 

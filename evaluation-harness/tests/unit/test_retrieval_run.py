@@ -136,9 +136,11 @@ async def _run(
     texts: tuple[str, ...] = ("Testing finds defects.",),
     config: Handler = _settings,
     ready: Handler = _ready,
+    allow_degraded: bool = False,
 ) -> RunRecord:
     """Run every case of ``gold`` against a fake app answering searches with ``handler``, its settings request
-    with ``config`` and its readiness request with ``ready``; the corpus holds the gold sections."""
+    with ``config`` and its readiness request with ``ready``; the corpus holds the gold sections. With
+    ``allow_degraded`` the run is asked to measure the weaker path of a stack that reports "degraded"."""
     corpus = _Corpus(sections if sections is not None else {case.gold_section for case in gold.cases}, texts)
     settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
     transport = httpx2.MockTransport(_serving_config(handler, config, ready))
@@ -152,6 +154,7 @@ async def _run(
             held_out_use=None,
             harness_commit="evalharness_commit",
             harness_dirty=False,
+            allow_degraded=allow_degraded,
         )
 
 
@@ -348,6 +351,75 @@ async def test_a_search_answered_on_a_weaker_path_keeps_the_apps_reason() -> Non
     assert reason == "reranker_unavailable", f"a search answered without the reranker was recorded with {reason!r}"
 
 
+def _by_words(request: httpx2.Request) -> httpx2.Response:
+    """Answer a search as the app does while its embedding server cannot be reached: 200, the passage found by the
+    question's words, so without a score, status "degraded"."""
+    content = json.loads(_found(request).content)
+    content["hits"][0]["score"] = None
+    weaker = {"status": "degraded", "degraded_reason": "embedder_unavailable"}
+    return httpx2.Response(200, json=content | weaker)
+
+
+@pytest.mark.covers("US-007", "AC-6")
+async def test_a_search_answered_by_words_only_is_recorded_and_scored_without_a_hit_score() -> None:
+    """Runs one question against a fake app that answers as the real one does without its embedding server: the
+    answer section is found by words, the hit has no score, the reason is "embedder_unavailable". Expects the
+    question scored as found, with that reason and a hit without a score in the record.
+
+    A pass means a run goes on when the embedding server stops in the middle of it, and its record shows which
+    searches were answered by words. A failure means the run cannot read such a result: it stops with an error at
+    the first one and writes no record, so the searches before it are lost too. The fake stands for the real
+    response, which the api test with the stopped server reads.
+    """
+    record = await _run(_gold(_case("A-1", "1.1")), _by_words)
+
+    result = record.cases[0].passes["primary"]
+    seen = (result.score.verdict, result.degraded_reason, [hit.score for hit in result.hits])
+    assert seen == ("hit", "embedder_unavailable", [None]), (
+        f"a search answered by words only was recorded as (verdict, reason, hit scores) {seen}"
+    )
+
+
+def _not_ready(request: httpx2.Request) -> httpx2.Response:
+    """Answer GET /ready as the app does when its database does not answer: 503 in the error envelope."""
+    return httpx2.Response(503, json={"status": "error", "error": {"code": "not_ready", "message": "db"}})
+
+
+@pytest.mark.covers("US-007", "AC-12")
+@pytest.mark.parametrize(
+    ("ready", "starts"), [(_ready_degraded, True), (_not_ready, False)], ids=["degraded", "not ready at all"]
+)
+async def test_a_run_asked_to_measure_the_weaker_path_starts_on_a_degraded_stack_only(
+    ready: Handler, starts: bool
+) -> None:
+    """Asks for a run that may measure the weaker path, on a fake app whose readiness says "degraded" with 200,
+    then on one that answers 503. Expects searches sent in the first case and the refusal "stack_not_ready"
+    without any search in the second.
+
+    A pass means the by-words path can be measured on purpose while the embedding server is stopped, and that the
+    permission covers exactly this state. A failure in the first case means the weaker path can never be measured:
+    the run is refused as before. A failure in the second means the permission switches the readiness check off,
+    so a run would start against an app whose database is down and report only failed searches.
+    """
+    searches: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Remember every search and answer it as a search by words only."""
+        searches.append(request.url.path)
+        return _by_words(request)
+
+    refused = None
+    try:
+        await _run(_gold(_case("A-1", "1.1")), handler, ready=ready, allow_degraded=True)
+    except RunRefused as error:
+        refused = error.code
+
+    expected = (True, None) if starts else (False, "stack_not_ready")
+    assert (bool(searches), refused) == expected, (
+        f"with the weaker path allowed the run sent {len(searches)} searches and was refused with {refused!r}"
+    )
+
+
 @pytest.mark.covers("US-007", "AC-9")
 async def test_the_primary_pass_sends_the_question_as_a_user_does() -> None:
     """Runs two questions and reads the requests of the primary pass: only the course and the unchanged question.
@@ -531,3 +603,27 @@ async def test_a_run_with_a_failed_search_has_no_target_verdict() -> None:
     record = await _run(gold, handler)
 
     assert target_verdict(record, gold) is None, "a run with a failed search was judged against its target"
+
+
+@pytest.mark.covers("US-007", "AC-14")
+async def test_a_run_with_a_search_answered_on_a_weaker_path_has_no_target_verdict() -> None:
+    """Runs five questions whose answer section is always found, so the target 0.5 would be met; the first search
+    of the primary pass is answered without the reranker (200, status "degraded"), the others on the configured
+    path. Expects no target verdict.
+
+    A pass means a run in which a model server stopped is never judged as a result of the configured search; the
+    verdict decides the exit code CI reads. A failure means such a run is judged like a clean one: its searches
+    have hits and normal scores, so nothing else in its numbers tells them apart, and passages found on the weaker
+    path would count for the target.
+    """
+    calls: list[int] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Answer the first search without the reranker; find section 1.1 on the configured path for the others."""
+        calls.append(1)
+        return _without_reranker(request) if len(calls) == 1 else _found(request)
+
+    gold = _gold(*(_case(f"A-{n}", "1.1") for n in range(1, 6)), target=0.5)
+    record = await _run(gold, handler)
+
+    assert target_verdict(record, gold) is None, "a run with a weaker-path search was judged against its target"

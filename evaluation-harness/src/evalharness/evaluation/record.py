@@ -30,7 +30,8 @@ class HitRecord(_Strict):
 
     chunk_id: str
     section_id: str | None
-    score: float
+    # None for a passage the app found by the question's words only, because it had no vector of the question.
+    score: float | None
 
 
 class PassResult(_Strict):

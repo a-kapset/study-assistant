@@ -13,12 +13,13 @@ from evalharness.proxy.ledger import LedgerLine, Source
 REQUEST_ID = "evalharness_request"
 
 
-def _response(status: int, code: str | None = None) -> Observation:
-    """Build a response of the app with ``status``: its error envelope with ``code``, or a successful answer."""
+def _response(status: int, code: str | None = None, abstain_reason: str | None = None) -> Observation:
+    """Build a response of the app with ``status``: its error envelope with ``code``, or a successful answer that
+    declines for ``abstain_reason`` when one is given."""
     body: JsonValue = (
         {"status": "error", "error": {"code": code, "message": "evalharness"}, "request_id": REQUEST_ID}
         if code is not None
-        else {"answer": "evalharness"}
+        else {"answer": "evalharness", "abstain_reason": abstain_reason}
     )
     return Observation(
         request_id=REQUEST_ID,
@@ -68,12 +69,18 @@ def _call(status: int, error: str | None = None, source: Source = "upstream") ->
     )
 
 
-@pytest.mark.covers("US-016", "AC-1", "AC-2", "AC-3", "AC-4")
+@pytest.mark.covers("US-016", "AC-1", "AC-2", "AC-3", "AC-4", "AC-9")
 @pytest.mark.parametrize(
     ("response", "calls", "label"),
     [
         pytest.param(_response(200), [_call(200)], None, id="answered"),
-        pytest.param(_response(200), [], None, id="declined-without-a-model-call"),
+        pytest.param(_response(200, abstain_reason="no_passages"), [], None, id="declined-without-a-model-call"),
+        pytest.param(
+            _response(200, abstain_reason="search_degraded"),
+            [],
+            "degraded_retrieval",
+            id="declined-on-a-search-without-the-embedder",
+        ),
         pytest.param(_response(200), [_call(429), _call(200)], None, id="answered-after-a-repeat"),
         pytest.param(_no_response("timeout"), [], "no_response", id="no-response"),
         pytest.param(_response(503, "embedding_unavailable"), [], "search_failed", id="embedder-down"),
@@ -123,7 +130,9 @@ def test_each_failure_gets_the_label_of_its_cause(
     A pass means a run can say whether a failed question was the stack, the provider, the model or the app. A
     failure points to the rule of that row: a rate limit read as a spending limit sends someone to the billing page
     for nothing; an unusable reply read as an outage hides a model problem; an error shown as an answer read as a
-    success hides the worst kind of app defect.
+    success hides the worst kind of app defect; a decline the app gives because its embedding server is down, read
+    as an ordinary answer, is counted as an answer the course does not support, while an ordinary decline read as
+    that outage would drop real declines from the numbers.
     """
     assert classify(response, calls) == label, f"expected {label!r} for {response.status_code} with {calls}"
 
