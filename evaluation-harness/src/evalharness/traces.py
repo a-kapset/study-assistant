@@ -38,6 +38,8 @@ class Span:
     # None for the span that has no parent in the trace: the request span of the app.
     parent_id: str | None
     status: SpanStatus
+    # How long the span lasted, in seconds: its end time minus its start time, as the app's clock recorded them.
+    duration_s: float
     attributes: Mapping[str, JsonValue]
 
 
@@ -117,7 +119,8 @@ def _parse(raw: str, body: JsonValue) -> Trace:
 
 
 def _span(span: dict[str, JsonValue]) -> Span:
-    """Read one OTLP span: a missing parent marks the request span, a missing status code means "unset"."""
+    """Read one OTLP span: a missing parent marks the request span, a missing status code means "unset"; the start
+    and end times are nanoseconds since 1970, written as text."""
     status = cast(dict[str, JsonValue], span.get("status") or {})
     attributes = cast(list[dict[str, JsonValue]], span.get("attributes") or [])
     return Span(
@@ -125,6 +128,7 @@ def _span(span: dict[str, JsonValue]) -> Span:
         span_id=cast(str, span["spanId"]),
         parent_id=cast(str | None, span.get("parentSpanId") or None),
         status=_STATUSES[cast(int, status.get("code", 0))],
+        duration_s=(int(cast(str, span["endTimeUnixNano"])) - int(cast(str, span["startTimeUnixNano"]))) / 1e9,
         attributes={cast(str, item["key"]): _value(cast(dict[str, JsonValue], item["value"])) for item in attributes},
     )
 

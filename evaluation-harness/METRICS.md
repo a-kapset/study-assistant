@@ -778,8 +778,7 @@ its similarity to it is above
 (code: [`src/evalharness/datasets/check_paraphrases.py`](src/evalharness/datasets/check_paraphrases.py)):
 
 ```math
-\lambda = \max_{\substack{a, b \in Q \ \mathrm{ch}(a)
-e \mathrm{ch}(b)}} \cos(e_a, e_b)
+\lambda = \max_{\substack{a, b \in Q \\ \mathrm{ch}(a) \ne \mathrm{ch}(b)}} \cos(e_a, e_b)
 ```
 
 where
@@ -797,7 +796,109 @@ different questions are to each other. On the first course $\lambda = 0.929$.
 **Slices.** Every count is also given for the pairs whose question contained a key term (the rewording removed
 it) and for the pairs whose question did not.
 
+### Relations on the limits of one search
+
+Code: [`src/evalharness/relations/search_limits.py`](src/evalharness/relations/search_limits.py). What they are
+for and their results: [RELATIONS.md](RELATIONS.md).
+
+One question is searched twice, and only a limit of the request changes. $H(k, t)$ is the list of passage ids the
+app returns for the question when $k$ hits are asked with the lowest score $t$, in the app's order.
+
+**R3, more hits asked** — holds for $k_1 < k_2$ and the same $t$ when
+
+```math
+H(k_1, t) = \mathrm{first}_{k_1}\big(H(k_2, t)\big)
+```
+
+where
+
+- $H(k_1, t)$, $H(k_2, t)$ — the hits of the smaller and of the larger request;
+- $\mathrm{first}_{k_1}(\cdot)$ — the first $k_1$ items of a list, or all of them when it is shorter.
+
+**R4, higher lowest score** — holds for $t_1 < t_2$ and the same $k$ when
+
+```math
+\min_{c \in H(k, t_2)} s_c \ge t_2
+\quad\text{and}\quad
+|H(k, t_2)| \le |H(k, t_1)|
+\quad\text{and, by meaning alone,}\quad
+H(k, t_2) = \big[\, c \in H(k, t_1) : s_c \ge t_2 \,\big]
+```
+
+where
+
+- $H(k, t_1)$, $H(k, t_2)$ — the hits under the lower and under the higher lowest score;
+- $s_c$ — the score of passage $c$ in the response (its similarity to the question); a hit without a score breaks
+  the relation;
+- $|H|$ — the number of hits;
+- $`[\, c \in H(k, t_1) : s_c \ge t_2 \,]`$ — the hits under the lower score that reach the higher one, in their
+  order;
+- "by meaning alone" — the third condition is judged only when both responses say that the search ranked by
+  meaning without words and without a reranker. With words or a reranker the lowest score chooses the passages
+  that are ranked, so a passage outside the first $k$ can enter them under a higher score; the first two
+  conditions still hold there.
+
+## Latency of a search
+
+Code: [`src/evalharness/evaluation/latency.py`](src/evalharness/evaluation/latency.py); the span times come from
+[`src/evalharness/traces.py`](src/evalharness/traces.py).
+
+A latency run sends every question of a gold set's main result once, one request at a time, after a fixed number
+of warm-up requests that are left out. For every measured request it keeps how long each stage took.
+
+**Time of a stage**, $t_{i,s}$ — the seconds request $i$ spent in stage $s$:
+
+```math
+t_{i,s} = \sum_{c \in C_{i,s}} \big(\mathrm{end}_c - \mathrm{start}_c\big)
+```
+
+where
+
+- $C_{i,s}$ — the spans of the trace of request $i$ that belong to stage $s$ (table below);
+- $\mathrm{start}_c$, $\mathrm{end}_c$ — the start and end time of span $c$, as the app's clock recorded them.
+
+| Stage $s$ | What is timed | Spans $C_{i,s}$ |
+|---|---|---|
+| `client` | the caller's wait, from sending the request to the whole response | none: the harness's own clock |
+| `request` | the app's work on the request | the request span |
+| `search` | the whole search | the `search` span |
+| `embedder` | the calls to the embedding server; several when a call is repeated | the HTTP calls made directly inside `search` |
+| `database` | the queries of the search | the database queries made directly inside `search` |
+| `rerank` | the call to the reranker, when it is on | the `rerank` span inside `search` |
+
+A request whose search failed, whose trace is not in the store, or whose search made a call of another kind has
+no stage times and is counted apart.
+
+**Percentile of a stage**, $P_p(s)$ — the time that $p$ % of the measured requests stay under:
+
+```math
+P_p(s) = t_{(\lfloor h \rfloor)} + \big(h - \lfloor h \rfloor\big)\,\big(t_{(\lfloor h \rfloor + 1)} - t_{(\lfloor h \rfloor)}\big),
+\qquad h = (n_s - 1)\,\frac{p}{100}
+```
+
+where
+
+- $t_{(0)} \le t_{(1)} \le \dots \le t_{(n_s - 1)}$ — the times $t_{i,s}$ of the measured requests that went through
+  stage $s$, sorted, counted from 0;
+- $n_s$ — the number of those requests;
+- $p$ — 50 (the median) or 95;
+- $h$ — the place of the percentile in the sorted times; $\lfloor h \rfloor$ — $h$ rounded down. When $h$ is whole,
+  the percentile is $t_{(h)}$.
+
+Example: for the times 1, 2, …, 21 s, $h = 20 \cdot 0.95 = 19$ and $P_{95} = t_{(19)} = 20$ s. Each stage is reported
+with $n_s$, $P_{50}$, $P_{95}$ and its slowest request. The 99th percentile is not reported: over about 150 requests it
+is the second slowest request, one measurement.
+
+**Budget verdict** — with a budget of $b$ seconds for the search, "within budget" when $P_{95}(\text{search}) \le b$,
+"over budget" otherwise. The numbers belong to the machine and the moment they were measured on, and to one
+request at a time: they say nothing about many callers at once.
+
 ## Changes
+
+- **2026-11-15 — latency per stage; two relations on the limits of a search.** New: the time of a stage
+  $t_{i,s}$ read from a request's trace, its percentiles $P_{50}$ and $P_{95}$ and the budget verdict; the relations
+  R3 (more hits asked) and R4 (higher lowest score). Corrected: the formula of the held-out line $\lambda$ had
+  lost a row break and its "not equal" sign in this file; its meaning and the code did not change.
 
 - **2026-11-14 — search path in the records; comparisons by strategy and reranker; planned comparisons.** New: a
   run records the search strategy and the reranker flag its searches reported, and for every search the app's

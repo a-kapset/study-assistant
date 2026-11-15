@@ -30,7 +30,8 @@ build-backend = "poetry.core.masonry.api"
 [dependency-groups]
 test = [
     "pytest (>=9.1.1,<10.0.0)",
-    "pytest-asyncio (>=1.4.0,<2.0.0)"
+    "pytest-asyncio (>=1.4.0,<2.0.0)",
+    "hypothesis (>=6.169.0,<7.0.0)"
 ]
 lint = [
     "ruff (>=0.16.9,<0.17.0)",

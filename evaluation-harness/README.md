@@ -20,6 +20,7 @@ Which metamorphic relations are checked, what they change and what they found: [
   proxy image does not carry it); `scipy-stubs` for its types
 - [Poetry 2](https://python-poetry.org/) for dependencies and the virtual environment
 - Development: [pytest](https://docs.pytest.org/) with [pytest-asyncio](https://pytest-asyncio.readthedocs.io/),
+  [Hypothesis](https://hypothesis.readthedocs.io/) (draws the inputs of the relation tests on search),
   [ruff](https://docs.astral.sh/ruff/) (format and lint), [mypy](https://mypy.readthedocs.io/) (strict),
   [pre-commit](https://pre-commit.com/)
 
@@ -34,6 +35,7 @@ evaluation-harness/
 ├── datasets/               # per course: retrieval gold set declarations (questions stay local), Q&A sets, paraphrase pairs
 ├── runs/                   # the proxy's ledger and, per kind of run, its records, e.g. runs/retrieval/ (not committed)
 ├── cassettes/              # recorded replies of invented courses (committed)
+├── reports/                # decision notes written from run records: what was measured, how sure, what follows
 ├── Dockerfile              # the image of the LLM proxy
 ├── compose.proxy.yaml      # puts the proxy between the app and its model provider
 ├── src/evalharness/
@@ -42,8 +44,9 @@ evaluation-harness/
 │   ├── datasets/           # the retrieval gold set (built from a local question bank), the Q&A set and paraphrase
 │   │                       #   pair files and their checks
 │   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run
-│   ├── evaluation/         # the retrieval, answer and paraphrase runs: checks, requests, run records, commands
-│   ├── relations/          # metamorphic relations: how a pair of inputs is scored and a relation judged
+│   ├── evaluation/         # the retrieval, answer, paraphrase and latency runs: checks, requests, run records,
+│   │                       #   commands
+│   ├── relations/          # metamorphic relations: how a pair of inputs or of results is judged
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices, provider failures on request; one module
 │   │                       #   per provider API in surfaces/
@@ -224,6 +227,36 @@ when the server stayed down), prints recall and MRR with their intervals and giv
 cannot be a side of `compare`: read its numbers next to those of a run on the configured search. Both passes
 give the same hits here, since the search by words applies no lowest score.
 
+### Latency by stage
+
+How long a search takes, and where the time goes, is read from the app's traces. The latency run sends the
+questions of the gold set's main result one at a time, as a learner sends them, so latency is measured on the
+requests recall is measured on:
+
+```powershell
+poetry run python -m evalharness.evaluation.latency datasets/istqb_ctfl/retrieval_gold_v0.toml --budget-s 1.0
+```
+
+The first 10 questions are sent once before the measurement and left out: the first requests after a start pay
+for the first database connection and the first call to a model server. That number is fixed in the code, not
+chosen from a run's results. After the last search the run reads every request's trace from the stack's Jaeger and
+takes the time of the request, of the `search` stage and of what the search called: the embedding server, the
+database, the reranker. The summary gives the number of requests, the median, the 95th percentile and the slowest
+request per stage, the id of the slowest search's trace, and, with `--budget-s`, whether the 95th percentile of the
+`search` stage is within that many seconds. The record goes to `runs/latency/`; formulas:
+[METRICS.md](METRICS.md#latency-of-a-search).
+
+Read the numbers with three limits in mind. They belong to the machine named in the summary: the same stack is
+several times faster or slower elsewhere. One request is sent at a time, so they say how long one learner waits
+and nothing about many learners at once. And a variant is measured like a variant of recall: start the app with
+its setting (see "Comparing search variants"), make the run, and compare variants only from one session on one
+machine. `--allow-degraded` measures the weaker path, as for a retrieval run; with the embedding server's
+container stopped set `EVAL_REQUEST_TIMEOUT_S` above the 13 s such a search takes. A run is refused, with exit
+code 2, for the same reasons as a retrieval run (course, sets, `/ready`); held-out sets are never used.
+
+The decision these numbers and the variant comparisons led to is written down in
+[reports/search-default-2026-11.md](reports/search-default-2026-11.md).
+
 ## Answer evaluation
 
 A run asks every question of a course's Q&A set through `/v1/ask`, first searching for it with the app's own
@@ -301,6 +334,16 @@ refused, with exit code 2, when a gold section is not a section of the stored co
 not say `ok`; a completed run exits with 0 whatever its verdicts. Two paraphrase runs under different search
 settings are compared like two retrieval runs: see "Comparing search variants".
 
+Two more relations need no question set and no labelled answers: the same question is searched again with another
+number of hits, or another lowest score, and the two results must relate as stated. Asking for more hits keeps
+the first ones; a higher lowest score returns no passage under it and never more passages, and on the search by
+meaning alone exactly the earlier passages that reach it. They run as api tests
+(`tests/api/test_search_relations.py`) on the course the stack mounts as its local course, on whatever search the
+stack is configured for. [Hypothesis](https://hypothesis.readthedocs.io/) draws the inputs: a question is a run
+of up to twelve words from a stored passage, and the lowest scores lie between the scores of a search without a
+lowest score, so they cut the result at different places. On a failure it prints the smallest question and limits
+that still break the relation.
+
 ## Running the tests
 
 ```powershell
@@ -318,6 +361,11 @@ The tests of `tests/api/test_degraded_search.py` stop the container of the stack
 it, start it again and wait until `/ready` says `ok`; they add about a minute. They need the Docker command on the
 machine that runs the tests, and nothing else should use the stack meanwhile. If the server does not come back,
 the run ends with an error that says so.
+
+The tests of `tests/api/test_search_relations.py` send 25 drawn examples each (two or three searches per example)
+and read the local course's passages from the database. They take a few seconds on the default search and several
+minutes with the reranker on. Hypothesis keeps the examples that failed in `.hypothesis/` (not committed) and
+tries them first on the next run.
 
 Every request carries the harness's own `X-Request-ID`, and the app echoes it and writes it into its
 log lines, so a failing observation can be found in the app's logs by its `request_id`.

@@ -65,7 +65,7 @@ What is planned and what is done, in the order of work.
 - [x] App: cross-encoder reranker on top of either search, switched by configuration and visible in every result and trace
 - [x] App: a search result marked as degraded when a model server is down: ranked by words alone without the embedding server, in the search's own order without the rerank server
 - [x] Evaluation harness: variants compared with paired statistics; a degraded result never reported as normal, and the search by words measured on its own
-- [ ] Evaluation harness: retrieval relations (threshold, k); latency per stage
+- [x] Evaluation harness: retrieval relations (threshold, k); latency per stage; the default search decided by a rule written before the runs
 
 **9. Mutant experiment**
 - [ ] Evaluation harness: a catalogue of configuration, boundary and source-code faults; which check catches which fault; whether the trace names the faulty stage; a report reproducible from run ids

@@ -10,6 +10,8 @@ stay true, what variation is accepted, how it is judged, and its latest results.
 |---|---|---|---|---|
 | R1 | Reword a question without its course term | Invariance: the gold section stays in the top k | `/v1/search` | 2026-11-07 |
 | R2 | Same as R1 | Ranking stability: the top k stays mostly the same | `/v1/search` | 2026-11-07 |
+| R3 | Ask for more hits | Subset consistency: the smaller result is the beginning of the larger one | `/v1/search` | 2026-11-15 |
+| R4 | Raise the lowest score | Monotonicity: no passage under the score and never more passages; by meaning alone, exactly the earlier passages that reach it | `/v1/search` | 2026-11-15 |
 
 ## R1, R2 — reworded question on search
 
@@ -148,3 +150,95 @@ then the stack was restored.
 **Limits.** One transformation; the rewordings were written by one author for the set, not collected from
 learners; 76 pairs give intervals of about ±8 to ±10 points; the first course only (its material stays local), so
 this is not a CI check.
+
+## R3, R4 — the limits of one search
+
+**Transformation.** The question stays the same; only a limit of the request changes. For R3 the number of hits
+asked for grows, with the same lowest score. For R4 the lowest score a passage must reach rises, with the same
+number of hits. The questions are not a written set: [Hypothesis](https://hypothesis.readthedocs.io/) draws them,
+each a run of one to twelve words from a stored passage of the course the stack mounts as its local course. Such a
+question is close to some passages by meaning and shares words with them, on any course, and needs no gold
+answer. For R4 the question is first searched without a lowest score; the two lowest scores are then drawn from
+the middles between neighbouring scores of that result (and −1, and a value above the best score), so they cut
+the result at different places and never sit exactly on a score.
+
+**What must stay true, and what may vary.**
+
+- **R3, more hits asked (subset consistency).** The hits of the smaller request are the first hits of the larger
+  one: the same passages in the same order. It follows that a request never gets more hits than it asked for and
+  that asking for more never loses a passage, so recall cannot fall. This holds on every search path: by meaning,
+  by meaning and words, and with the reranker.
+- **R4, higher lowest score (monotonicity).** On every search path each hit reaches the higher score, and there
+  are never more hits than under the lower one. When the search ranks **by meaning alone**, the hits are exactly
+  the hits under the lower score that reach the higher one, in the same order: the lowest score is a filter.
+  With words (`hybrid`) or with the reranker only the first two conditions are judged, because there the third
+  one is false by the way the search is built (below). Which form applies is read from each response (its
+  strategy and whether a reranker ordered the hits).
+
+A search that failed, or that the app answered on a weaker path because a model server was down, stops the test:
+the relations are stated for the configured search.
+
+**Why a higher lowest score is not a filter with words or a reranker.** In a hybrid search both rankings are
+made only from the passages that reach the lowest score, and their places are then fused. When a passage falls
+under a higher score, every passage behind it moves up one place in that ranking, the fused order changes, and
+a passage that was outside the first k can enter them. With the reranker the lowest score chooses which passages
+are reordered, with the same effect. Example on the demo course under `hybrid`, k = 5, question "Barges that are
+not used are returned to":
+
+| Lowest score | Hits (first 8 characters of the passage id, similarity) |
+|---|---|
+| −1 | `7f172213` 0.7965, `e6c1ec7e` 0.7747, `ad25c150` 0.7953, `26e95cc5` 0.7982, `f8633987` 0.7953 |
+| 0.785 | `7f172213` 0.7965, `26e95cc5` 0.7982, **`bc3cc163` 0.8166**, `ad25c150` 0.7953, `f8633987` 0.7953 |
+
+`e6c1ec7e` is under 0.785 and leaves; `bc3cc163`, closer to the question by meaning than any of the five, was
+outside the first five before and enters. This is not rare: with the
+first eight words of each of 120 passages of the first course as questions, k = 5 and every pair of neighbouring
+lowest scores, the higher score returned a passage the lower one did not in 218 of 480 pairs, for 113 of the 120
+questions (demo course: 8 of 48 pairs). So under `hybrid` the lowest score also changes the ranking, which is why
+the comparison of 2026-11-14 found `hybrid` without a lowest score worse than with it.
+
+**What it catches.** For R3: an order that depends on the number of hits asked. A hybrid search whose rankings
+keep as many passages as hits are asked, or a reranker that gets only the hits asked, gives another list for
+every number; each list looks normal alone. Also a request answered with more hits than it asked for. For R4: a
+search path that does not apply the lowest score. Each path applies it in its own place, and a path that skips it
+returns well-formed results with passages too many. Neither needs labelled answers, so both run in CI on the
+invented course and can serve as oracles when defects are planted.
+
+```powershell
+poetry run pytest -m api tests/api/test_search_relations.py --hypothesis-show-statistics
+```
+
+### Results, 2026-11-15
+
+First course (782 passages), 25 drawn examples per relation and search setting, one app commit. Each setting was
+started by configuration, as for the comparison of 2026-11-14.
+
+| Search | R3 | R4 | Form of R4 judged | Time of both tests |
+|---|---|---|---|---|
+| `vector` (the default) | holds | holds | by meaning alone: exactly the earlier hits | 5 s |
+| `hybrid` | holds | holds | scores and number of hits | 5 s |
+| `vector` with reranker | holds | holds | scores and number of hits | 190 s |
+
+"Holds" means no drawn example broke the relation; it is not a proof for every question.
+
+**Planted defects (mutants).** Each one a single changed line of the app, in a source file mounted over the file
+inside the app's container (the image and the working tree stay as they are), with the search setting the defect
+lives in. The stack was restored after each.
+
+| Mutant | Search setting | Seen by |
+|---|---|---|
+| The lowest score is not applied to the nearest passages | `vector` | R4: a hit under the lowest score |
+| The statement reads one passage more than asked | `vector` | R3: more hits than asked |
+| Each ranking of the hybrid search keeps as many passages as hits are asked | `hybrid` | R3: another order |
+| The hybrid statement ranks every passage of the course, without the lowest score | `hybrid` | R4: a hit under the lowest score |
+| The reranker gets only as many passages as hits are asked | `vector` with reranker | R3: another order |
+
+All five were seen, each by the relation named and not by the other one. Hypothesis then reduced the failing
+input to the smallest one it could find: for the first, second and fifth mutant the question "1.1." (the start
+of a section heading) with one hit asked.
+
+**Limits.** 25 examples per run are a sample: a defect that shows for few questions can pass a run (Hypothesis
+keeps the failing examples it found and tries them first next time). The questions are fragments of the course
+text, not questions of learners. The strong form of R4 is judged only for the search by meaning. Two passages
+with exactly the same similarity to a question have no fixed order in the search by meaning; no course holds two
+passages with the same text today, so R3 has not met that case.

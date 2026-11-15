@@ -21,6 +21,7 @@ from evalharness.datasets.retrieval_gold import GoldCase, GoldDeclaration, GoldS
 from evalharness.evaluation.record import CaseRecord, HitRecord, PassResult, RunRecord
 from evalharness.observation import Observation
 from evalharness.oracles.retrieval import CaseScore, Summary, score_case, summarise
+from evalharness.traces import trace_id_from
 from evalharness.transport import SutTransport
 
 # Why a run was refused; a caller can act on the code without parsing the message.
@@ -119,6 +120,10 @@ class Searched(NamedTuple):
     # Why the search gave no result; None when it ran.
     error: str | None
     result: SearchResult | None
+    # How long the caller waited for the response, in seconds, and the id of the request's trace in the app's trace
+    # store (None when the response named none): a latency run reads the time of each stage from that trace.
+    elapsed_s: float
+    trace_id: str | None
 
 
 def bank_folder(declaration: GoldDeclaration, local_course_id: str, local_sources: Path, env_file: Path) -> Path:
@@ -338,7 +343,7 @@ async def search(sut: SutTransport, course_id: str, query: str, extra: dict[str,
     """Send one search of the course; the question goes as it is, with ``extra`` fields added to the request."""
     observation = await sut.request("POST", "/v1/search", json={"course_id": course_id, "query": query, **extra})
     error, result = _read(observation)
-    return Searched(observation.request_id, error, result)
+    return Searched(observation.request_id, error, result, observation.elapsed_s, trace_id_from(observation.headers))
 
 
 def _read(observation: Observation) -> tuple[str | None, SearchResult | None]:
