@@ -33,6 +33,7 @@ evaluation-harness/
 ├── METRICS.md              # the formula and meaning of every metric the harness reports
 ├── RELATIONS.md            # the metamorphic relations: transformation, relation type, results
 ├── datasets/               # per course: retrieval gold set declarations (questions stay local), Q&A sets, paraphrase pairs
+├── mutants/                # per course: the catalog of defects planted in the running app, and the checks they go through
 ├── runs/                   # the proxy's ledger and, per kind of run, its records, e.g. runs/retrieval/ (not committed)
 ├── cassettes/              # recorded replies of invented courses (committed)
 ├── reports/                # decision notes written from run records: what was measured, how sure, what follows
@@ -47,6 +48,7 @@ evaluation-harness/
 │   ├── evaluation/         # the retrieval, answer, paraphrase and latency runs: checks, requests, run records,
 │   │                       #   commands
 │   ├── relations/          # metamorphic relations: how a pair of inputs or of results is judged
+│   ├── mutation/           # mutant runs: catalog, proof that a mutant is live and the app restored, checks, records
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices, provider failures on request; one module
 │   │                       #   per provider API in surfaces/
@@ -344,6 +346,36 @@ of up to twelve words from a stored passage, and the lowest scores lie between t
 lowest score, so they cut the result at different places. On a failure it prints the smallest question and limits
 that still break the relation.
 
+## Mutant runs
+
+How much can a check be trusted? Plant a known defect in the running app and see whether the check notices it. A
+mutant is one entry of a catalog (`mutants/<course>.toml`): the app settings it changes, the part of the app it
+makes faulty, the symptom expected, the checks expected to notice it, and where the idea came from. The
+expectations are written before the first run, so a check that misses a mutant it was aimed at can be told apart
+from one that was never meant to see it. The catalog also names the checks every mutant run makes: the retrieval
+run of a gold set, the paraphrase run of a pair file, and the two relation tests on search.
+
+```powershell
+poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml
+poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml --mutants baseline lowest_score_0_88
+```
+
+The stack must be running and serve the catalog's course as its local course. For every mutant the command starts
+the app's container again with the mutant's settings (with the compose files the stack was started with, which it
+asks Docker for), reads the settings the app reports at `/v1/config` and compares them with the reading taken before
+the first mutant. The run counts only when exactly the mutant's settings changed, each to its value: a mutant the
+app did not take would otherwise read as a defect no check sees. Then the checks run, and the app is started again
+as configured, in every case, also when a check failed. It must report its first settings again and say it is
+ready; if it does not, the command stops (exit code 1), because every further run would measure a changed app. The
+catalog's `baseline` entry goes the same way without changing anything: a check that fails on it raises false
+alarms.
+
+Each mutant run writes a folder under `runs/mutants/` with `mutant_run.json` (the mutant, both proofs, the outcome
+of each check) and the records of its checks, so runs made on a mutant never mix with ordinary runs. A check that
+refuses to measure is recorded with its reason. Whether a check caught a mutant is not decided here. The relation
+tests run with a fixed Hypothesis seed and keep their examples in the run's folder, so every mutant meets the same
+questions. A mutant run takes about a minute on the first course; nothing calls a model.
+
 ## Running the tests
 
 ```powershell
@@ -361,6 +393,10 @@ The tests of `tests/api/test_degraded_search.py` stop the container of the stack
 it, start it again and wait until `/ready` says `ok`; they add about a minute. They need the Docker command on the
 machine that runs the tests, and nothing else should use the stack meanwhile. If the server does not come back,
 the run ends with an error that says so.
+
+The tests of `tests/api/test_mutant_run.py` make one mutant run on the stack's local course (the number of hits set
+to one) and start the app's container twice through Docker Compose; like the tests that stop the embedding server,
+they need the Docker command and the stack to themselves, and they add about half a minute.
 
 The tests of `tests/api/test_search_relations.py` send 25 drawn examples each (two or three searches per example)
 and read the local course's passages from the database. They take a few seconds on the default search and several

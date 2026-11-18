@@ -1,0 +1,52 @@
+# Mutants of the first course: defects planted in the running app one at a time (python -m evalharness.mutation).
+# Every expectation below was written before the first run of the runner. A mutant changes app settings only; the
+# app's files are never changed.
+
+course_id = "istqb_ctfl"
+
+# The checks every mutant run makes. Paths are relative to evaluation-harness/.
+[checks]
+retrieval_gold = "datasets/istqb_ctfl/retrieval_gold_v0.toml"
+paraphrase = "datasets/istqb_ctfl/paraphrase_v0.toml"
+search_relations = true
+
+# The app as configured, through the same restart and the same checks: a check that fails here raises false alarms.
+[mutants.baseline]
+kind = "baseline"
+expected_symptom = "Nothing differs from a run on the app as configured."
+
+[mutants.lowest_score_0_88]
+kind = "configuration"
+component = "search"
+settings = { APP_SEARCH__MIN_SCORE = "0.88" }
+expected_symptom = "Most searches return nothing: measured on 2026-10-25, recall@5 on sets A-C fell from 0.897 to 0.356 with 91 empty results, while the pass without a lowest score stayed the same."
+expected_killers = ["retrieval_gold", "paraphrase"]
+origin = "invented"
+reference = "a lowest score mistyped or tuned on another embedding model"
+
+[mutants.lowest_score_0_86]
+kind = "configuration"
+component = "search"
+settings = { APP_SEARCH__MIN_SCORE = "0.86" }
+expected_symptom = "Reworded questions lose their section far more often than the questions themselves: measured on 2026-11-07, the answer-kept relation changed by -0.366 while the questions' recall stayed at 0.927."
+expected_killers = ["paraphrase"]
+origin = "invented"
+reference = "a lowest score raised a little to cut off-topic hits"
+
+[mutants.default_k_1]
+kind = "configuration"
+component = "search"
+settings = { APP_SEARCH__DEFAULT_K = "1" }
+expected_symptom = "Every search returns one passage, so the answer section is found less often."
+expected_killers = ["retrieval_gold"]
+origin = "invented"
+reference = "a number of hits set for a smaller context window"
+
+[mutants.lowest_score_0]
+kind = "configuration"
+component = "search"
+settings = { APP_SEARCH__MIN_SCORE = "0" }
+expected_symptom = "Every question finds five passages, an off-course one too. Recall cannot fall: the search takes the closest passages first and only then drops those under the lowest score. Checks of the answers are expected to notice it, not these."
+expected_killers = []
+origin = "observed"
+reference = "a recommender that showed its first row as the best match when every similarity was zero (course notebook reviewed 2026-10-05)"
