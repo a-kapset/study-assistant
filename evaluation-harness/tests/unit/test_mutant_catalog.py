@@ -14,6 +14,10 @@ course_id = "evalharness_course"
 [checks]
 retrieval_gold = "gold.toml"
 
+[mutants.baseline]
+kind = "baseline"
+expected_symptom = "evalharness"
+
 [mutants.low_score]
 kind = "configuration"
 component = "search"

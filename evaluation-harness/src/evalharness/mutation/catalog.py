@@ -47,6 +47,10 @@ class Mutant(_Strict):
     component: Component | None = None
     # The app settings the mutant changes, as the stack passes them in (e.g. APP_SEARCH__MIN_SCORE = "0.88").
     settings: dict[str, str] = {}
+    # Whether the course must be ingested again for the settings to reach what the checks measure: a setting of how
+    # sources are cut into passages changes nothing until the stored passages are made again. The runner then
+    # ingests the course after starting the app with the mutant, and again after starting it as configured.
+    reingest: bool = False
     # What is expected to happen, in words, written before the first run.
     expected_symptom: str
     # The checks expected to notice the mutant, written before the first run; none for the baseline.
@@ -60,8 +64,10 @@ class Mutant(_Strict):
         """Refuse a baseline that changes or expects anything, and a mutant that changes nothing or does not say
         what it breaks and where the idea came from."""
         if self.kind == "baseline":
-            if self.settings or self.component or self.expected_killers or self.origin:
-                raise ValueError("a baseline changes no setting and names no component, killer or origin")
+            if self.settings or self.reingest or self.component or self.expected_killers or self.origin:
+                raise ValueError(
+                    "a baseline changes no setting, ingests nothing, and names no component, killer or origin"
+                )
             return self
         if not self.settings:
             raise ValueError("a configuration mutant changes at least one setting")
@@ -102,11 +108,15 @@ class Catalog(_Strict):
 
     @model_validator(mode="after")
     def _expectations_name_made_checks(self) -> Self:
-        """Refuse an id that cannot be a folder name, a catalog that makes no check, and a mutant that expects a
-        check the catalog does not make: that cell of the matrix would read as "not aimed at" without a sign."""
+        """Refuse an id that cannot be a folder name, a catalog without exactly one baseline (every verdict is read
+        against it), a catalog that makes no check, and a mutant that expects a check the catalog does not make: that
+        cell of the matrix would read as "not aimed at" without a sign."""
         bad_ids = sorted(mutant_id for mutant_id in self.mutants if not _MUTANT_ID.fullmatch(mutant_id))
         if bad_ids:
             raise ValueError(f"mutant ids may hold only a-z, 0-9 and _: {bad_ids}")
+        baselines = [mutant_id for mutant_id, mutant in self.mutants.items() if mutant.kind == "baseline"]
+        if len(baselines) != 1:
+            raise ValueError(f"the catalog needs exactly one entry of kind baseline, has {baselines}")
         made = self.checks.names()
         if not made:
             raise ValueError("the catalog makes no check")
@@ -115,6 +125,10 @@ class Catalog(_Strict):
             if unknown:
                 raise ValueError(f"{mutant_id}: expects checks the catalog does not make: {unknown}; made: {made}")
         return self
+
+    def baseline_id(self) -> str:
+        """Return the id of the catalog's one baseline entry."""
+        return next(mutant_id for mutant_id, mutant in self.mutants.items() if mutant.kind == "baseline")
 
 
 class LoadedCatalog(NamedTuple):

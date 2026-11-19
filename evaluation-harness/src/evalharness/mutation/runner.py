@@ -1,8 +1,8 @@
 """One mutant run: apply the mutant, prove it is live, make the checks, restore the app, prove it is back.
 
 The order follows a chaos experiment: the state is checked before the change, the change is made, the checks run,
-and the change is undone whatever happened in between. The proofs are read from the app itself, because a command
-that was accepted shows only what was asked for, not what the app runs with.
+and the change is undone whatever happened in between. The proofs are read from the app itself and from its
+database, because a command that was accepted shows only what was asked for, not what the app runs with.
 """
 
 import uuid
@@ -14,7 +14,8 @@ from pathlib import Path
 from pydantic import JsonValue
 
 from evalharness.evaluation.retrieval import RunRefused, check_ready, read_app_settings
-from evalharness.mutation.catalog import CheckName, LoadedCatalog
+from evalharness.mutation.catalog import CheckName, LoadedCatalog, Mutant
+from evalharness.mutation.course import IngestFailed, StoredCourse
 from evalharness.mutation.oracles import Check
 from evalharness.mutation.proof import apply_problem, changes, restore_problem
 from evalharness.mutation.record import CheckResult, MutantRunRecord, Proof, run_folder, write_record
@@ -31,10 +32,13 @@ class RestoreFailed(RuntimeError):
 class Experiment:
     """What every mutant run of one command shares."""
 
+    experiment_id: str
     loaded: LoadedCatalog
     catalog_file: str
     # The app's settings read before the first mutant; each run must leave the app with exactly these.
     first_settings: dict[str, JsonValue]
+    # The hash of the course's stored passages before the first mutant; each run must leave the course with them.
+    first_corpus: str
     harness_commit: str
     harness_dirty: bool
     runs_dir: Path
@@ -44,6 +48,7 @@ async def run_mutants(
     ids: Sequence[str],
     experiment: Experiment,
     stack: Stack,
+    course: StoredCourse,
     sut: SutTransport,
     checks: Mapping[CheckName, Check],
     done: Callable[[MutantRunRecord], None],
@@ -54,20 +59,22 @@ async def run_mutants(
     would measure a changed app and read it as its own mutant.
     """
     for mutant_id in ids:
-        done(await run_mutant(mutant_id, experiment, stack, sut, checks))
+        done(await run_mutant(mutant_id, experiment, stack, course, sut, checks))
 
 
 async def run_mutant(
     mutant_id: str,
     experiment: Experiment,
     stack: Stack,
+    course: StoredCourse,
     sut: SutTransport,
     checks: Mapping[CheckName, Check],
 ) -> MutantRunRecord:
     """Run one mutant of the catalog and write its record; raise RestoreFailed when the app did not come back.
 
-    The checks run only when the app reports exactly the mutant's settings. A check that refuses to measure is
-    recorded with its reason and the next check runs. The app is restored in every case, also when a check raised.
+    The checks run only when the app reports exactly the mutant's settings and, for a mutant that changes how the
+    course is cut into passages, the stored passages changed. A check that refuses to measure is recorded with its
+    reason and the next check runs. The app is restored in every case, also when a check raised.
     """
     mutant = experiment.loaded.catalog.mutants[mutant_id]
     started_at = datetime.now(UTC)
@@ -77,7 +84,7 @@ async def run_mutant(
     applied = Proof(changed={}, problem="the run stopped before the mutant was applied")
     results: dict[CheckName, CheckResult] = {}
     try:
-        applied = await _apply(stack, sut, mutant.settings, experiment.first_settings)
+        applied = await _apply(stack, course, sut, mutant, experiment)
         if applied.problem is None:
             for name, check in checks.items():
                 try:
@@ -85,9 +92,10 @@ async def run_mutant(
                 except RunRefused as refusal:
                     results[name] = CheckResult(status="refused", refusal=str(refusal))
     finally:
-        restored = await _restore(stack, sut, experiment.first_settings)
+        restored = await _restore(stack, course, sut, mutant, experiment)
         record = MutantRunRecord(
             run_id=run_id,
+            experiment_id=experiment.experiment_id,
             started_at=started_at,
             harness_commit=experiment.harness_commit,
             harness_dirty=experiment.harness_dirty,
@@ -107,27 +115,47 @@ async def run_mutant(
     return record
 
 
-async def _apply(stack: Stack, sut: SutTransport, settings: Mapping[str, str], first: Mapping[str, JsonValue]) -> Proof:
-    """Start the app again with the mutant's settings and compare what it reports with the first reading."""
+async def _apply(
+    stack: Stack, course: StoredCourse, sut: SutTransport, mutant: Mutant, experiment: Experiment
+) -> Proof:
+    """Start the app again with the mutant's settings, ingest the course again when the mutant asks for it, and
+    compare what the app reports and what is stored with the first readings."""
     try:
-        stack.recreate_app(settings)
+        stack.recreate_app(mutant.settings)
         now = await read_app_settings(sut)
     except (StackError, RunRefused) as error:
         return Proof(changed={}, problem=f"the app did not start with the mutant: {error}")
-    changed = changes(first, now)
-    return Proof(changed=changed, problem=apply_problem(settings, changed))
+    changed = changes(experiment.first_settings, now)
+    problem = apply_problem(mutant.settings, changed)
+    if problem is None and mutant.reingest:
+        try:
+            await course.ingest()
+        except IngestFailed as error:
+            return Proof(changed=changed, problem=str(error))
+        if course.snapshot() == experiment.first_corpus:
+            problem = "the stored passages of the course did not change after it was ingested again"
+    return Proof(changed=changed, problem=problem)
 
 
-async def _restore(stack: Stack, sut: SutTransport, first: Mapping[str, JsonValue]) -> Proof:
-    """Start the app again as the stack configures it; it is back when its settings equal the first reading and it
-    reports that everything it uses answers."""
+async def _restore(
+    stack: Stack, course: StoredCourse, sut: SutTransport, mutant: Mutant, experiment: Experiment
+) -> Proof:
+    """Start the app again as the stack configures it, ingest the course again when the mutant changed it, and check
+    that the settings and the stored passages equal the first readings and that everything the app uses answers."""
     try:
         stack.recreate_app({})
         now = await read_app_settings(sut)
     except (StackError, RunRefused) as error:
         return Proof(changed={}, problem=f"the app did not start as configured: {error}")
-    changed = changes(first, now)
+    changed = changes(experiment.first_settings, now)
     problem = restore_problem(changed)
+    if problem is None and mutant.reingest:
+        try:
+            await course.ingest()
+        except IngestFailed as error:
+            problem = str(error)
+    if problem is None and course.snapshot() != experiment.first_corpus:
+        problem = "the stored passages of the course differ from those before the first mutant"
     if problem is None:
         try:
             await check_ready(sut)

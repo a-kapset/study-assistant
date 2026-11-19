@@ -50,3 +50,43 @@ expected_symptom = "Every question finds five passages, an off-course one too. R
 expected_killers = []
 origin = "observed"
 reference = "a recommender that showed its first row as the best match when every similarity was zero (course notebook reviewed 2026-10-05)"
+
+# The mutants below were added on 2026-11-19 with their expectations, before any run of them.
+
+[mutants.embedder_unreachable]
+kind = "configuration"
+component = "embedding"
+settings = { APP_EMBEDDING_SERVICE__URL = "http://embedder:1/" }
+expected_symptom = "The app cannot reach its embedding server, says it is degraded and answers searches by the question's words only. The retrieval and paraphrase runs refuse to measure on a degraded stack."
+expected_killers = ["retrieval_gold", "paraphrase"]
+origin = "invented"
+reference = "a mistyped address of the embedding server"
+
+[mutants.query_prefix_changed]
+kind = "configuration"
+component = "embedding"
+settings = { APP_EMBEDDING__QUERY_PREFIX = "passage: " }
+expected_symptom = "Questions are embedded with the passages' prefix. The prefix is part of the embedding space, which has no vectors, so every search is refused instead of answered."
+expected_killers = ["retrieval_gold", "paraphrase", "search_relations"]
+origin = "invented"
+reference = "a prefix of the embedding model edited without preparing its vectors"
+
+[mutants.chunk_size_200]
+kind = "configuration"
+component = "ingestion"
+settings = { APP_INGEST__CHUNK_SIZE = "200", APP_INGEST__CHUNK_OVERLAP = "20" }
+reingest = true
+expected_symptom = "Passages of about one sentence: the first five hits hold far less text, so the answer section is found less often. The direction is a guess with low confidence."
+expected_killers = ["retrieval_gold"]
+origin = "invented"
+reference = "a passage size taken over from a project with short documents"
+
+[mutants.chunk_size_4000]
+kind = "configuration"
+component = "ingestion"
+settings = { APP_INGEST__CHUNK_SIZE = "4000" }
+reingest = true
+expected_symptom = "Passages longer than the embedding model reads (512 tokens): the server cuts them silently, so the end of a passage never enters its vector. The beginning still carries the section, so the search-level checks are expected not to see it; the answer checks are."
+expected_killers = []
+origin = "observed"
+reference = "the embedding server of this stack cuts a text at 512 tokens without a warning (seen 2026-10-19)"

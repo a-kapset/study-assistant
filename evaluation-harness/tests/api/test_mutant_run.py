@@ -16,6 +16,7 @@ from pydantic import JsonValue
 from evalharness.evaluation.record import RunRecord
 from evalharness.evaluation.retrieval import read_app_settings
 from evalharness.mutation.catalog import Catalog, Checks, LoadedCatalog, Mutant
+from evalharness.mutation.course import AdminIngestedCourse
 from evalharness.mutation.oracles import build_checks
 from evalharness.mutation.record import MutantRunRecord
 from evalharness.mutation.runner import Experiment, run_mutant
@@ -52,10 +53,11 @@ def one_hit_run(tmp_path_factory: pytest.TempPathFactory) -> MutantRunSeen:
     catalog = Catalog(
         course_id=stack.local_course_id,
         checks=Checks(retrieval_gold=Path(f"datasets/{stack.local_course_id}/retrieval_gold_v0.toml")),
-        mutants={"one_hit": ONE_HIT},
+        mutants={"baseline": Mutant(kind="baseline", expected_symptom="nothing differs"), "one_hit": ONE_HIT},
     )
     checks = build_checks(catalog, settings, stack, "evalharness_api_test", False)
     runs_dir = tmp_path_factory.mktemp("mutants")
+    course = AdminIngestedCourse(settings, stack, stack.local_course_id, stack.admin_api_key)
 
     async def run() -> MutantRunSeen:
         """Read the first state, run the mutant, read the state after it."""
@@ -63,10 +65,18 @@ def one_hit_run(tmp_path_factory: pytest.TempPathFactory) -> MutantRunSeen:
             before = await read_app_settings(sut)
             commit = before.get("git_commit")
             compose = ComposeStack.discover(settings.stack_env_file, commit if isinstance(commit, str) else "")
+            loaded = LoadedCatalog(catalog, "evalharness_sha")
             experiment = Experiment(
-                LoadedCatalog(catalog, "evalharness_sha"), "in-test", before, "evalharness_api_test", False, runs_dir
+                "evalharness_api_test",
+                loaded,
+                "in-test",
+                before,
+                course.snapshot(),
+                "evalharness_api_test",
+                False,
+                runs_dir,
             )
-            record = await run_mutant("one_hit", experiment, compose, sut, checks)
+            record = await run_mutant("one_hit", experiment, compose, course, sut, checks)
             after = await read_app_settings(sut)
             ready = await sut.request("GET", "/ready")
         (folder,) = runs_dir.iterdir()

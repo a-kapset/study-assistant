@@ -893,7 +893,86 @@ is the second slowest request, one measurement.
 "over budget" otherwise. The numbers belong to the machine and the moment they were measured on, and to one
 request at a time: they say nothing about many callers at once.
 
+## Kill matrix
+
+Code: [`src/evalharness/mutation/verdicts.py`](src/evalharness/mutation/verdicts.py),
+[`src/evalharness/mutation/matrix.py`](src/evalharness/mutation/matrix.py).
+
+A cell is one mutant $m$ and one check $c$. It is judged against the reference $r$: the first run without a mutant
+of the same experiment (same catalog version, harness commit and first settings of the app). The check's own verdict
+(a target met, a relation held) is not used, because a check that is red without any mutant would then "notice" every
+mutant.
+
+**Signal of a question**, $`s_i`$ — a yes / no the check gives for one question or pair, written as 1 / 0. The
+retrieval run has one signal, "the answer section was found"; the paraphrase run has two, "the question found its
+section and the rewording did not" (a lost pair) and "the two searches share enough passages" (a stable pair). Not
+defined for a search that gave no result or was answered on a weaker path.
+
+**Change of a signal**, $\Delta$ — the mean, over the questions, of the mutant's signal minus the reference's:
+
+```math
+\Delta = \frac{1}{n} \sum_{i=1}^{n} \left( s_i^{m} - s_i^{r} \right)
+```
+
+where
+
+- $n$ — the number of questions (pairs) of the check, the same in both runs;
+- $`s_i^{m}`$ — the signal of question $i$ in the mutant run $m$;
+- $`s_i^{r}`$ — the signal of question $i$ in the reference run $r$;
+- $[L, U]$ — the 95 % bootstrap interval of $\Delta$ over the per-question differences, as in
+  [Comparison of two runs](#comparison-of-two-runs); when every question changed by the same amount there is no
+  interval and $L = U = \Delta$.
+
+**Verdict of a signal**, $v$ — two-sided: a mutant that makes a number better also changed what the app does:
+
+```math
+v =
+\begin{cases}
+\text{killed} & \text{if } (L > 0 \text{ or } U < 0) \text{ and } |\Delta| \ge \delta \\
+\text{underpowered} & \text{if } L \le 0 \le U \text{ and } (L \le -\delta \text{ or } U \ge \delta) \\
+\text{survived} & \text{otherwise}
+\end{cases}
+```
+
+where
+
+- $L$, $U$ — the low and high ends of the interval of $\Delta$;
+- $\Delta$ — the change of the signal defined above;
+- $\delta$ — the smallest change worth acting on, declared with the questions: `[comparison] min_meaningful_change`
+  of the gold declaration and `[rules] min_meaningful_change` of the pair file, both 0.05 (about 7 of the 146
+  questions, about 4 of the pairs).
+
+A check of two signals takes the strongest verdict of them: killed, then invalid, then underpowered, then survived.
+
+Before the signals are read:
+
+- a check that refused to measure on the mutant is **killed by refusal** (it saw that the app is not in a state it
+  can measure); a refusal on the reference makes the cell **invalid**;
+- searches without a result: a share $f$ of the mutant's questions above 0.05, with none on the reference, is
+  **killed by errors**; any other failed search makes the cell **invalid** (repeat the run);
+- a run whose mutant was not proven live, or whose app was not proven back, gives **invalid** cells only; a valid
+  run without a result of the check gives **not applicable**.
+
+**Verdict of a check made of tests** (the relation tests): killed when a test failed on the mutant and passed on
+the reference; invalid when a test could not run on the mutant, or did not pass on the reference, and no test
+killed; survived when every test passed on both.
+
+**Marks.** A cell is planned when the catalog named the check among the mutant's expected killers before the first
+run: a planned kill is an *expected kill*, a planned survival a *blind spot*, an unplanned kill an *unexpected kill*,
+an unplanned survival *not aimed at*. A kill is *at the faulty stage* when the check measures the stage the mutant
+makes faulty, *inherited* when the mutant's stage comes earlier in ingestion → embedding → search → answer. A kill in
+a later run without a mutant is a *false alarm*.
+
+**Summary of a check** — three counts and its cost, no share of killed mutants (it would depend on which mutants
+were made up): the kills among the mutants it was expected to notice, its false alarms among the later runs without
+a mutant, the mutants only it killed, and whether it calls a model.
+
 ## Changes
+
+- **2026-11-19 — kill matrix.** New: the signal $`s_i`$ of a mutant cell, its change $\Delta$ against the
+  experiment's first run without a mutant, the two-sided verdict $v$ with the smallest meaningful change $\delta$,
+  verdicts by refusal, by errors and of relation tests, the marks and the summary of a check. Nothing earlier
+  changed.
 
 - **2026-11-15 — latency per stage; two relations on the limits of a search.** New: the time of a stage
   $t_{i,s}$ read from a request's trace, its percentiles $P_{50}$ and $P_{95}$ and the budget verdict; the relations

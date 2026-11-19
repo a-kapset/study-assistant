@@ -54,6 +54,9 @@ class MutantRunRecord(_Strict):
     """Everything one mutant run did and saw."""
 
     run_id: str
+    # The command that made the run: the matrix is built from the runs of one experiment, whose first no-mutant run
+    # is the reference of every verdict. None in records written before runs kept it.
+    experiment_id: str | None = None
     # In UTC.
     started_at: datetime
     # The harness's git commit, and whether its folder had changes not yet committed.

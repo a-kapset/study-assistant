@@ -48,7 +48,7 @@ evaluation-harness/
 │   ├── evaluation/         # the retrieval, answer, paraphrase and latency runs: checks, requests, run records,
 │   │                       #   commands
 │   ├── relations/          # metamorphic relations: how a pair of inputs or of results is judged
-│   ├── mutation/           # mutant runs: catalog, proof that a mutant is live and the app restored, checks, records
+│   ├── mutation/           # mutant runs: catalog, proofs of apply and restore, checks, records, kill matrix
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices, provider failures on request; one module
 │   │                       #   per provider API in surfaces/
@@ -357,8 +357,12 @@ run of a gold set, the paraphrase run of a pair file, and the two relation tests
 
 ```powershell
 poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml
-poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml --mutants baseline lowest_score_0_88
+poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml --mutants lowest_score_0_88
+poetry run python -m evalharness.mutation.matrix <experiment id>
 ```
+
+The catalog's `baseline` runs first and once more at the end of every command, around the chosen mutants; all runs
+of one command share the experiment id it prints.
 
 The stack must be running and serve the catalog's course as its local course. For every mutant the command starts
 the app's container again with the mutant's settings (with the compose files the stack was started with, which it
@@ -367,14 +371,24 @@ the first mutant. The run counts only when exactly the mutant's settings changed
 app did not take would otherwise read as a defect no check sees. Then the checks run, and the app is started again
 as configured, in every case, also when a check failed. It must report its first settings again and say it is
 ready; if it does not, the command stops (exit code 1), because every further run would measure a changed app. The
-catalog's `baseline` entry goes the same way without changing anything: a check that fails on it raises false
-alarms.
+catalog's `baseline` entry goes the same way without changing anything. A mutant with `reingest = true` changes how
+the course is cut into passages: the command ingests the course through the admin endpoint after starting the app
+with the mutant and again after starting it as configured, and the run counts only when the stored passages changed
+and afterwards equal those from before the first mutant (read from the database as a hash of the passage ids).
 
 Each mutant run writes a folder under `runs/mutants/` with `mutant_run.json` (the mutant, both proofs, the outcome
 of each check) and the records of its checks, so runs made on a mutant never mix with ordinary runs. A check that
-refuses to measure is recorded with its reason. Whether a check caught a mutant is not decided here. The relation
-tests run with a fixed Hypothesis seed and keep their examples in the run's folder, so every mutant meets the same
-questions. A mutant run takes about a minute on the first course; nothing calls a model.
+refuses to measure is recorded with its reason. The relation tests run with a fixed Hypothesis seed and keep their
+examples in the run's folder, so every mutant meets the same questions. A mutant run takes about a minute on the
+first course, a mutant that re-ingests it several minutes; nothing calls a model.
+
+The matrix command judges every mutant and check against the experiment's first run without a mutant, by the rule
+in [METRICS.md](METRICS.md#kill-matrix), and marks each cell by what the catalog expected: an expected kill, a blind
+spot (a kill was expected and did not come), an unexpected kill, or not aimed at; a kill is also marked as made at
+the stage the mutant makes faulty or inherited from an earlier one. The last run without a mutant is judged the same
+way: a kill there is a false alarm. Under the matrix each check is summed up by the expected kills it made, its false
+alarms, the mutants only it caught, and whether it calls a model. Runs of another catalog version, harness commit or
+first app state are refused.
 
 ## Running the tests
 
