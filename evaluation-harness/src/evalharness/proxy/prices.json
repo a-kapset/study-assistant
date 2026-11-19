@@ -4,5 +4,11 @@
     "cached_input": 0.075,
     "output": 4.5,
     "checked_on": "2026-10-30"
+  },
+  "openai/gpt-5.4-nano": {
+    "input": 0.2,
+    "cached_input": 0.02,
+    "output": 1.25,
+    "checked_on": "2026-11-19"
   }
 }

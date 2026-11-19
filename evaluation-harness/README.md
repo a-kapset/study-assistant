@@ -350,10 +350,14 @@ that still break the relation.
 
 How much can a check be trusted? Plant a known defect in the running app and see whether the check notices it. A
 mutant is one entry of a catalog (`mutants/<course>.toml`): the app settings it changes, the part of the app it
-makes faulty, the symptom expected, the checks expected to notice it, and where the idea came from. The
-expectations are written before the first run, so a check that misses a mutant it was aimed at can be told apart
-from one that was never meant to see it. The catalog also names the checks every mutant run makes: the retrieval
-run of a gold set, the paraphrase run of a pair file, and the two relation tests on search.
+makes faulty, the symptom expected, the checks expected to notice it, and where the idea came from. A mutant of kind
+`provider_fault` changes no setting: every ask of its answer run is marked so that the LLM proxy answers the model
+calls with that failure (`rate_limited`, `server_error`, `empty_output`), and it names the failure label the asks are
+expected to get. The expectations are written before the first run, so a check that misses a mutant it was aimed at
+can be told apart from one that was never meant to see it. The catalog also names the checks every mutant run makes:
+the retrieval run of a gold set, the paraphrase run of a pair file, the two relation tests on search, and the answer
+run of a Q&A set with every question asked a set number of times; the failure labels of that run's asks are a check
+of their own, read from its record.
 
 ```powershell
 poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml
@@ -379,8 +383,23 @@ and afterwards equal those from before the first mutant (read from the database 
 Each mutant run writes a folder under `runs/mutants/` with `mutant_run.json` (the mutant, both proofs, the outcome
 of each check) and the records of its checks, so runs made on a mutant never mix with ordinary runs. A check that
 refuses to measure is recorded with its reason. The relation tests run with a fixed Hypothesis seed and keep their
-examples in the run's folder, so every mutant meets the same questions. A mutant run takes about a minute on the
-first course, a mutant that re-ingests it several minutes; nothing calls a model.
+examples in the run's folder, so every mutant meets the same questions. The answer run calls the model: every ask is
+marked fresh (request id `<id>.fresh`), so the proxy sends it to the provider even when the same call was recorded
+before and keeps no recording of it; otherwise the run without a mutant at the end would get the answers of the first
+one, and the noise of the model could never show. The answer run's record goes to the `answers/` subfolder of the
+mutant run; its cell counts only when no model call was served from a recording, and for a provider fault only when
+the fault answered every ask. Start the proxy in record mode for such an experiment, with a recordings folder that is
+not committed, from the repository root:
+
+```powershell
+$env:EVAL_PROXY_MODE = "record"; $env:EVAL_PROXY_CASSETTES = "./evaluation-harness/cassettes_local"
+docker compose -f compose.yaml -f evaluation-harness/compose.proxy.yaml up -d --build --no-deps --wait llm-proxy
+```
+
+and start it again the same way without these two variables afterwards. On the first course (112 questions asked
+twice, 2026-11-19) a mutant run with the answer run took from under a minute to 12 minutes and USD 0 to 0.34
+(nothing when no question reaches the model); the whole catalog of 13 mutants and two runs without one took about
+two hours and USD 2.19.
 
 The matrix command judges every mutant and check against the experiment's first run without a mutant, by the rule
 in [METRICS.md](METRICS.md#kill-matrix), and marks each cell by what the catalog expected: an expected kill, a blind
@@ -437,6 +456,10 @@ chooses the mode:
 
 To record again, delete the recording: its file name is the `key` in the ledger. Replies quote the course, so a
 course whose material is not committed uses `EVAL_PROXY_CASSETTES=./evaluation-harness/cassettes_local`.
+
+A request id marked `.fresh` before any other mark (`<id>.fresh`, `<id>.fresh.rep2`) is never answered from a
+recording and its reply is not recorded: in record mode it always reaches the provider and is paid, in replay mode
+it is a replay miss. The mutant runs use it so that two runs of the same questions get new answers of the model.
 
 ### Provider failures on request
 

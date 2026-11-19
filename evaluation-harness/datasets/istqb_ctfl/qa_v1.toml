@@ -28,6 +28,11 @@ gold_cited_min = 0.75
 # blocker whatever the other numbers are.
 unsupported_answers_max = 0
 
+# How a run is compared with another run of this set (the mutant runs): the smallest change of a share, question by
+# question, worth acting on. The same value as the search sets; added on 2026-11-19, before the first comparison.
+[comparison]
+min_meaningful_change = 0.05
+
 # Answerable: gold_section is the second-level section that answers the question; a citation of that section or
 # of one of its subsections counts.
 

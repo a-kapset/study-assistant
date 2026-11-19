@@ -12,12 +12,16 @@ import tomllib
 from pathlib import Path
 from typing import Literal, NamedTuple, Self
 
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from evalharness.failures import FailureLabel
+from evalharness.proxy.faults import FaultKind
 
 # The checks a mutant run can make. "retrieval_gold": the retrieval run of a gold set's main result; "paraphrase":
 # the paraphrase run of a pair file; "search_relations": the two api tests of the relations on the number of hits
-# and the lowest score.
-type CheckName = Literal["retrieval_gold", "paraphrase", "search_relations"]
+# and the lowest score; "answer_run": the answer run of a Q&A set, every question asked more than once;
+# "failure_labels": the labels the answer run gave its failed asks, read from its record without new calls.
+type CheckName = Literal["retrieval_gold", "paraphrase", "search_relations", "answer_run", "failure_labels"]
 # The part of the app a mutant makes faulty.
 type Component = Literal["search", "embedding", "ingestion", "answer", "provider"]
 
@@ -41,8 +45,9 @@ class Mutant(_Strict):
     """One planted defect, or the run without one that every mutant is compared with."""
 
     # "baseline": the app as it is configured, sent through the same steps and checks as a mutant;
-    # "configuration": the app started again with some of its settings changed.
-    kind: Literal["baseline", "configuration"]
+    # "configuration": the app started again with some of its settings changed; "provider_fault": the app as
+    # configured, while its model provider answers every call of the answer run with one failure.
+    kind: Literal["baseline", "configuration", "provider_fault"]
     # The part of the app the mutant makes faulty; none for the baseline.
     component: Component | None = None
     # The app settings the mutant changes, as the stack passes them in (e.g. APP_SEARCH__MIN_SCORE = "0.88").
@@ -53,8 +58,13 @@ class Mutant(_Strict):
     reingest: bool = False
     # What is expected to happen, in words, written before the first run.
     expected_symptom: str
+    # The failure the provider answers with, for a provider fault only.
+    fault: FaultKind | None = None
     # The checks expected to notice the mutant, written before the first run; none for the baseline.
     expected_killers: tuple[CheckName, ...] = ()
+    # The failure label the failed asks are expected to get, written before the first run; the matrix says whether
+    # the labels name it. Only for a mutant that expects the failure labels to notice it.
+    expected_label: FailureLabel | None = None
     # Where the idea of the defect came from: made up, or seen in a real codebase (then "reference" says where).
     origin: Literal["invented", "observed"] | None = None
     reference: str | None = None
@@ -64,19 +74,43 @@ class Mutant(_Strict):
         """Refuse a baseline that changes or expects anything, and a mutant that changes nothing or does not say
         what it breaks and where the idea came from."""
         if self.kind == "baseline":
-            if self.settings or self.reingest or self.component or self.expected_killers or self.origin:
+            if (
+                self.settings
+                or self.reingest
+                or self.component
+                or self.expected_killers
+                or self.origin
+                or self.fault
+                or self.expected_label
+            ):
                 raise ValueError(
-                    "a baseline changes no setting, ingests nothing, and names no component, killer or origin"
+                    "a baseline changes no setting, ingests nothing, and names no component, fault, killer, label "
+                    "or origin"
                 )
             return self
-        if not self.settings:
-            raise ValueError("a configuration mutant changes at least one setting")
         if self.component is None or self.origin is None:
             raise ValueError("a mutant names the component it makes faulty and its origin")
+        if self.expected_label is not None and "failure_labels" not in self.expected_killers:
+            raise ValueError("a mutant that names an expected label expects the failure labels to notice it")
+        if self.kind == "provider_fault":
+            if self.fault is None or self.settings or self.reingest or self.component != "provider":
+                raise ValueError("a provider fault names its fault, changes no setting and makes the provider faulty")
+            return self
+        if self.fault is not None:
+            raise ValueError("only a provider fault names a fault")
+        if not self.settings:
+            raise ValueError("a configuration mutant changes at least one setting")
         bad = sorted(name for name in self.settings if not _SETTING.fullmatch(name))
         if bad:
             raise ValueError(f"not an app setting name (APP_<GROUP>__<NAME>): {bad}")
         return self
+
+
+class AnswerCheck(_Strict):
+    """The answer run a mutant run makes: its Q&A set and how many times every question is asked."""
+
+    qa: Path
+    repetitions: int = Field(ge=1)
 
 
 class Checks(_Strict):
@@ -85,6 +119,8 @@ class Checks(_Strict):
     retrieval_gold: Path | None = None
     paraphrase: Path | None = None
     search_relations: bool = False
+    # The answer run; its record also gives the failure labels, so both checks come with it.
+    answer_run: AnswerCheck | None = None
 
     def names(self) -> tuple[CheckName, ...]:
         """Return the names of the checks this catalog makes, in a fixed order."""
@@ -95,6 +131,8 @@ class Checks(_Strict):
             made.append("paraphrase")
         if self.search_relations:
             made.append("search_relations")
+        if self.answer_run is not None:
+            made.extend(("answer_run", "failure_labels"))
         return tuple(made)
 
 

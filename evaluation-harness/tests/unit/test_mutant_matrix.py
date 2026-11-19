@@ -56,7 +56,7 @@ def _reader(killed_by: dict[str, set[CheckName]]) -> Reader:
     """Return a reader under which each run in ``killed_by`` lost 19 of 146 questions on the named checks, and every
     other result equals the reference."""
 
-    def read(name: CheckName, result: CheckResult, folder: Path) -> Measured:
+    def read(name: CheckName, result: CheckResult, folder: Path, mutant: Mutant) -> Measured:
         """Give the made-up answers of one check in one run."""
         values = LOST_19 if name in killed_by.get(folder.name, set()) else FOUND
         return Measured(signals={"found": values}, min_meaningful=0.05)

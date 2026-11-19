@@ -13,26 +13,45 @@ the matrix was built; 2 when the records cannot make one matrix.
 
 import argparse
 import sys
-from collections.abc import Callable, Sequence
+from collections import Counter, defaultdict
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import fmean
 from typing import Literal, get_args
 
 from evalharness.datasets.paraphrase_set import load_paraphrase_set
+from evalharness.datasets.qa_set import load_qa_set
 from evalharness.datasets.retrieval_gold import load_declaration
+from evalharness.evaluation.answer_record import AnswerCaseRecord, AnswerRunRecord
 from evalharness.evaluation.paraphrase_record import ParaphraseRunRecord
 from evalharness.evaluation.record import PassResult, RunRecord
-from evalharness.mutation.catalog import CheckName, Component
+from evalharness.mutation.catalog import CheckName, Component, Mutant
 from evalharness.mutation.record import RECORD_FILE, CheckResult, MutantRunRecord
 from evalharness.mutation.verdicts import Cell, Measured, judge
 
 RUNS_DIR = Path("runs/mutants")
 
 type Stage = Literal["ingestion", "embedding", "search", "answer"]
-# The stage each check measures: all checks without model calls look at what a search returns.
-CHECK_STAGE: dict[CheckName, Stage] = {"retrieval_gold": "search", "paraphrase": "search", "search_relations": "search"}
-# What one run of each check costs: "none" without model calls.
-CHECK_COST: dict[CheckName, str] = {"retrieval_gold": "none", "paraphrase": "none", "search_relations": "none"}
+# The stage each check measures: the checks without model calls look at what a search returns, the answer checks at
+# what the learner gets.
+CHECK_STAGE: dict[CheckName, Stage] = {
+    "retrieval_gold": "search",
+    "paraphrase": "search",
+    "search_relations": "search",
+    "answer_run": "answer",
+    "failure_labels": "answer",
+}
+# What one run of each check costs: "none" without model calls, "live" when the model answers for real.
+CHECK_COST: dict[CheckName, str] = {
+    "retrieval_gold": "none",
+    "paraphrase": "none",
+    "search_relations": "none",
+    "answer_run": "live",
+    "failure_labels": "none (from the answer run)",
+}
+# The verdicts of an ask that count as right for a question the course does not answer.
+_DECLINED = frozenset({"declined_no_passages", "declined_by_model"})
 # A request passes the stages in this order; a fault of an earlier stage reaches the later ones.
 _STAGE_ORDER: tuple[Stage, ...] = ("ingestion", "embedding", "search", "answer")
 _COMPONENT_STAGE: dict[Component, Stage] = {
@@ -44,8 +63,8 @@ _COMPONENT_STAGE: dict[Component, Stage] = {
 }
 _CHECK_ORDER: tuple[CheckName, ...] = get_args(CheckName.__value__)
 
-# Reads what one check gave in one run from its result, given the folder of that run.
-type Reader = Callable[[CheckName, CheckResult, Path], Measured]
+# Reads what one check gave in one run from its result, given the folder of that run and the run's mutant.
+type Reader = Callable[[CheckName, CheckResult, Path, Mutant], Measured]
 
 
 class MatrixRefused(ValueError):
@@ -96,6 +115,9 @@ class CheckSummary:
     # Mutants this check killed and no other check did.
     only_this: tuple[str, ...]
     cost: str
+    # Mutants whose expected failure label the labels named, and mutants that name one; both 0 for other checks.
+    named_right: int = 0
+    named_expected: int = 0
 
 
 @dataclass(frozen=True)
@@ -187,7 +209,10 @@ def _cell(name: CheckName, run: Run, reference: Run, read: Reader) -> Cell:
     reference_result = reference.record.checks.get(name)
     if reference_result is None:
         return Cell("invalid", "the reference made no such check")
-    return judge(read(name, reference_result, reference.folder), read(name, result, run.folder))
+    return judge(
+        read(name, reference_result, reference.folder, reference.record.mutant),
+        read(name, result, run.folder, run.record.mutant),
+    )
 
 
 def _mark(cell: Cell, planned: bool, no_mutant: bool) -> str:
@@ -223,6 +248,7 @@ def _summary(name: CheckName, rows: Sequence[Row]) -> CheckSummary:
         and all(cell.cell.verdict != "killed" for other, cell in row.cells.items() if other != name)
     )
     no_mutant_rows = [row for row in rows if row.no_mutant]
+    named = [row.cells[name].cell.named for row in mutant_rows if row.cells[name].cell.named is not None]
     return CheckSummary(
         expected_killed=sum(row.cells[name].cell.verdict == "killed" for row in expected),
         expected=len(expected),
@@ -230,10 +256,12 @@ def _summary(name: CheckName, rows: Sequence[Row]) -> CheckSummary:
         no_mutant_runs=len(no_mutant_rows),
         only_this=only_this,
         cost=CHECK_COST[name],
+        named_right=sum(1 for value in named if value),
+        named_expected=len(named),
     )
 
 
-def read_measured(name: CheckName, result: CheckResult, folder: Path) -> Measured:
+def read_measured(name: CheckName, result: CheckResult, folder: Path, mutant: Mutant) -> Measured:
     """Read what one check gave in one run from the records in the run's folder."""
     if result.status == "refused":
         return Measured(refusal=result.refusal or "refused")
@@ -265,7 +293,88 @@ def read_measured(name: CheckName, result: CheckResult, folder: Path) -> Measure
             stable[pair.case_id] = (overlap is not None and overlap >= rules.min_overlap) if measured else None
         signals = {"pairs whose rewording loses the section": lost, "pairs with a stable top k": stable}
         return Measured(signals=signals, min_meaningful=rules.min_meaningful_change)
+    if name in ("answer_run", "failure_labels"):
+        answers = AnswerRunRecord.model_validate_json(content)
+        qa_comparison = load_qa_set(Path(answers.qa_file)).comparison
+        if qa_comparison is None:
+            raise MatrixRefused(f"{answers.qa_file} declares no [comparison] min_meaningful_change")
+        by_case: defaultdict[str, list[AnswerCaseRecord]] = defaultdict(list)
+        for case in answers.cases:
+            by_case[case.case_id].append(case)
+        problem = answer_problem(answers, mutant)
+        if name == "answer_run":
+            return Measured(
+                signals=answer_signals(by_case), min_meaningful=qa_comparison.min_meaningful_change, problem=problem
+            )
+        labelled: dict[str, float | None] = {
+            case_id: fmean(float(ask.failure_label is not None) for ask in asks) for case_id, asks in by_case.items()
+        }
+        note, named = label_note(answers.cases, mutant)
+        return Measured(
+            signals={"questions whose asks got a failure label": labelled},
+            min_meaningful=qa_comparison.min_meaningful_change,
+            problem=problem,
+            note=note,
+            named=named,
+        )
     raise MatrixRefused(f"{folder.name}: no reader for the check {name}")
+
+
+def answer_signals(by_case: Mapping[str, Sequence[AnswerCaseRecord]]) -> dict[str, dict[str, float | None]]:
+    """Return the three signals of an answer run per question, each the share of its asks: answerable questions
+    answered with the gold section, unanswerable ones declined, and questions whose verdict was not the same in
+    every ask. A question with a failed ask has no value in any of them: that ask measured nothing about the answer.
+    """
+    gold: dict[str, float | None] = {}
+    declined: dict[str, float | None] = {}
+    unstable: dict[str, float | None] = {}
+    for case_id, asks in by_case.items():
+        verdicts = [ask.score.verdict for ask in asks]
+        failed = "failed" in verdicts
+        if asks[0].gold_section is not None:
+            gold[case_id] = None if failed else fmean(float(verdict == "cited_gold") for verdict in verdicts)
+        else:
+            declined[case_id] = None if failed else fmean(float(verdict in _DECLINED) for verdict in verdicts)
+        unstable[case_id] = None if failed else float(len(set(verdicts)) > 1)
+    return {
+        "answerable questions answered with the gold section": gold,
+        "unanswerable questions declined": declined,
+        "questions whose verdict changed between asks": unstable,
+    }
+
+
+def answer_problem(answers: AnswerRunRecord, mutant: Mutant) -> str | None:
+    """Say why an answer run does not show the state its mutant claims; None when it does.
+
+    For a provider fault every model call of the run must have got the fault, and there must be such calls, or the
+    fault was not live. An ask that the app declines before the model (its search found nothing close enough) makes no
+    call under any fault, so it says nothing either way. For any other run no model call may have been answered from a
+    recording: a replayed answer is the answer of an earlier run, and two runs that replay the same answers would show
+    no noise and no change.
+    """
+    calls = [source for case in answers.cases for source in case.model_calls]
+    if mutant.kind == "provider_fault":
+        faults = sum(source == "fault" for source in calls)
+        other = len(calls) - faults
+        if other or not faults:
+            return f"the fault was not live: {faults} model call(s) got it, {other} call(s) were answered otherwise"
+        return None
+    replayed = sum(source in ("cassette", "miss") for source in calls)
+    if replayed:
+        return f"{replayed} of {len(calls)} model calls were served from recordings, not answered anew"
+    return None
+
+
+def label_note(cases: Sequence[AnswerCaseRecord], mutant: Mutant) -> tuple[str, bool | None]:
+    """Count the failure labels of the run's asks and, when the mutant names the label it expects, say whether the
+    labels name it: at least one ask was labelled, and every labelled ask carries that label."""
+    labels = Counter(case.failure_label for case in cases if case.failure_label is not None)
+    counted = ", ".join(f"{label} {n}" for label, n in labels.most_common()) or "none"
+    text = f"labels of {len(cases)} asks: {counted}"
+    if mutant.expected_label is None:
+        return text, None
+    named = bool(labels) and set(labels) == {mutant.expected_label}
+    return f"{text}; expected {mutant.expected_label}: {'named' if named else 'NOT named'}", named
 
 
 def _found(result: PassResult) -> bool | None:
@@ -307,6 +416,11 @@ def render(matrix: Matrix) -> str:
             f"{name:<17} expected kills {summary.expected_killed} of {summary.expected}; "
             f"false alarms {summary.false_alarms} of {summary.no_mutant_runs}; "
             f"only this check: {', '.join(summary.only_this) or '-'}; model calls: {summary.cost}"
+            + (
+                f"; labels named as expected {summary.named_right} of {summary.named_expected}"
+                if summary.named_expected
+                else ""
+            )
         )
     return "\n".join(lines)
 

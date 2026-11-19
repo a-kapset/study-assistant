@@ -88,7 +88,7 @@ async def run_mutant(
         if applied.problem is None:
             for name, check in checks.items():
                 try:
-                    results[name] = await check(folder)
+                    results[name] = await check(folder, mutant)
                 except RunRefused as refusal:
                     results[name] = CheckResult(status="refused", refusal=str(refusal))
     finally:

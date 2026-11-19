@@ -903,10 +903,33 @@ of the same experiment (same catalog version, harness commit and first settings 
 (a target met, a relation held) is not used, because a check that is red without any mutant would then "notice" every
 mutant.
 
-**Signal of a question**, $`s_i`$ — a yes / no the check gives for one question or pair, written as 1 / 0. The
-retrieval run has one signal, "the answer section was found"; the paraphrase run has two, "the question found its
-section and the rewording did not" (a lost pair) and "the two searches share enough passages" (a stable pair). Not
-defined for a search that gave no result or was answered on a weaker path.
+**Signal of a question**, $`s_i`$ — a value from 0 to 1 the check gives for one question or pair: a yes / no written
+as 1 / 0, or, where every question is asked several times, the share of its asks that came out so. The retrieval run
+has one signal, "the answer section was found"; the paraphrase run has two, "the question found its section and the
+rewording did not" (a lost pair) and "the two searches share enough passages" (a stable pair). Not defined for a
+search that gave no result or was answered on a weaker path.
+
+The answer run asks every question $k$ times and has three signals, each over its own questions:
+
+```math
+s_i^{\text{gold}} = \frac{1}{k} \sum_{j=1}^{k} [\, v_{ij} = \text{cited\_gold} \,], \qquad
+s_i^{\text{decl}} = \frac{1}{k} \sum_{j=1}^{k} [\, v_{ij} \in \{\text{declined\_no\_passages}, \text{declined\_by\_model}\} \,], \qquad
+s_i^{\text{chg}} = [\, v_{i1}, \dots, v_{ik} \text{ not all equal} \,]
+```
+
+where
+
+- $k$ — how many times every question is asked, the `repetitions` of the catalog (2 on the first course);
+- $`v_{ij}`$ — the verdict of ask $j$ of question $i$, as in [Per question](#per-question-1) of the answers;
+- $`[\,\cdot\,]`$ — 1 when the statement in the brackets holds, else 0;
+- $`s_i^{\text{gold}}`$ — defined for the questions the course answers: the share of asks that cite the gold section;
+- $`s_i^{\text{decl}}`$ — defined for the questions the course does not answer: the share of asks that decline,
+  by search or by the model;
+- $`s_i^{\text{chg}}`$ — defined for every question: 1 when its asks did not all get the same verdict.
+
+A question with a failed ask has no value in any of the three. The **failure labels** check has one signal, the share
+of a question's asks that got a failure label. When the mutant names the label it expects, the cell also says whether
+the labels name it: at least one ask was labelled and every labelled ask carries that label.
 
 **Change of a signal**, $\Delta$ — the mean, over the questions, of the mutant's signal minus the reference's:
 
@@ -939,10 +962,11 @@ where
 - $L$, $U$ — the low and high ends of the interval of $\Delta$;
 - $\Delta$ — the change of the signal defined above;
 - $\delta$ — the smallest change worth acting on, declared with the questions: `[comparison] min_meaningful_change`
-  of the gold declaration and `[rules] min_meaningful_change` of the pair file, both 0.05 (about 7 of the 146
-  questions, about 4 of the pairs).
+  of the gold declaration, `[rules] min_meaningful_change` of the pair file and `[comparison] min_meaningful_change`
+  of the Q&A set, all 0.05 (about 7 of the 146 questions, about 4 of the pairs, about 6 of the 112 questions).
 
-A check of two signals takes the strongest verdict of them: killed, then invalid, then underpowered, then survived.
+A check of several signals takes the strongest verdict of them: killed, then invalid, then underpowered, then
+survived.
 
 Before the signals are read:
 
@@ -951,7 +975,9 @@ Before the signals are read:
 - searches without a result: a share $f$ of the mutant's questions above 0.05, with none on the reference, is
   **killed by errors**; any other failed search makes the cell **invalid** (repeat the run);
 - a run whose mutant was not proven live, or whose app was not proven back, gives **invalid** cells only; a valid
-  run without a result of the check gives **not applicable**.
+  run without a result of the check gives **not applicable**;
+- an answer run in which a model call was served from a recording, or, for a provider fault, in which an ask made no
+  model call or got another answer than the fault, gives **invalid** cells of the answer run and the failure labels.
 
 **Verdict of a check made of tests** (the relation tests): killed when a test failed on the mutant and passed on
 the reference; invalid when a test could not run on the mutant, or did not pass on the reference, and no test
@@ -968,6 +994,11 @@ were made up): the kills among the mutants it was expected to notice, its false 
 a mutant, the mutants only it killed, and whether it calls a model.
 
 ## Changes
+
+- **2026-11-19 — answer checks in the kill matrix.** New: the answer run's three signals
+  $`s_i^{\text{gold}}`$, $`s_i^{\text{decl}}`$, $`s_i^{\text{chg}}`$ over $k$ asks, the failure-label signal and the
+  naming of the expected label, invalid answer cells on replayed answers or a fault that was not live. Changed: a
+  signal may be a share of asks, not only 1 / 0; the verdict rule is the same.
 
 - **2026-11-19 — kill matrix.** New: the signal $`s_i`$ of a mutant cell, its change $\Delta$ against the
   experiment's first run without a mutant, the two-sided verdict $v$ with the smallest meaningful change $\delta$,

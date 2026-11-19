@@ -119,7 +119,7 @@ def _experiment(runs_dir: Path) -> Experiment:
 def _ran(name: str, made: list[str]) -> Check:
     """Return a check that notes it was made and reports a result."""
 
-    async def check(folder: Path) -> CheckResult:
+    async def check(folder: Path, mutant: Mutant) -> CheckResult:
         """Note the check and return a result."""
         made.append(name)
         return CheckResult(status="ran", result_file=f"{name}.json")
@@ -156,7 +156,7 @@ async def test_the_app_is_restored_when_a_check_raises(tmp_path: Path) -> None:
     on the stack, would measure the mutant under another name.
     """
 
-    async def broken(folder: Path) -> CheckResult:
+    async def broken(folder: Path, mutant: Mutant) -> CheckResult:
         """Fail like a check with a bug."""
         raise RuntimeError("evalharness check bug")
 
@@ -201,7 +201,7 @@ async def test_a_refused_check_is_recorded_with_its_reason_and_the_next_check_ru
     run without a record, and the very effect of that mutant would be lost.
     """
 
-    async def refusing(folder: Path) -> CheckResult:
+    async def refusing(folder: Path, mutant: Mutant) -> CheckResult:
         """Refuse like a run on a stack that is not ready."""
         raise RunRefused("stack_not_ready", "evalharness")
 

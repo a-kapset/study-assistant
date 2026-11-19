@@ -5,8 +5,9 @@ configured, measured in the same experiment. The check's own verdict (a target m
 check that is red without any mutant would otherwise "notice" every mutant, and a target can be too coarse to show a
 real loss.
 
-- A check of numbers (the retrieval run, the paraphrase run) gives a yes / no per question or pair. The mutant's
-  values minus the reference's, question by question, give a change and its interval. The mutant is killed when the
+- A check of numbers (the retrieval run, the paraphrase run, the answer run) gives a value from 0 to 1 per question
+  or pair: yes / no, or the share of the repeated asks of a question that came out so. The mutant's values minus the
+  reference's, question by question, give a change and its interval. The mutant is killed when the
   whole interval lies on one side of zero and the change is at least the smallest change worth acting on, in either
   direction: a mutant that makes a number better also changed what the app does.
 - A check made of tests is killed by a test that failed on the mutant and passed on the reference.
@@ -39,6 +40,8 @@ class Cell:
 
     verdict: CellVerdict
     why: str
+    # For a mutant that names the failure label it expects: whether the labels of the run name it; None otherwise.
+    named: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -46,19 +49,35 @@ class Measured:
     """What one check gave in one run, ready to be compared with another run of the same check.
 
     Exactly one of the three is set: the refusal of a check that did not measure; the signals of a check of numbers
-    (signal name → question or pair id → yes / no, None for a search that gave no result); the outcome per test of a
-    check made of tests.
+    (signal name → question or pair id → a value from 0 to 1, None for a question that gave no result); the outcome
+    per test of a check made of tests.
     """
 
     refusal: str | None = None
-    signals: Mapping[str, Mapping[str, bool | None]] | None = None
+    signals: Mapping[str, Mapping[str, float | None]] | None = None
     tests: Mapping[str, TestOutcome] | None = None
     # The smallest change of a signal worth acting on, from the file that declares the questions.
     min_meaningful: float = 0.0
+    # Why the result cannot stand for the state it claims (e.g. answers served from recordings); None when it can.
+    problem: str | None = None
+    # A note added to the cell's reason, and whether the failure labels name the expected one (None: not asked).
+    note: str = ""
+    named: bool | None = None
 
 
 def judge(reference: Measured, mutant: Measured) -> Cell:
     """Return the verdict of one cell from the check's result on the reference run and on the mutant run."""
+    for run, measured in (("the mutant run", mutant), ("the reference", reference)):
+        if measured.problem is not None:
+            return Cell("invalid", f"{run}: {measured.problem}")
+    cell = _judge(reference, mutant)
+    if not mutant.note:
+        return cell
+    return Cell(cell.verdict, f"{cell.why}; {mutant.note}", mutant.named)
+
+
+def _judge(reference: Measured, mutant: Measured) -> Cell:
+    """Judge a cell whose two results are both usable, by the kind of the check."""
     if mutant.refusal is not None:
         return Cell("killed", f"by refusal: {mutant.refusal}")
     if reference.refusal is not None:
@@ -76,22 +95,24 @@ def judge(reference: Measured, mutant: Measured) -> Cell:
     return Cell(verdict, why)
 
 
-def signal_cell(reference: Mapping[str, bool | None], mutant: Mapping[str, bool | None], min_meaningful: float) -> Cell:
-    """Judge one yes / no signal of a check of numbers, question by question, by the rule of the module."""
+def signal_cell(
+    reference: Mapping[str, float | None], mutant: Mapping[str, float | None], min_meaningful: float
+) -> Cell:
+    """Judge one signal of a check of numbers, question by question, by the rule of the module."""
     if set(reference) != set(mutant):
         return Cell("invalid", "the runs measured different questions")
     reference_failed = sum(value is None for value in reference.values())
     if reference_failed:
-        return Cell("invalid", f"{reference_failed} search(es) of the reference gave no result")
+        return Cell("invalid", f"{reference_failed} question(s) of the reference gave no result")
     failed = sum(value is None for value in mutant.values())
     if failed:
         share = failed / len(mutant)
         if share > FAILED_SHARE_KILLS:
-            return Cell("killed", f"by errors: {failed} of {len(mutant)} searches gave no result")
-        return Cell("invalid", f"{failed} of {len(mutant)} searches gave no result; repeat the run")
+            return Cell("killed", f"by errors: {failed} of {len(mutant)} questions gave no result")
+        return Cell("invalid", f"{failed} of {len(mutant)} questions gave no result; repeat the run")
     ids = sorted(reference)
-    before = [float(bool(reference[case_id])) for case_id in ids]
-    after = [float(bool(mutant[case_id])) for case_id in ids]
+    before = [float(reference[case_id] or 0.0) for case_id in ids]
+    after = [float(mutant[case_id] or 0.0) for case_id in ids]
     change = paired_change(before, after)
     verdict = change_verdict(change, min_meaningful)
     n = len(ids)
@@ -100,15 +121,17 @@ def signal_cell(reference: Mapping[str, bool | None], mutant: Mapping[str, bool 
     up = sum(new > old for old, new in zip(before, after, strict=True))
     down = sum(new < old for old, new in zip(before, after, strict=True))
     threshold = min_meaningful * n
+    # A share of repeated asks makes half questions possible, so the totals are written as short as they allow.
     if up + down == 0:
-        return Cell("survived", f"{sum(before):.0f} -> {sum(after):.0f} of {n}: nothing changed")
-    seen = f"{sum(before):.0f} -> {sum(after):.0f} of {n}; {up + down} changed (+{up}, -{down})"
+        return Cell("survived", f"{sum(before):g} -> {sum(after):g} of {n}: nothing changed")
+    seen = f"{sum(before):g} -> {sum(after):g} of {n}; {up + down} changed (+{up}, -{down})"
     if change.interval is None:
         low = high = change.change * n
     else:
         low, high = change.interval.low * n, change.interval.high * n
-    # The interval's ends are means of whole cases, so they are whole numbers of cases.
-    reach = f"the true change may be from {low:+.0f} to {high:+.0f} of {n}"
+    # The interval's ends are means of the per-case values, so in cases they are whole numbers, or halves when every
+    # question was asked twice; rounding to a half removes the float noise of the bootstrap.
+    reach = f"the true change may be from {round(low * 2) / 2:+g} to {round(high * 2) / 2:+g} of {n}"
     if verdict in ("better", "worse") and abs(change.change) >= min_meaningful:
         return Cell("killed", f"{seen}; {reach}, all of it beyond the threshold of {threshold:.1f}: noticed")
     if verdict == "underpowered":

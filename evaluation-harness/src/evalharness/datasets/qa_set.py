@@ -30,6 +30,13 @@ class QaTargets(_Strict):
     unsupported_answers_max: int = Field(ge=0)
 
 
+class QaComparison(_Strict):
+    """How two runs of the set are compared, fixed before the first comparison."""
+
+    # The smallest change of a share, question by question, that is worth acting on; a smaller one is read as none.
+    min_meaningful_change: float = Field(gt=0, lt=1)
+
+
 class QaCase(_Strict):
     """One question; without a gold section the course does not answer it and the app must decline."""
 
@@ -47,6 +54,8 @@ class QaSet(_Strict):
 
     course_id: str = Field(min_length=1)
     targets: QaTargets
+    # None in a set that is never compared with another run of itself.
+    comparison: QaComparison | None = None
     cases: tuple[QaCase, ...] = Field(min_length=1)
 
     @model_validator(mode="after")

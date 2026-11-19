@@ -43,7 +43,8 @@ from evalharness.oracles.answer import (
     score_case,
     summarise,
 )
-from evalharness.proxy.keys import repetition_suffix
+from evalharness.proxy.faults import FaultKind, fault_suffix
+from evalharness.proxy.keys import FRESH_SUFFIX, repetition_suffix
 from evalharness.proxy.ledger import LedgerLine
 from evalharness.proxy.ledger import read_ledger as read_ledger_file
 from evalharness.settings import HarnessSettings, StackSettings, load_stack_settings
@@ -114,13 +115,18 @@ async def run(
     harness_commit: str,
     harness_dirty: bool,
     repetitions: int = 1,
+    fresh: bool = False,
+    fault: FaultKind | None = None,
 ) -> AnswerRunRecord:
     """Check the gold sections, search every question once, ask every question ``repetitions`` times one at a time,
     and return the run's record.
 
     Search is asked once: it does not sample, so asking again would only repeat its hits. Each ask carries its
     repetition in the request id, so the proxy calls the model anew instead of serving the first answer again.
-    ``read_ledger`` returns the proxy's ledger; it is read once, after the last question.
+    ``fresh`` marks every ask so that the proxy serves none from its recordings: a run compared with another run of
+    the same questions must not get the other run's stored answers. ``fault`` marks every ask so that the proxy
+    answers its model calls with that failure. ``read_ledger`` returns the proxy's ledger; it is read once, after the
+    last question.
     """
     if repetitions < 1:
         raise ValueError(f"a run asks every question at least once, got {repetitions}")
@@ -141,7 +147,7 @@ async def run(
                 "POST",
                 "/v1/ask",
                 json={"course_id": qa.course_id, "question": case.question},
-                request_id_suffix=repetition_suffix(repetition),
+                request_id_suffix=ask_suffix(repetition, fresh, fault),
             )
             asked.append((repetition, case, answered))
     calls: defaultdict[str, list[LedgerLine]] = defaultdict(list)
@@ -179,6 +185,12 @@ async def run(
         summaries=summaries,
         cases=cases,
     )
+
+
+def ask_suffix(repetition: int, fresh: bool, fault: FaultKind | None) -> str:
+    """Return the marks an ask's request id ends with, in the order the proxy reads them: fresh, then the
+    repetition, then the fault, which the proxy reads from the very end."""
+    return (FRESH_SUFFIX if fresh else "") + repetition_suffix(repetition) + (fault_suffix(fault) if fault else "")
 
 
 def _case_record(

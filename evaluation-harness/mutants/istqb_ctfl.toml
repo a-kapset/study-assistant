@@ -9,6 +9,9 @@ course_id = "istqb_ctfl"
 retrieval_gold = "datasets/istqb_ctfl/retrieval_gold_v0.toml"
 paraphrase = "datasets/istqb_ctfl/paraphrase_v0.toml"
 search_relations = true
+# The answer run: every question of the Q&A set asked twice, each time answered anew by the model (live calls). Its
+# record also gives the failure labels of the asks, the check "failure_labels".
+answer_run = { qa = "datasets/istqb_ctfl/qa_v1.toml", repetitions = 2 }
 
 # The app as configured, through the same restart and the same checks: a check that fails here raises false alarms.
 [mutants.baseline]
@@ -20,7 +23,7 @@ kind = "configuration"
 component = "search"
 settings = { APP_SEARCH__MIN_SCORE = "0.88" }
 expected_symptom = "Most searches return nothing: measured on 2026-10-25, recall@5 on sets A-C fell from 0.897 to 0.356 with 91 empty results, while the pass without a lowest score stayed the same."
-expected_killers = ["retrieval_gold", "paraphrase"]
+expected_killers = ["retrieval_gold", "paraphrase", "answer_run"]
 origin = "invented"
 reference = "a lowest score mistyped or tuned on another embedding model"
 
@@ -29,7 +32,7 @@ kind = "configuration"
 component = "search"
 settings = { APP_SEARCH__MIN_SCORE = "0.86" }
 expected_symptom = "Reworded questions lose their section far more often than the questions themselves: measured on 2026-11-07, the answer-kept relation changed by -0.366 while the questions' recall stayed at 0.927."
-expected_killers = ["paraphrase"]
+expected_killers = ["paraphrase", "answer_run"]
 origin = "invented"
 reference = "a lowest score raised a little to cut off-topic hits"
 
@@ -38,7 +41,7 @@ kind = "configuration"
 component = "search"
 settings = { APP_SEARCH__DEFAULT_K = "1" }
 expected_symptom = "Every search returns one passage, so the answer section is found less often."
-expected_killers = ["retrieval_gold"]
+expected_killers = ["retrieval_gold", "answer_run"]
 origin = "invented"
 reference = "a number of hits set for a smaller context window"
 
@@ -47,7 +50,7 @@ kind = "configuration"
 component = "search"
 settings = { APP_SEARCH__MIN_SCORE = "0" }
 expected_symptom = "Every question finds five passages, an off-course one too. Recall cannot fall: the search takes the closest passages first and only then drops those under the lowest score. Checks of the answers are expected to notice it, not these."
-expected_killers = []
+expected_killers = ["answer_run"]
 origin = "observed"
 reference = "a recommender that showed its first row as the best match when every similarity was zero (course notebook reviewed 2026-10-05)"
 
@@ -58,7 +61,7 @@ kind = "configuration"
 component = "embedding"
 settings = { APP_EMBEDDING_SERVICE__URL = "http://embedder:1/" }
 expected_symptom = "The app cannot reach its embedding server, says it is degraded and answers searches by the question's words only. The retrieval and paraphrase runs refuse to measure on a degraded stack."
-expected_killers = ["retrieval_gold", "paraphrase"]
+expected_killers = ["retrieval_gold", "paraphrase", "answer_run", "failure_labels"]
 origin = "invented"
 reference = "a mistyped address of the embedding server"
 
@@ -67,7 +70,8 @@ kind = "configuration"
 component = "embedding"
 settings = { APP_EMBEDDING__QUERY_PREFIX = "passage: " }
 expected_symptom = "Questions are embedded with the passages' prefix. The prefix is part of the embedding space, which has no vectors, so every search is refused instead of answered."
-expected_killers = ["retrieval_gold", "paraphrase", "search_relations"]
+expected_killers = ["retrieval_gold", "paraphrase", "search_relations", "answer_run", "failure_labels"]
+expected_label = "search_failed"
 origin = "invented"
 reference = "a prefix of the embedding model edited without preparing its vectors"
 
@@ -77,7 +81,7 @@ component = "ingestion"
 settings = { APP_INGEST__CHUNK_SIZE = "200", APP_INGEST__CHUNK_OVERLAP = "20" }
 reingest = true
 expected_symptom = "Passages of about one sentence: the first five hits hold far less text, so the answer section is found less often. The direction is a guess with low confidence."
-expected_killers = ["retrieval_gold"]
+expected_killers = ["retrieval_gold", "answer_run"]
 origin = "invented"
 reference = "a passage size taken over from a project with short documents"
 
@@ -87,6 +91,60 @@ component = "ingestion"
 settings = { APP_INGEST__CHUNK_SIZE = "4000" }
 reingest = true
 expected_symptom = "Passages longer than the embedding model reads (512 tokens): the server cuts them silently, so the end of a passage never enters its vector. The beginning still carries the section, so the search-level checks are expected not to see it; the answer checks are."
-expected_killers = []
+expected_killers = ["answer_run"]
 origin = "observed"
 reference = "the embedding server of this stack cuts a text at 512 tokens without a warning (seen 2026-10-19)"
+
+# The answer checks were added on 2026-11-19 with the expectations above and the mutants below, before any answer run
+# of a mutant. For the mutants of S2 the answer checks' expectations: lowest_score_0_88, lowest_score_0_86 and
+# default_k_1 lose the gold section in fewer passages, so fewer answers cite it; lowest_score_0 sends the questions
+# the course does not answer to the model with off-topic passages, where it must decline by itself; chunk_size_200
+# (low confidence) and chunk_size_4000 change what the passages hold; the two embedding mutants fail every ask.
+
+[mutants.ask_ungrounded]
+kind = "configuration"
+component = "answer"
+settings = { APP_ASK__MODE = "ungrounded" }
+expected_symptom = "The model answers every question from what it knows, without passages and without citations: no answer cites the gold section, and the questions the course does not answer are answered."
+expected_killers = ["answer_run"]
+origin = "invented"
+reference = "the comparison mode of the app left on after a test"
+
+[mutants.answer_model_nano]
+kind = "configuration"
+component = "answer"
+settings = { APP_LLM__ANSWER = "openai/gpt-5.4-nano" }
+expected_symptom = "A smaller model writes the answers from the same passages. It may cite less exactly, decline more or less often, or vary more between asks; the direction is not predicted and the confidence is low."
+expected_killers = ["answer_run"]
+origin = "invented"
+reference = "a cheaper model chosen to cut costs"
+
+[mutants.provider_rate_limited]
+kind = "provider_fault"
+component = "provider"
+fault = "rate_limited"
+expected_symptom = "Every model call is refused with a rate limit: the app retries, then answers every ask with an error, which the labels name as a rate limit."
+expected_killers = ["answer_run", "failure_labels"]
+expected_label = "rate_limited"
+origin = "invented"
+reference = "a burst of calls over the provider's rate limit"
+
+[mutants.provider_server_error]
+kind = "provider_fault"
+component = "provider"
+fault = "server_error"
+expected_symptom = "Every model call fails on the provider's side: every ask is answered with an error, labelled as a provider error."
+expected_killers = ["answer_run", "failure_labels"]
+expected_label = "provider_error"
+origin = "invented"
+reference = "an outage of the model provider"
+
+[mutants.provider_empty_output]
+kind = "provider_fault"
+component = "provider"
+fault = "empty_output"
+expected_symptom = "Every model call succeeds with no text: the app cannot use the reply and answers with an error, labelled as an unusable reply of the model."
+expected_killers = ["answer_run", "failure_labels"]
+expected_label = "unusable_reply"
+origin = "invented"
+reference = "a model reply cut to nothing by an output limit"

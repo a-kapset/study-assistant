@@ -16,7 +16,7 @@ from starlette.routing import Route
 
 from evalharness.proxy.cassettes import Cassette, CassetteStore
 from evalharness.proxy.faults import fault_of
-from evalharness.proxy.keys import repetition_of, request_key
+from evalharness.proxy.keys import is_fresh, repetition_of, request_key
 from evalharness.proxy.ledger import Ledger, LedgerLine, Source
 from evalharness.proxy.prices import call_cost, load_prices
 from evalharness.proxy.surfaces import openai_responses as surface
@@ -106,7 +106,9 @@ def build_proxy(settings: ProxySettings, transport: httpx2.AsyncBaseTransport | 
             if status != 200:
                 return failed_reply(call, "fault", status, fault_body)
             return successful_reply(call, "fault", fault_body.decode("utf-8"))
-        cassette = store.find(key)
+        # A call marked fresh is never answered from a recording, so repeated runs measure the model anew.
+        fresh = is_fresh(request_id)
+        cassette = None if fresh else store.find(key)
         if cassette is not None:
             return successful_reply(call, "cassette", cassette.body)
         if settings.mode == "replay":
@@ -119,8 +121,10 @@ def build_proxy(settings: ProxySettings, transport: httpx2.AsyncBaseTransport | 
             return JSONResponse({"error": {"type": "upstream_unreachable"}}, status_code=502)
         if reply.status_code != 200:
             return failed_reply(call, "upstream", reply.status_code, reply.content)
-        # Kept before anything reads it: the reply is paid for, and a repeat of this call must not pay again.
-        store.save(key, Cassette(recorded_at=datetime.now(UTC), body=reply.text))
+        # Kept before anything reads it: the reply is paid for, and a repeat of this call must not pay again. A fresh
+        # call is not kept: it was asked for to be new, and its reply may quote course text that stays off the disk.
+        if not fresh:
+            store.save(key, Cassette(recorded_at=datetime.now(UTC), body=reply.text))
         return successful_reply(call, "upstream", reply.text)
 
     async def health(_request: Request) -> Response:

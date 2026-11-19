@@ -11,6 +11,19 @@ import re
 
 # "<id>.rep2": the second repetition. An id without the mark is the first repetition.
 _REPETITION = re.compile(r"\.rep([1-9][0-9]*)$")
+# "<id>.fresh" or "<id>.fresh.rep2": a call the model must answer anew, whatever was recorded before.
+FRESH_SUFFIX = ".fresh"
+_FRESH = re.compile(r"\.fresh(?=\.|$)")
+
+
+def is_fresh(request_id: str | None) -> bool:
+    """Return whether a request id asks for a new answer of the model: one never served from a recording and never
+    recorded.
+
+    A run that measures how much the answers vary needs this: a recorded answer would come back unchanged every
+    time, and the run would look perfectly stable. The mark comes before the repetition mark, so both are read.
+    """
+    return request_id is not None and _FRESH.search(request_id) is not None
 
 
 def repetition_suffix(repetition: int) -> str:

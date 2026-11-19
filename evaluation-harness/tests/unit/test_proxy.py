@@ -403,3 +403,47 @@ def test_an_unknown_fault_mark_is_refused() -> None:
     """
     with pytest.raises(ValueError, match="unknown fault"):
         fault_of("case-1.fault-rate_limit")
+
+
+@pytest.mark.covers("US-019", "AC-8")
+def test_a_call_marked_fresh_reaches_the_provider_although_it_was_recorded_and_is_not_recorded(
+    tmp_path: Path,
+) -> None:
+    """Records one call in record mode, then sends the same call twice marked fresh ("<id>.fresh").
+
+    What it checks: both fresh calls reach the provider instead of the recording, and the recording stays the one
+    of the first call.
+    What it tells: a pass means an experiment that asks every question anew gets new answers of the model, so its run
+    without a mutant at the end can show how much the answers vary. A failure points to the order in the proxy: the
+    recordings were read, or written, for a fresh call.
+    Why it is worth having: a replayed answer is identical every time; the answer checks of the mutant experiment
+    would then see no noise at all and the false-alarm row would say nothing, without any error.
+    """
+    provider = FakeProvider()
+
+    call_proxy(tmp_path, "record", provider, REQUEST, request_id="case-1")
+    # The fresh call has the same key, so a recording of it would replace this file: its content is compared.
+    recorded = {path.name: path.read_bytes() for path in (tmp_path / "cassettes").iterdir()}
+    call_proxy(tmp_path, "record", provider, REQUEST, REQUEST, request_id="case-2.fresh")
+
+    sources = [line.source for line in read_ledger(tmp_path / "ledger.jsonl")]
+    assert sources == ["upstream", "upstream", "upstream"], f"fresh calls were served from a recording: {sources}"
+    after = {path.name: path.read_bytes() for path in (tmp_path / "cassettes").iterdir()}
+    assert after == recorded, f"a fresh call was recorded: files {sorted(recorded)} -> {sorted(after)}"
+
+
+def test_a_call_marked_fresh_never_reaches_the_provider_in_replay_mode(tmp_path: Path) -> None:
+    """Sends one call marked fresh to a proxy in replay mode.
+
+    What it checks: the call is answered as a replay miss and the provider gets nothing.
+    What it tells: a pass means the fresh mark only skips the recordings; replay mode still never pays. A failure
+    points to a fresh call that bypasses the replay guard.
+    Why it is worth having: CI and the harness tests run the proxy in replay mode with no budget; a fresh mark left
+    in a run there would spend money on every call.
+    """
+    provider = FakeProvider()
+
+    [reply] = call_proxy(tmp_path, "replay", provider, REQUEST, request_id="case-1.fresh")
+
+    assert provider.calls == [], f"replay mode called the provider for a fresh call: {provider.calls}"
+    assert reply.status_code == 404, f"expected a replay miss, got {reply.status_code}: {reply.text}"
