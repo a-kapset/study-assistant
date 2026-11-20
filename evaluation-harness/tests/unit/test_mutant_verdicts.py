@@ -124,3 +124,63 @@ def test_failed_searches_kill_only_above_five_percent_and_never_count_as_misses(
     cell = signal_cell(reference, mutant, MIN_MEANINGFUL)
 
     assert cell.verdict == expected, f"verdict {cell.verdict}, expected {expected}: {cell.why}"
+
+
+def _failed_ids(values: dict[str, bool | None]) -> frozenset[str]:
+    """Return the questions of a signal that gave no result."""
+    return frozenset(case_id for case_id, value in values.items() if value is None)
+
+
+@pytest.mark.covers("US-019", "AC-6")
+@pytest.mark.parametrize(
+    ("reference", "mutant", "not_declared", "expected"),
+    [
+        pytest.param(
+            _answers(119, failed=1), _moved(lost=19, gained=0), "reference", "killed", id="a slip on the reference"
+        ),
+        pytest.param(_answers(120), _answers(118, failed=2), "mutant", "survived", id="slips on the mutant"),
+        pytest.param(_answers(120), _answers(110, failed=10), "none", "killed", id="failures the mutant declares"),
+    ],
+)
+def test_failures_the_mutant_does_not_declare_are_left_out_of_both_runs(
+    reference: dict[str, bool | None], mutant: dict[str, bool | None], not_declared: str, expected: CellVerdict
+) -> None:
+    """Judges a cell whose failed questions are marked as not declared by the mutant (a timeout, a real provider
+    error) on the reference or on the mutant, or are not marked (the mutant's own failures). Expects one slip on
+    the reference not to stop a loss of 19 questions from killing, two slips on an otherwise equal mutant to
+    survive, and ten failures the mutant declares to kill by errors as before.
+
+    What a pass tells: a question that failed for a reason of the stack is taken out of both runs and the rest is
+    judged. A failure points to judge in verdicts.py. Worth having because without it one timeout on the
+    reference leaves a whole column unreadable, and an outage during a mutant's run would kill that mutant.
+    """
+    measured = {
+        "reference": Measured(signals={"found": reference}, min_meaningful=MIN_MEANINGFUL),
+        "mutant": Measured(signals={"found": mutant}, min_meaningful=MIN_MEANINGFUL),
+    }
+    if not_declared != "none":
+        side = measured[not_declared]
+        failed = _failed_ids(reference if not_declared == "reference" else mutant)
+        measured[not_declared] = Measured(signals=side.signals, min_meaningful=MIN_MEANINGFUL, left_out=failed)
+
+    cell = judge(measured["reference"], measured["mutant"])
+
+    assert cell.verdict == expected, f"verdict {cell.verdict}, expected {expected}: {cell.why}"
+
+
+@pytest.mark.covers("US-019", "AC-6")
+def test_a_cell_with_more_than_five_percent_of_failures_not_declared_is_invalid() -> None:
+    """Judges a cell where 10 of 146 questions of the mutant run failed for a reason the mutant does not declare.
+    Expects the cell invalid and to say the stack was not healthy.
+
+    What a pass tells: a run in which the stack failed often is repeated, not judged on what was left. A failure
+    points to judge in verdicts.py. Worth having because an outage over part of a run would otherwise leave a
+    remnant of questions that may differ from the whole set, and the cell would read as a result.
+    """
+    mutant = _answers(110, failed=10)
+    reference = Measured(signals={"found": _answers(120)}, min_meaningful=MIN_MEANINGFUL)
+    measured = Measured(signals={"found": mutant}, min_meaningful=MIN_MEANINGFUL, left_out=_failed_ids(mutant))
+
+    cell = judge(reference, measured)
+
+    assert cell.verdict == "invalid" and "not healthy" in cell.why, f"cell: {cell}"

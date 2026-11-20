@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import JsonValue
 
-from evalharness.failures import CATEGORY, FailureLabel, classify
+from evalharness.failures import CATEGORY, FailureLabel, classify, search_label
 from evalharness.observation import Observation, TransportError
 from evalharness.proxy.ledger import LedgerLine, Source
 
@@ -147,3 +147,29 @@ def test_only_an_unusable_reply_is_a_model_failure() -> None:
     models = [label for label, category in CATEGORY.items() if category == "model"]
 
     assert models == ["unusable_reply"], f"labels counted as the model's answers: {models}"
+
+
+@pytest.mark.covers("US-019", "AC-6")
+@pytest.mark.parametrize(
+    ("error", "degraded_reason", "label"),
+    [
+        pytest.param(None, None, None, id="search-ran"),
+        pytest.param("timeout", None, "no_response", id="no-response-in-time"),
+        pytest.param("connect", None, "no_response", id="app-not-reached"),
+        pytest.param("course_not_searchable", None, "search_failed", id="app-cannot-search-the-course"),
+        pytest.param(None, "embedder_unavailable", "degraded_retrieval", id="search-without-its-embedder"),
+        pytest.param("http_500", None, "app_error", id="app-crashed"),
+    ],
+)
+def test_a_search_gets_the_label_of_its_cause_from_its_record(
+    error: str | None, degraded_reason: str | None, label: FailureLabel | None
+) -> None:
+    """Labels one search from what a retrieval or paraphrase record kept of it: its error and the reason for a
+    weaker path. One rule per row.
+
+    What a pass tells: the kill matrix can tell a search the stack failed (no response, a model server lost) from
+    the app's own answer about the course. A failure points to search_label in failures.py. Worth having because a
+    timeout read as the app's error would count against the mutant, and the app's refusal to search read as a slip
+    of the stack would take the mutant's own effect out of the comparison.
+    """
+    assert search_label(error, degraded_reason) == label, f"expected {label!r} for {error!r}, {degraded_reason!r}"

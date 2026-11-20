@@ -12,7 +12,7 @@ from evalharness.evaluation.answer_record import AnswerCaseRecord, AnswerRunReco
 from evalharness.evaluation.answer_run import ask_suffix
 from evalharness.failures import FailureLabel
 from evalharness.mutation.catalog import CatalogError, Mutant, load_catalog
-from evalharness.mutation.matrix import answer_problem, answer_signals, label_note
+from evalharness.mutation.matrix import answer_problem, answer_signals, label_note, not_declared_asks
 from evalharness.mutation.oracles import failure_label_check
 from evalharness.mutation.verdicts import Measured, judge, signal_cell
 from evalharness.oracles.answer import AnswerCaseScore, AnswerVerdict
@@ -313,3 +313,34 @@ async def test_the_failure_labels_refuse_when_the_answer_run_left_no_record(tmp_
 
     assert result.status == "refused", f"the check without an answer record was {result.status}"
     assert result.refusal is not None and "no_answer_record" in result.refusal, f"no reason given: {result.refusal}"
+
+
+@pytest.mark.covers("US-019", "AC-6")
+@pytest.mark.parametrize(
+    ("mutant", "calls", "label", "left_out"),
+    [
+        pytest.param(NO_MUTANT, (), "no_response", True, id="no response on a run without a mutant"),
+        pytest.param(NO_MUTANT, ("upstream",), "provider_error", True, id="a real provider error"),
+        pytest.param(RATE_LIMITED, ("fault",), "provider_error", False, id="the planted fault, labelled otherwise"),
+        pytest.param(RATE_LIMITED, (), "rate_limited", False, id="the label the mutant expects"),
+        pytest.param(NO_MUTANT, ("upstream",), "app_error", False, id="the app's own failure"),
+        pytest.param(NO_MUTANT, ("upstream",), "unusable_reply", False, id="the model's failure"),
+    ],
+)
+def test_an_ask_is_left_out_only_when_the_stack_failed_for_a_reason_the_mutant_does_not_declare(
+    mutant: Mutant, calls: tuple[Source, ...], label: FailureLabel, left_out: bool
+) -> None:
+    """Reads one failed ask of a run, on the run without a mutant or on a rate-limit mutant, with its label and the
+    sources of its model calls in the ledger. Expects it left out only for a failure of the infrastructure that is
+    neither the label the mutant expects nor a fault the proxy planted.
+
+    What a pass tells: the matrix tells a slip of the stack from the mutant's effect and from the app's behaviour.
+    A failure points to not_declared_asks or not_declared in matrix.py. Worth having because leaving out a planted
+    fault would turn the provider mutants' kills into "nothing to compare", and leaving out an app error would hide a
+    defect the mutant caused; counting a real outage would kill the mutant it met.
+    """
+    asks = [_ask("QA-01", 1, "failed", calls=calls, label=label), _ask("QA-02", 1, "cited_gold")]
+
+    found = not_declared_asks(asks, mutant)
+
+    assert found == (frozenset({"QA-01"}) if left_out else frozenset()), f"left out: {set(found)} for {label}"

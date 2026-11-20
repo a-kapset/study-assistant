@@ -11,7 +11,7 @@ from pydantic import HttpUrl, JsonValue
 
 from evalharness.datasets.qa_set import QaCase, QaSet, QaTargets
 from evalharness.evaluation.answer_record import AnswerRunRecord
-from evalharness.evaluation.answer_run import run, target_verdict
+from evalharness.evaluation.answer_run import ask_timeout_s, run, target_verdict
 from evalharness.evaluation.retrieval import RunRefused
 from evalharness.failures import FailureLabel
 from evalharness.oracles.answer import (
@@ -29,6 +29,15 @@ from evalharness.settings import HarnessSettings
 from evalharness.transport import REQUEST_ID_HEADER, SutTransport
 
 COURSE = "evalharness_course"
+# The part of GET /v1/config a run reads: the app's code and how long it waits for the servers it calls, as the
+# stack's .env sets them today.
+APP_SETTINGS: dict[str, JsonValue] = {
+    "git_commit": "evalharness_app",
+    "search": {"rerank": False, "max_k": 50},
+    "embedding_service": {"timeout_seconds": 30.0},
+    "rerank": {"timeout_seconds": 30.0},
+    "openai": {"timeout_seconds": 60.0},
+}
 # The gold section of the examples; "4.2.2" is one of its subsections, "4.20" only looks like one.
 GOLD = "4.2"
 TARGETS = QaTargets(answered_min=0.85, gold_cited_min=0.75, unsupported_answers_max=0)
@@ -265,7 +274,7 @@ class _App:
         """Answer a search or an ask of the fake course; the settings and readiness requests are answered but not
         remembered."""
         if request.url.path == "/v1/config":
-            return httpx2.Response(200, json={"app_version": "0.1.0", "settings": {"git_commit": "evalharness_app"}})
+            return httpx2.Response(200, json={"app_version": "0.1.0", "settings": APP_SETTINGS})
         if request.url.path == "/ready":
             return httpx2.Response(200, json={"status": self._ready, "checks": {"db": "ok", "embedder": "ok"}})
         request_id = request.headers[REQUEST_ID_HEADER]
@@ -456,7 +465,7 @@ async def test_a_failed_ask_is_recorded_with_the_label_its_model_calls_give() ->
     def app(request: httpx2.Request) -> httpx2.Response:
         """Serve the settings, the readiness and a search; fail the ask the way the app does after a rate limit."""
         if request.url.path == "/v1/config":
-            return httpx2.Response(200, json={"settings": {"git_commit": "evalharness_app"}})
+            return httpx2.Response(200, json={"settings": APP_SETTINGS})
         if request.url.path == "/ready":
             return httpx2.Response(200, json={"status": "ok", "checks": {"db": "ok", "embedder": "ok"}})
         if request.url.path == "/v1/search":
@@ -501,7 +510,7 @@ async def test_a_question_declined_on_a_search_without_the_embedder_is_a_failure
     def app(request: httpx2.Request) -> httpx2.Response:
         """Serve the settings, the readiness and a search; decline every ask for a search by words only."""
         if request.url.path == "/v1/config":
-            return httpx2.Response(200, json={"settings": {"git_commit": "evalharness_app"}})
+            return httpx2.Response(200, json={"settings": APP_SETTINGS})
         if request.url.path == "/ready":
             return httpx2.Response(200, json={"status": "ok", "checks": {"db": "ok", "embedder": "ok"}})
         if request.url.path == "/v1/search":
@@ -545,3 +554,65 @@ async def test_an_answer_run_on_a_degraded_stack_is_refused_before_the_first_que
     assert (refused.value.code, app.requests) == ("stack_not_ready", []), (
         f"a degraded stack gave {refused.value.code} after the requests {app.requests}"
     )
+
+
+@pytest.mark.covers("US-019", "AC-5")
+@pytest.mark.parametrize(
+    ("rerank", "expected_s"),
+    [
+        # 3 attempts of 30 s (embedding) and 60 s (model), 4 pauses of up to 120 s, 30 s of the app's own work.
+        pytest.param(False, 3 * (30 + 60) + 4 * 120 + 30, id="search without rerank"),
+        # The same, and two requests of 30 s to the rerank server for at most 50 passages in batches of 32.
+        pytest.param(True, 3 * (30 + 60) + 4 * 120 + 30 + 2 * 30, id="search with rerank"),
+    ],
+)
+def test_an_ask_waits_longer_than_the_app_may_take_with_every_attempt(rerank: bool, expected_s: float) -> None:
+    """Computes the wait for one ask from the app's settings as GET /v1/config reports them, with the reranker off
+    and on. Expects every attempt of the embedding call and of the model call with its timeout, the longest pause
+    between attempts, the rerank requests when rerank is on, and the margin for the app's own work.
+
+    What a pass tells: the harness waits for the app's own answer, a reply or its typed error after the last
+    attempt, so a slow but normal answer is not recorded as "no response". A failure points to ask_timeout_s in
+    answer_run.py. Worth having because a wait of 10 s against 60 s per model call turned two slow answers of a
+    live experiment into failures of the stack and left a cell of the kill matrix unreadable.
+    """
+    settings: dict[str, JsonValue] = {**APP_SETTINGS, "search": {"rerank": rerank, "max_k": 50}}
+
+    waited = ask_timeout_s(settings)
+
+    assert waited == expected_s, f"an ask waits {waited} s; the app may take up to {expected_s} s before it answers"
+
+
+@pytest.mark.covers("US-019", "AC-5")
+async def test_every_ask_is_sent_with_the_wait_computed_from_the_apps_settings() -> None:
+    """Runs one question against the fake app and reads the read timeout each request was sent with. Expects the
+    ask to wait as long as ask_timeout_s gives for the app's settings, and the search to keep the usual wait.
+
+    What a pass tells: the computed wait reaches the ask on the wire. A failure points to run in answer_run.py or
+    to request in transport.py: the run would still give up on the app after the usual 10 s. Worth having because
+    the computed number alone protects nothing if no request carries it.
+    """
+    waits: dict[str, float | None] = {}
+    fake = _App([])
+
+    def app(request: httpx2.Request) -> httpx2.Response:
+        """Remember the read timeout of the search and the ask, then answer as the fake app does."""
+        waits[request.url.path] = request.extensions["timeout"]["read"]
+        return fake(request)
+
+    settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
+    async with SutTransport(settings, transport=httpx2.MockTransport(app)) as sut:
+        await run(
+            _qa(("QA-1", GOLD)),
+            sut,
+            _Corpus({GOLD}),
+            list,
+            qa_file="evalharness_qa.toml",
+            qa_bytes=b"evalharness",
+            harness_commit="evalharness_commit",
+            harness_dirty=False,
+        )
+
+    expected = {"/v1/search": settings.request_timeout_s, "/v1/ask": ask_timeout_s(APP_SETTINGS)}
+    sent = {path: waits.get(path) for path in expected}
+    assert sent == expected, f"requests were sent with the waits {sent}, expected {expected}"

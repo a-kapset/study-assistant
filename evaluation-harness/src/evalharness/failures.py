@@ -11,11 +11,11 @@ failure of the stack. A search that lost only its rerank server leaves no mark i
 """
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from evalharness.observation import Observation
+from evalharness.observation import Observation, TransportError
 from evalharness.proxy.ledger import LedgerLine
 
 type FailureLabel = Literal[
@@ -110,6 +110,20 @@ def classify(observation: Observation, calls: Sequence[LedgerLine]) -> FailureLa
     if code == "llm_failed" and last is not None:
         return _model_call_label(last)
     return "app_error"
+
+
+def search_label(error: str | None, degraded_reason: str | None) -> FailureLabel | None:
+    """Label one search from what a run record kept of it: its error (a transport error, the app's code or
+    "http_<status>") and the reason the app gave for answering on a weaker path.
+
+    Returns None for a search that ran on its configured path. A search answered without one of its model servers
+    is labelled "degraded_retrieval" whichever server it lost: a run reads no result from it.
+    """
+    if error is None:
+        return "degraded_retrieval" if degraded_reason is not None else None
+    if error in get_args(TransportError.__value__):
+        return "no_response"
+    return "search_failed" if error in _SEARCH_CODES else "app_error"
 
 
 def _app_code(observation: Observation) -> str | None:

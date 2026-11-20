@@ -82,7 +82,7 @@ Settings are read from environment variables when a run starts.
 | Variable | Default | Meaning |
 |---|---|---|
 | `EVAL_SUT_BASE_URL` | `http://127.0.0.1:8000` | Root URL of the system under test; request paths are joined to it |
-| `EVAL_REQUEST_TIMEOUT_S` | `10.0` | Per-request timeout in seconds (must be greater than 0) |
+| `EVAL_REQUEST_TIMEOUT_S` | `10.0` | Per-request timeout in seconds (must be greater than 0); an ask of an answer run waits longer, as long as the app may take with every attempt of its calls (from the timeouts at `GET /v1/config`, 13 minutes with the stack's `.env`) |
 | `EVAL_STACK_ENV_FILE` | `../.env` | The `.env` file the stack under test runs with |
 | `EVAL_DB_HOST` | `127.0.0.1` | Host on which the stack publishes its database port |
 | `EVAL_PROXY_LEDGER_FILE` | `runs/proxy_ledger.jsonl` | The ledger of the LLM proxy on this machine, read by the api tests |
@@ -407,7 +407,9 @@ spot (a kill was expected and did not come), an unexpected kill, or not aimed at
 the stage the mutant makes faulty or inherited from an earlier one. The last run without a mutant is judged the same
 way: a kill there is a false alarm. Under the matrix each check is summed up by the expected kills it made, its false
 alarms, the mutants only it caught, and whether it calls a model. Runs of another catalog version, harness commit or
-first app state are refused.
+first app state are refused. A question the stack failed on in either run for a reason the mutant does not declare
+(no response, a real provider error) is left out of both runs and named in the cell; when such questions are more
+than 5 % of a check's questions, the cell is invalid and the run should be repeated.
 
 ## Running the tests
 

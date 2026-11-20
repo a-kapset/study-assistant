@@ -58,14 +58,20 @@ class SutTransport:
         json: JsonValue | None = None,
         headers: Mapping[str, str] | None = None,
         request_id_suffix: str = "",
+        timeout_s: float | None = None,
     ) -> Observation:
         """Send one request and record what happened; never raises for an outcome of the exchange.
 
         ``request_id_suffix`` is appended to the new request id; a repeated answer run marks its repetition there.
+        ``timeout_s`` replaces the usual wait for this request only: an ask may take the app much longer than a search.
         """
         request_id = uuid.uuid4().hex + request_id_suffix
         request = self._client.build_request(
-            method, path, json=json, headers={**(headers or {}), REQUEST_ID_HEADER: request_id}
+            method,
+            path,
+            json=json,
+            headers={**(headers or {}), REQUEST_ID_HEADER: request_id},
+            timeout=timeout_s if timeout_s is not None else httpx2.USE_CLIENT_DEFAULT,
         )
         log = self._log.bind(request_id=request_id, method=request.method, url=str(request.url))
         log.info("request", json=json)

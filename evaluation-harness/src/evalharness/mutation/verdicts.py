@@ -12,6 +12,9 @@ real loss.
   direction: a mutant that makes a number better also changed what the app does.
 - A check made of tests is killed by a test that failed on the mutant and passed on the reference.
 - A check that refuses to measure on the mutant noticed it: it saw that the app is not in a state it can measure.
+- A question that failed in either run for a reason of the stack the mutant does not declare (no response, a real
+  provider error, a search without its model server) measured nothing about the mutant: it is left out of both runs.
+  When such questions are more than a few, the stack was not healthy and the cell cannot be read.
 """
 
 from collections.abc import Mapping
@@ -26,8 +29,9 @@ from evalharness.stats.paired import change_verdict, paired_change
 # reference cannot be compared). "not_applicable": the run made no such check.
 type CellVerdict = Literal["killed", "survived", "underpowered", "invalid", "not_applicable"]
 
-# Above this share of failed searches a mutant is killed by its errors; at or under it, a few failed searches look
-# like a slip of the network, and the cell is invalid until the run is repeated.
+# Above this share of failed questions a mutant is killed by its errors; at or under it, a few failed questions look
+# like a slip of the network, and the cell is invalid until the run is repeated. Questions that failed for a reason
+# the mutant does not declare are left out up to the same share; above it the stack itself was not healthy.
 FAILED_SHARE_KILLS = 0.05
 
 # Which verdict of several signals of one check stands for the check: a kill by any signal is a kill.
@@ -63,6 +67,8 @@ class Measured:
     # A note added to the cell's reason, and whether the failure labels name the expected one (None: not asked).
     note: str = ""
     named: bool | None = None
+    # Questions or pairs that failed for a reason of the stack the mutant does not declare: left out of the comparison.
+    left_out: frozenset[str] = frozenset()
 
 
 def judge(reference: Measured, mutant: Measured) -> Cell:
@@ -86,13 +92,27 @@ def _judge(reference: Measured, mutant: Measured) -> Cell:
         return relation_cell(reference.tests or {}, mutant.tests or {})
     if mutant.signals is None or reference.signals is None:
         return Cell("invalid", "the two runs did not measure the same thing")
+    left_out = reference.left_out | mutant.left_out
+    cases = {case_id for values in (*reference.signals.values(), *mutant.signals.values()) for case_id in values}
+    if cases and len(left_out) / len(cases) > FAILED_SHARE_KILLS:
+        why = f"{len(left_out)} of {len(cases)} questions failed for a reason the mutant does not declare"
+        return Cell("invalid", f"{why}: the stack was not healthy; repeat the run")
     cells = {
-        name: signal_cell(reference.signals.get(name, {}), values, mutant.min_meaningful)
+        name: signal_cell(
+            _without(reference.signals.get(name, {}), left_out), _without(values, left_out), mutant.min_meaningful
+        )
         for name, values in mutant.signals.items()
     }
     verdict = max((cell.verdict for cell in cells.values()), key=_RANK.__getitem__)
     why = "; ".join(f"{name}: {cell.why}" for name, cell in cells.items() if cell.verdict == verdict)
+    if left_out:
+        why += f"; {len(left_out)} question(s) left out of both runs: {', '.join(sorted(left_out))}"
     return Cell(verdict, why)
+
+
+def _without(values: Mapping[str, float | None], left_out: frozenset[str]) -> dict[str, float | None]:
+    """Return the values of a signal without the questions left out of the comparison."""
+    return {case_id: value for case_id, value in values.items() if case_id not in left_out}
 
 
 def signal_cell(

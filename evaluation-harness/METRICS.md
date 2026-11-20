@@ -507,6 +507,7 @@ how a run counts the case (see the validity rules of each run above).
 |---|---|---|
 | `no_response` | no response from the app (connection refused, timeout) | infrastructure |
 | `search_failed` | the app's code is `embedding_failed`, `embedding_unavailable` or `course_not_searchable` | infrastructure |
+| `degraded_retrieval` | status 200, declined with `search_degraded`: the search ran by words only, without the embedding server | infrastructure |
 | `provider_unreachable` | the app's code is `llm_unavailable` | infrastructure |
 | `rate_limited` | `llm_failed`, the last call got 429 with another code than the money codes below | infrastructure |
 | `budget_exceeded` | `llm_failed`, the last call got 429 with a money code of the provider: `project_spend_limit_exceeded`, `organization_spend_limit_exceeded`, `organization_usage_limit_exceeded`, `credit_balance_exhausted` or the older `insufficient_quota` | infrastructure |
@@ -518,6 +519,11 @@ how a run counts the case (see the validity rules of each run above).
 | `error_as_answer` | status 200, but the last model call of the request failed | app |
 
 A successful response whose model calls ended in a reply has no label.
+
+A search of a retrieval or paraphrase run is labelled from what its record kept: no response → `no_response`; one
+of the three search codes above → `search_failed`; a search answered on a weaker path (without the embedding server
+or without the rerank server) → `degraded_retrieval`; any other error → `app_error`. The kill matrix uses these
+labels to leave out failures of the stack (see [Kill matrix](#kill-matrix)).
 
 ## Comparison of two runs
 
@@ -939,7 +945,8 @@ the labels name it: at least one ask was labelled and every labelled ask carries
 
 where
 
-- $n$ — the number of questions (pairs) of the check, the same in both runs;
+- $n$ — the number of questions (pairs) of the check, the same in both runs, without the questions left out
+  (see below);
 - $`s_i^{m}`$ — the signal of question $i$ in the mutant run $m$;
 - $`s_i^{r}`$ — the signal of question $i$ in the reference run $r$;
 - $[L, U]$ — the 95 % bootstrap interval of $\Delta$ over the per-question differences, as in
@@ -972,8 +979,25 @@ Before the signals are read:
 
 - a check that refused to measure on the mutant is **killed by refusal** (it saw that the app is not in a state it
   can measure); a refusal on the reference makes the cell **invalid**;
-- searches without a result: a share $f$ of the mutant's questions above 0.05, with none on the reference, is
-  **killed by errors**; any other failed search makes the cell **invalid** (repeat the run);
+- questions the stack failed on are left out of both runs, and above a share of 0.05 the cell is **invalid**:
+
+  ```math
+  \frac{|O|}{N} > 0.05 \;\Rightarrow\; \text{invalid}, \qquad \text{else } n = N - |O|
+  ```
+
+  where
+
+  - $O$ — the questions (pairs) that failed, in the reference or in the mutant run, for a reason of the stack the
+    mutant does not declare: a failure label of the category infrastructure (see [Failure labels](#failure-labels))
+    that is not the mutant's expected label and, for an ask, did not come from the fault the proxy planted (a ledger
+    line with source `fault`); in the reference every such failure is in $O$; a pair is in $O$ when either of its
+    searches is;
+  - $|O|$ — the number of questions in $O$;
+  - $N$ — the number of questions (pairs) of the check;
+  - $n$ — the number of questions the signals are compared on;
+- the other questions without a result (the mutant's own failures: its expected label, a planted fault, an app or
+  a model failure): a share $f$ of the mutant's questions above 0.05, with none on the reference, is
+  **killed by errors**; any other such failure makes the cell **invalid** (repeat the run);
 - a run whose mutant was not proven live, or whose app was not proven back, gives **invalid** cells only; a valid
   run without a result of the check gives **not applicable**;
 - an answer run in which a model call was served from a recording, or, for a provider fault, in which an ask made no
@@ -994,6 +1018,14 @@ were made up): the kills among the mutants it was expected to notice, its false 
 a mutant, the mutants only it killed, and whether it calls a model.
 
 ## Changes
+
+- **2026-11-20 — failures of the stack left out of the kill matrix.** New: the set $O$ of questions the stack failed
+  on for a reason the mutant does not declare, left out of both runs, and the cell invalid above $|O| / N = 0.05$;
+  labels of searches from their records; the row `degraded_retrieval` of the failure labels (in use since
+  2026-11-14, missing here). Changed: "killed by errors" counts only the mutant's own failures; before, every failed
+  question counted, and a failure on the reference made the cell invalid. Experiment `8f173c22` judged again: two
+  cells changed (`lowest_score_0_88` × answer run invalid → killed; `ask_ungrounded` × answer run gains its
+  "declined" signal), no other verdict changed.
 
 - **2026-11-19 — answer checks in the kill matrix.** New: the answer run's three signals
   $`s_i^{\text{gold}}`$, $`s_i^{\text{decl}}`$, $`s_i^{\text{chg}}`$ over $k$ asks, the failure-label signal and the

@@ -26,6 +26,7 @@ from evalharness.datasets.retrieval_gold import load_declaration
 from evalharness.evaluation.answer_record import AnswerCaseRecord, AnswerRunRecord
 from evalharness.evaluation.paraphrase_record import ParaphraseRunRecord
 from evalharness.evaluation.record import PassResult, RunRecord
+from evalharness.failures import CATEGORY, FailureLabel, search_label
 from evalharness.mutation.catalog import CheckName, Component, Mutant
 from evalharness.mutation.record import RECORD_FILE, CheckResult, MutantRunRecord
 from evalharness.mutation.verdicts import Cell, Measured, judge
@@ -279,7 +280,8 @@ def read_measured(name: CheckName, result: CheckResult, folder: Path, mutant: Mu
         # The signal's name says what is counted, so a cell reads without the code: "+3, -5" are questions that
         # began and stopped finding their section.
         signals = {"questions finding their section": found}
-        return Measured(signals=signals, min_meaningful=comparison.min_meaningful_change)
+        left_out = frozenset(case.case_id for case in run.cases if _search_not_declared(case.passes["primary"], mutant))
+        return Measured(signals=signals, min_meaningful=comparison.min_meaningful_change, left_out=left_out)
     if name == "paraphrase":
         pairs = ParaphraseRunRecord.model_validate_json(content)
         rules = load_paraphrase_set(Path(pairs.pair_file)).rules
@@ -292,7 +294,13 @@ def read_measured(name: CheckName, result: CheckResult, folder: Path, mutant: Mu
             lost[pair.case_id] = primary.outcome.found == "lost" if measured else None
             stable[pair.case_id] = (overlap is not None and overlap >= rules.min_overlap) if measured else None
         signals = {"pairs whose rewording loses the section": lost, "pairs with a stable top k": stable}
-        return Measured(signals=signals, min_meaningful=rules.min_meaningful_change)
+        left_out = frozenset(
+            pair.case_id
+            for pair in pairs.pairs
+            if _search_not_declared(pair.passes["primary"].question, mutant)
+            or _search_not_declared(pair.passes["primary"].rewording, mutant)
+        )
+        return Measured(signals=signals, min_meaningful=rules.min_meaningful_change, left_out=left_out)
     if name in ("answer_run", "failure_labels"):
         answers = AnswerRunRecord.model_validate_json(content)
         qa_comparison = load_qa_set(Path(answers.qa_file)).comparison
@@ -302,9 +310,13 @@ def read_measured(name: CheckName, result: CheckResult, folder: Path, mutant: Mu
         for case in answers.cases:
             by_case[case.case_id].append(case)
         problem = answer_problem(answers, mutant)
+        left_out = not_declared_asks(answers.cases, mutant)
         if name == "answer_run":
             return Measured(
-                signals=answer_signals(by_case), min_meaningful=qa_comparison.min_meaningful_change, problem=problem
+                signals=answer_signals(by_case),
+                min_meaningful=qa_comparison.min_meaningful_change,
+                problem=problem,
+                left_out=left_out,
             )
         labelled: dict[str, float | None] = {
             case_id: fmean(float(ask.failure_label is not None) for ask in asks) for case_id, asks in by_case.items()
@@ -316,6 +328,7 @@ def read_measured(name: CheckName, result: CheckResult, folder: Path, mutant: Mu
             problem=problem,
             note=note,
             named=named,
+            left_out=left_out,
         )
     raise MatrixRefused(f"{folder.name}: no reader for the check {name}")
 
@@ -341,6 +354,26 @@ def answer_signals(by_case: Mapping[str, Sequence[AnswerCaseRecord]]) -> dict[st
         "unanswerable questions declined": declined,
         "questions whose verdict changed between asks": unstable,
     }
+
+
+def not_declared(label: FailureLabel | None, mutant: Mutant, planted: bool = False) -> bool:
+    """Whether a failure is a fault of the stack that the mutant does not declare, so it measured nothing about the
+    mutant: a failure of the infrastructure whose label is not the one the mutant expects, and which did not come from
+    a fault the proxy planted (``planted``). Failures of the app and of the model are the app's behaviour and count."""
+    return label is not None and CATEGORY[label] == "infrastructure" and label != mutant.expected_label and not planted
+
+
+def not_declared_asks(cases: Sequence[AnswerCaseRecord], mutant: Mutant) -> frozenset[str]:
+    """Return the questions of an answer run with at least one ask that failed for a reason the mutant does not
+    declare; the ledger says whether an ask's model calls got the planted fault."""
+    return frozenset(
+        case.case_id for case in cases if not_declared(case.failure_label, mutant, planted="fault" in case.model_calls)
+    )
+
+
+def _search_not_declared(result: PassResult, mutant: Mutant) -> bool:
+    """Whether one search of a run failed for a reason of the stack the mutant does not declare."""
+    return not_declared(search_label(result.error, result.degraded_reason), mutant)
 
 
 def answer_problem(answers: AnswerRunRecord, mutant: Mutant) -> str | None:

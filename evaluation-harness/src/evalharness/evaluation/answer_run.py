@@ -17,16 +17,17 @@ import argparse
 import asyncio
 import hashlib
 import logging
+import math
 import subprocess
 import sys
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from evalharness.corpus_db import CorpusReader
 from evalharness.datasets.qa_set import QaSet, QaTargets, load_qa_set
@@ -92,6 +93,57 @@ class _ErrorEnvelope(BaseModel):
     error: _ErrorBody
 
 
+# How many times the app tries one call to the embedding server or to the model: its clients repeat a failed call
+# twice. This is a constant of the app's code, not one of its settings, so the harness can only assume it.
+_APP_ATTEMPTS = 3
+# The longest pause the app's clients make between two attempts: the openai client waits as long as the server asks
+# for, up to two minutes; without such a request it waits 8 s at most.
+_LONGEST_PAUSE_S = 120.0
+# Passages the app sends to the rerank server in one request; each request is made once.
+_RERANK_BATCH = 32
+# The app's own work around its calls: the database and the network between the containers.
+_APP_WORK_S = 30.0
+
+
+class _CallTimeout(BaseModel):
+    """How long the app waits for one call to a server it uses."""
+
+    model_config = ConfigDict(extra="ignore")
+    timeout_seconds: float
+
+
+class _SearchPath(BaseModel):
+    """Whether the app's search asks the rerank server, and for how many passages at most."""
+
+    model_config = ConfigDict(extra="ignore")
+    rerank: bool
+    max_k: int
+
+
+class _AskBudget(BaseModel):
+    """The settings of GET /v1/config that decide how long one ask may take the app."""
+
+    model_config = ConfigDict(extra="ignore")
+    search: _SearchPath
+    embedding_service: _CallTimeout
+    rerank: _CallTimeout
+    openai: _CallTimeout
+
+
+def ask_timeout_s(app_settings: Mapping[str, JsonValue]) -> float:
+    """Return how long to wait for one ask: longer than the app may take before it answers by itself.
+
+    An ask embeds the question, may rerank the passages, and calls the model once; the embedding server and the
+    model get every attempt with its own timeout and the longest pause between attempts. A shorter wait turns a slow
+    answer, or the app's own error after its last attempt, into "no response" (seen: 10 s against 60 s per model call).
+    """
+    budget = _AskBudget.model_validate(app_settings)
+    calls = _APP_ATTEMPTS * (budget.embedding_service.timeout_seconds + budget.openai.timeout_seconds)
+    pauses = 2 * (_APP_ATTEMPTS - 1) * _LONGEST_PAUSE_S
+    batches = math.ceil(budget.search.max_k / _RERANK_BATCH) if budget.search.rerank else 0
+    return calls + pauses + batches * budget.rerank.timeout_seconds + _APP_WORK_S
+
+
 def check_gold_sections(qa: QaSet, section_ids: set[str]) -> None:
     """Refuse the run when a gold section of the set is not a section of the stored course.
 
@@ -134,6 +186,7 @@ async def run(
     check_gold_sections(qa, corpus.section_ids(qa.course_id))
     snapshot = corpus.snapshot(qa.course_id)
     app_settings = await read_app_settings(sut)
+    ask_timeout = ask_timeout_s(app_settings)
     await check_ready(sut)
     searched = {}
     for case in qa.cases:
@@ -148,6 +201,7 @@ async def run(
                 "/v1/ask",
                 json={"course_id": qa.course_id, "question": case.question},
                 request_id_suffix=ask_suffix(repetition, fresh, fault),
+                timeout_s=ask_timeout,
             )
             asked.append((repetition, case, answered))
     calls: defaultdict[str, list[LedgerLine]] = defaultdict(list)
