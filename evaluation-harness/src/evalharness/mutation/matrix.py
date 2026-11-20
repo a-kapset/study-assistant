@@ -1,14 +1,17 @@
 """Command that builds the kill matrix of one experiment from its mutant run records: which check noticed which mutant.
 
     poetry run python -m evalharness.mutation.matrix <experiment id>
+    poetry run python -m evalharness.mutation.matrix <experiment id> --attribution <attribution experiment id>
 
 Run it from evaluation-harness/, like the mutant runs (the records name their dataset files relative to it). Every
 cell is a mutant and a check, judged against the experiment's first run without a mutant (the reference) by the rule
 of verdicts.py. A cell is marked by what the catalog expected before the first run: an expected kill, a blind spot (a
 kill was expected and did not come), an unexpected kill, or not aimed at. Later runs without a mutant are judged the
 same way, and a kill there is a false alarm. Under the matrix, every check is summed up by the mutants it was expected
-to notice and did, its false alarms, the mutants only it noticed, and whether it costs model calls. Exit code 0 when
-the matrix was built; 2 when the records cannot make one matrix.
+to notice and did, its false alarms, the mutants only it noticed, and whether it costs model calls. Below that comes
+the stage the request traces name for each mutant (attribution.py), read from the answer records of the experiment
+named by --attribution, or of the judged experiment itself when its answer records hold the stages of their asks. Exit
+code 0 when the matrix was built; 2 when the records cannot make one matrix.
 """
 
 import argparse
@@ -27,9 +30,18 @@ from evalharness.evaluation.answer_record import AnswerCaseRecord, AnswerRunReco
 from evalharness.evaluation.paraphrase_record import ParaphraseRunRecord
 from evalharness.evaluation.record import PassResult, RunRecord
 from evalharness.failures import CATEGORY, FailureLabel, search_label
+from evalharness.mutation.attribution import (
+    AskOutcome,
+    Attribution,
+    AttributionVerdict,
+    accuracy,
+    ask_outcomes,
+    attribute,
+)
 from evalharness.mutation.catalog import CheckName, Component, Mutant
 from evalharness.mutation.record import RECORD_FILE, CheckResult, MutantRunRecord
 from evalharness.mutation.verdicts import Cell, Measured, judge
+from evalharness.stages import STAGES
 
 RUNS_DIR = Path("runs/mutants")
 
@@ -66,6 +78,26 @@ _CHECK_ORDER: tuple[CheckName, ...] = get_args(CheckName.__value__)
 
 # Reads what one check gave in one run from its result, given the folder of that run and the run's mutant.
 type Reader = Callable[[CheckName, CheckResult, Path, Mutant], Measured]
+
+
+@dataclass(frozen=True)
+class AttributedRun:
+    """One run of the attribution experiment and what its asks name; no attribution for a run that is not valid."""
+
+    run: Run
+    attribution: Attribution | None
+    why_not: str = ""
+
+
+@dataclass(frozen=True)
+class AttributionTable:
+    """The stage named for every run of one experiment, against the experiment's first run without a mutant."""
+
+    experiment_id: str
+    # Asks of the runs without a mutant after the first that named a stage (the most of them): the differences the
+    # app shows on its own.
+    noise: int
+    rows: tuple[AttributedRun, ...]
 
 
 class MatrixRefused(ValueError):
@@ -139,13 +171,23 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument(
         "--runs-dir", type=Path, default=RUNS_DIR, help=f"where the mutant runs are (default {RUNS_DIR})"
     )
+    parser.add_argument(
+        "--attribution",
+        metavar="EXPERIMENT_ID",
+        help="read the stages the traces name from this experiment of the same catalog (default: the judged one)",
+    )
     args = parser.parse_args(argv)
     try:
-        matrix = build_matrix(load_experiment(args.runs_dir, args.experiment_id), read_measured)
+        runs = load_experiment(args.runs_dir, args.experiment_id)
+        matrix = build_matrix(runs, read_measured)
+        attributed = runs if args.attribution is None else load_experiment(args.runs_dir, args.attribution)
+        table = build_attribution(attributed, matrix) if has_stages(attributed) else None
     except MatrixRefused as error:
         print(f"refused: {error}", file=sys.stderr)
         return 2
     print(render(matrix))
+    print()
+    print(render_attribution(table) if table is not None else "stage named by the traces: no traces in the records")
     return 0
 
 
@@ -333,6 +375,66 @@ def read_measured(name: CheckName, result: CheckResult, folder: Path, mutant: Mu
     raise MatrixRefused(f"{folder.name}: no reader for the check {name}")
 
 
+def build_attribution(runs: Sequence[Run], matrix: Matrix) -> AttributionTable:
+    """Name the stage the traces point to for every run of an experiment, against its first run without a mutant.
+
+    Refused when the experiment is not of the matrix's catalog version or app commit: its mutants would not be the
+    mutants of the matrix's rows, though they have the same ids.
+    """
+    reference_record = matrix.reference.record
+    for run in runs:
+        for field, ours, theirs in (
+            ("catalog", run.record.catalog_sha256, reference_record.catalog_sha256),
+            ("app commit", run.record.app_settings.get("git_commit"), reference_record.app_settings.get("git_commit")),
+        ):
+            if ours != theirs:
+                raise MatrixRefused(f"the attribution runs differ from the matrix in the {field}: {ours} != {theirs}")
+    no_mutant = [run for run in runs if run.record.mutant.kind == "baseline"]
+    if not no_mutant or no_mutant[0].record.problem() is not None:
+        raise MatrixRefused("the attribution experiment has no valid first run without a mutant")
+    reference = no_mutant[0]
+    reference_cases = _answer_cases(reference)
+    if reference_cases is None:
+        raise MatrixRefused("the first run without a mutant of the attribution experiment has no answer record")
+
+    def outcomes(run: Run) -> list[AskOutcome] | None:
+        """What every ask of the run names, or None when the run is not valid or has no answer record."""
+        cases = _answer_cases(run) if run.record.problem() is None else None
+        if cases is None:
+            return None
+        return ask_outcomes(cases, reference_cases)
+
+    later = [outcomes(run) for run in no_mutant[1:]]
+    noise = max((sum(outcome in STAGES for outcome in found) for found in later if found is not None), default=0)
+    rows = []
+    for run in runs:
+        if run is reference:
+            continue
+        found = outcomes(run)
+        if found is None:
+            problem = run.record.problem()
+            rows.append(AttributedRun(run, None, f"run {problem}" if problem else "no answer record"))
+        else:
+            rows.append(AttributedRun(run, attribute(found, noise, run.record.mutant.component)))
+    return AttributionTable(runs[0].record.experiment_id or "", noise, tuple(rows))
+
+
+def has_stages(runs: Sequence[Run]) -> bool:
+    """Whether the first run without a mutant kept the stages of its asks: records made before traces were read keep
+    none, and a column built from them would read as "nothing differs"."""
+    first = next((run for run in runs if run.record.mutant.kind == "baseline"), None)
+    cases = _answer_cases(first) if first is not None else None
+    return cases is not None and any(case.stages is not None for case in cases)
+
+
+def _answer_cases(run: Run) -> tuple[AnswerCaseRecord, ...] | None:
+    """Return the asks of the run's answer record, or None when the run made no answer run or it was refused."""
+    result = run.record.checks.get("answer_run")
+    if result is None or result.status != "ran" or result.result_file is None:
+        return None
+    return AnswerRunRecord.model_validate_json((run.folder / result.result_file).read_bytes()).cases
+
+
 def answer_signals(by_case: Mapping[str, Sequence[AnswerCaseRecord]]) -> dict[str, dict[str, float | None]]:
     """Return the three signals of an answer run per question, each the share of its asks: answerable questions
     answered with the gold section, unanswerable ones declined, and questions whose verdict was not the same in
@@ -455,6 +557,37 @@ def render(matrix: Matrix) -> str:
                 else ""
             )
         )
+    return "\n".join(lines)
+
+
+def render_attribution(table: AttributionTable) -> str:
+    """Write the stage named for every run, its verdict against the faulty part, how its asks split, and the share of
+    mutants attributed to their own stage per part with its interval."""
+    lines = [
+        f"stage named by the traces, experiment {table.experiment_id[:8]}; asks naming a stage without a mutant "
+        f"(noise): {table.noise}",
+    ]
+    verdicts: list[tuple[Component, AttributionVerdict]] = []
+    for row in table.rows:
+        record = row.run.record
+        component = record.mutant.component
+        if row.attribution is None:
+            lines.append(f"  {record.mutant_id:<24} {component or '-':<10} invalid: {row.why_not}")
+            continue
+        asks = ", ".join(f"{outcome} {n}" for outcome, n in sorted(row.attribution.counts.items()))
+        # A run without a mutant has no faulty part: only the stage its asks name is shown.
+        shown = "-" if component is None else row.attribution.verdict
+        lines.append(f"  {record.mutant_id:<24} {component or '-':<10} {row.attribution.stage:<13} {shown:<17} {asks}")
+        if component is not None:
+            verdicts.append((component, row.attribution.verdict))
+    parts = []
+    for part, share in accuracy(verdicts).items():
+        if share.interval is None:
+            parts.append(f"{part} n/a")
+        else:
+            interval = f"{share.interval.low:.2f}-{share.interval.high:.2f}"
+            parts.append(f"{part} {share.right} of {share.counted} ({interval})")
+    lines.append("attributed to the faulty part (mutants, 95% CI): " + "; ".join(parts))
     return "\n".join(lines)
 
 

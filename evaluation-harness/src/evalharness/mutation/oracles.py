@@ -25,6 +25,7 @@ from evalharness.mutation.catalog import AnswerCheck, Catalog, CheckName, Mutant
 from evalharness.mutation.record import CheckResult, TestOutcome
 from evalharness.proxy.ledger import read_ledger
 from evalharness.settings import HarnessSettings, StackSettings
+from evalharness.traces import TraceReader
 from evalharness.transport import SutTransport
 
 # A check takes the folder of the mutant run and the mutant, leaves its result there and says how it went. Only the
@@ -41,10 +42,28 @@ _RELATION_SEED = 0
 
 
 def build_checks(
-    catalog: Catalog, settings: HarnessSettings, stack: StackSettings, harness_commit: str, harness_dirty: bool
+    catalog: Catalog,
+    settings: HarnessSettings,
+    stack: StackSettings,
+    harness_commit: str,
+    harness_dirty: bool,
+    attribution: bool = False,
 ) -> dict[CheckName, Check]:
     """Prepare every check the catalog makes, reading its files now: a gold set, pair file or test file that cannot
-    be used stops the command before the app is changed. Raises what the dataset loaders raise."""
+    be used stops the command before the app is changed. Raises what the dataset loaders raise.
+
+    With ``attribution`` only the answer run is made, its asks not marked fresh: the run is read for the stages its
+    traces name, not judged, and the proxy may answer from its recordings, so it needs no paid model call. A planted
+    provider fault is still answered by the proxy itself.
+    """
+    if attribution:
+        if catalog.checks.answer_run is None:
+            raise ValueError("the catalog makes no answer run, whose traces the attribution reads")
+        answer = catalog.checks.answer_run
+        qa = load_qa_set(answer.qa)
+        return {
+            "answer_run": _answer_check(qa, answer, settings, stack, harness_commit, harness_dirty, traces_only=True)
+        }
     checks: dict[CheckName, Check] = {}
     if catalog.checks.retrieval_gold is not None:
         declaration_file = catalog.checks.retrieval_gold
@@ -72,7 +91,9 @@ def build_checks(
         qa = load_qa_set(answer.qa)
         if qa.comparison is None:
             raise ValueError(f"{answer.qa} declares no [comparison] min_meaningful_change, so no cell can be judged")
-        checks["answer_run"] = _answer_check(qa, answer, settings, stack, harness_commit, harness_dirty)
+        checks["answer_run"] = _answer_check(
+            qa, answer, settings, stack, harness_commit, harness_dirty, traces_only=False
+        )
         checks["failure_labels"] = failure_label_check
     return checks
 
@@ -135,20 +156,35 @@ def _paraphrase_check(
 
 
 def _answer_check(
-    qa: QaSet, answer: AnswerCheck, settings: HarnessSettings, stack: StackSettings, commit: str, dirty: bool
+    qa: QaSet,
+    answer: AnswerCheck,
+    settings: HarnessSettings,
+    stack: StackSettings,
+    commit: str,
+    dirty: bool,
+    *,
+    traces_only: bool,
 ) -> Check:
     """Return the answer run of the Q&A set as a check; its record goes into the answers subfolder of the run.
 
-    Every ask is marked fresh, so the proxy answers none from its recordings: the run without a mutant at the end of
-    the experiment must get new answers, not those of the first one, or it could never show the noise of the model.
-    A provider fault of the mutant is marked on every ask as well.
+    A judged run marks every ask fresh, so the proxy answers none from its recordings: the run without a mutant at
+    the end of the experiment must get new answers, not those of the first one, or it could never show the noise of
+    the model. A provider fault of the mutant is marked on every ask as well. The trace of every ask is read, so the
+    record says which stage of the app each ask passed differently.
+
+    A run made ``traces_only`` is read for its traces, not judged: its asks are not marked fresh, so the proxy may
+    answer from its recordings, and it starts on a degraded stack too, since a mutant that makes a model server of
+    the search unreachable makes the stack degraded, and that is what its traces must show.
     """
     qa_bytes = answer.qa.read_bytes()
 
     async def check(folder: Path, mutant: Mutant) -> CheckResult:
         """Make the answer run against the app as it now is and keep its record."""
         with CorpusReader(settings, stack) as corpus:
-            async with SutTransport(settings) as sut:
+            async with (
+                SutTransport(settings) as sut,
+                TraceReader(answer_run.trace_store(settings, stack), answer_run.TRACE_WAIT_S) as traces,
+            ):
                 record = await answer_run.run(
                     qa,
                     sut,
@@ -159,8 +195,10 @@ def _answer_check(
                     harness_commit=commit,
                     harness_dirty=dirty,
                     repetitions=answer.repetitions,
-                    fresh=True,
+                    fresh=not traces_only,
+                    allow_degraded=traces_only,
                     fault=mutant.fault,
+                    traces=traces,
                 )
         path = write_answer_record(record, folder / ANSWERS_SUBDIR)
         return CheckResult(status="ran", result_file=path.relative_to(folder).as_posix())

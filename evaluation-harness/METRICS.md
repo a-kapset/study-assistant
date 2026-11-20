@@ -980,10 +980,7 @@ Before the signals are read:
 - a check that refused to measure on the mutant is **killed by refusal** (it saw that the app is not in a state it
   can measure); a refusal on the reference makes the cell **invalid**;
 - questions the stack failed on are left out of both runs, and above a share of 0.05 the cell is **invalid**:
-
-  ```math
-  \frac{|O|}{N} > 0.05 \;\Rightarrow\; \text{invalid}, \qquad \text{else } n = N - |O|
-  ```
+  $`\frac{|O|}{N} > 0.05 \;\Rightarrow\; \text{invalid}, \qquad \text{else } n = N - |O|`$
 
   where
 
@@ -1017,7 +1014,84 @@ a later run without a mutant is a *false alarm*.
 were made up): the kills among the mutants it was expected to notice, its false alarms among the later runs without
 a mutant, the mutants only it killed, and whether it calls a model.
 
+### Stage named by the traces
+
+Code: [`src/evalharness/stages.py`](src/evalharness/stages.py),
+[`src/evalharness/mutation/attribution.py`](src/evalharness/mutation/attribution.py).
+
+Every ask of an answer run keeps what each of its stages did, read from its trace: a short description per stage,
+in the order an ask passes them, $T$ = (embedding, search, rerank, provider, generate). The embedding and provider
+stages are described by the status codes of their HTTP calls (or the error of a call without a response), the
+search by its result and the ids of its hits, the rerank and answer steps by their span status and error type; a
+stage with no span is "absent".
+
+**Stage an ask names**, $g(a)$ — the first stage whose description is none of the reference's for the same question:
+
+```math
+g(a) = \text{the first } t \in T \text{ with } o_t(a) \notin \{\, o_t(b) : b \in R_i \,\}, \qquad
+g(a) = \text{none if there is no such } t
+```
+
+where
+
+- $a$ — one ask of question $i$ in the mutant run;
+- $T$ — the five stages in the order above;
+- $`o_t(a)`$ — the description of stage $t$ in ask $a$;
+- $`R_i`$ — the asks of question $i$ in the reference run, every repetition: the reference's own variation names
+  nothing.
+
+An ask is **left out** only when its trace could not be read, or when its question has no reference ask with a
+trace. A failed ask is compared like any other, unlike in a judged cell: the attribution reads how a request went
+wrong, and a failure is often the mutant's own effect (a search declined because the embedding server is
+unreachable); a slip of the stack on a few asks is outweighed by the majority rule below and shows in $\eta$.
+
+An ask is **not measured** when $g(a)$ is the provider or the answer step while its own model call, or a reference
+call of its question, found no recording in the proxy: the proxy's error then made the difference, not the mutant.
+
+**Attributed stage of a mutant**, $`g^{*}`$ — the stage named by more than half of the asks that named one:
+
+```math
+g^{*} =
+\begin{cases}
+\text{none} & \text{if } |D| \le \eta \\
+t & \text{if } |D_t| > |D| / 2 \\
+\text{several} & \text{otherwise}
+\end{cases}
+```
+
+where
+
+- $D$ — the asks of the mutant run that named a stage (not none, not left out, not measured);
+- $`D_t`$ — the asks in $D$ that named stage $t$;
+- $\eta$ — the noise: the number of asks that named a stage in the run without a mutant at the end of the
+  experiment (the most of them, when there are several such runs); when not more asks than that named a stage and
+  more than $\eta$ asks were not measured, $`g^{*}`$ is "not measured".
+
+**Verdict** — right when $`g^{*}`$ is the stage of the part the mutant makes faulty (embedding → embedding, search →
+search, answer → generate, provider → provider), wrong for another stage, several or none as $`g^{*}`$ says. A
+mutant of a part with no span in an ask's trace (ingestion: the course is cut before any ask) is **not
+attributable from the trace**, whatever $`g^{*}`$ is.
+
+**Attribution accuracy of a part**, $`A_p`$ — the share of its counted mutants attributed to its own stage:
+
+```math
+A_p = \frac{r_p}{n_p}
+```
+
+where
+
+- $p$ — a part of the app, or all parts together;
+- $`n_p`$ — the mutants of part $p$ whose verdict is right, wrong, several or none (not attributable and not
+  measured are not counted);
+- $`r_p`$ — those of them whose verdict is right;
+- the interval is the 95 % Wilson interval of $`r_p`$ out of $`n_p`$, as in
+  [Intervals and target verdicts](#intervals-and-target-verdicts). The unit is the mutant: the asks of one mutant
+  share one fault, so counting them would give a far narrower interval than the evidence holds.
+
 ## Changes
+
+- **2026-11-20 — stage named by the traces.** New: the stages of every ask kept in the answer record, the stage an
+  ask names, the attributed stage of a mutant, its verdict, and the attribution accuracy per part.
 
 - **2026-11-20 — failures of the stack left out of the kill matrix.** New: the set $O$ of questions the stack failed
   on for a reason the mutant does not declare, left out of both runs, and the cell invalid above $|O| / N = 0.05$;

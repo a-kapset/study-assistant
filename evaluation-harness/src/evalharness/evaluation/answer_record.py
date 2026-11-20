@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from evalharness.failures import FailureLabel
 from evalharness.oracles.answer import AbstainReason, AnswerCaseScore, AnswerSummary
 from evalharness.proxy.ledger import Source
+from evalharness.stages import StageName
 
 
 class _Strict(BaseModel):
@@ -49,6 +50,14 @@ class AnswerCaseRecord(_Strict):
     # What the model calls cost at the listed prices, whoever answered; None when a call has no price.
     cost_usd: float | None
     score: AnswerCaseScore
+    # The ask's trace in the app's trace store, from the response's "traceresponse" header; None when the response
+    # named none. Records made before traces were read have none of the three fields below.
+    trace_id: str | None = None
+    # What each stage of the ask did, read from its trace after the run's last ask: compared with the asks of a run
+    # without a mutant, it shows which stage a planted fault changed first. None when the trace was not read.
+    stages: dict[StageName, str] | None = None
+    # Why the stages could not be read: no trace id, the store never held the whole trace, or a trace not of one ask.
+    trace_error: str | None = None
 
 
 class AnswerRunRecord(_Strict):

@@ -52,6 +52,8 @@ evaluation-harness/
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices, provider failures on request; one module
 │   │                       #   per provider API in surfaces/
+│   ├── stages.py           # what each stage of an ask did, read from its trace (embedding, search, rerank,
+│   │                       #   model provider, answer step)
 │   ├── failures.py         # the label of a failed request (infrastructure, model or app), from the app's
 │   │                       #   response and the proxy's ledger
 │   ├── testdata/           # test data written into the app's stores: created and removed in one place
@@ -363,6 +365,8 @@ of their own, read from its record.
 poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml
 poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml --mutants lowest_score_0_88
 poetry run python -m evalharness.mutation.matrix <experiment id>
+poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml --attribution
+poetry run python -m evalharness.mutation.matrix <experiment id> --attribution <attribution experiment id>
 ```
 
 The catalog's `baseline` runs first and once more at the end of every command, around the chosen mutants; all runs
@@ -410,6 +414,29 @@ alarms, the mutants only it caught, and whether it calls a model. Runs of anothe
 first app state are refused. A question the stack failed on in either run for a reason the mutant does not declare
 (no response, a real provider error) is left out of both runs and named in the cell; when such questions are more
 than 5 % of a check's questions, the cell is invalid and the run should be repeated.
+
+Every answer run reads the trace of each ask after its last ask and keeps, in its record, what each stage of the ask
+did: the status codes of the calls to the embedding server and the model provider, the search's result and hits, the
+status of the rerank and answer steps, or "absent" (see [METRICS.md](METRICS.md#stage-named-by-the-traces)). The
+trace store keeps traces in memory only, so the record is where they last. Below the matrix, the command names for
+each mutant the stage its asks' traces point to first, compared with the run without a mutant, says whether that is
+the part the mutant makes faulty, and gives the share of mutants attributed to their own part with its interval. A
+mutant of how the course is cut into passages is not attributable from the trace: that happens before any ask.
+
+With `--attribution` the mutant command makes only the answer run, and its asks are not marked fresh, so the proxy in
+replay mode answers them from its recordings and nothing is paid; a planted provider fault is still answered by the
+proxy itself. It also starts on a degraded stack, which a mutant of the embedding server's address is meant to cause.
+Failed asks are compared like the others: a failure is often how the mutant shows. Such an experiment is not judged; the matrix command reads its traces next to a judged experiment of the
+same catalog version and app commit (and refuses any other). A call that found no recording gets the proxy's error:
+an ask whose first difference is at the model provider or the answer step after such a miss is "not measured". Start
+the proxy in replay mode with the recordings of the course's answer runs, from the repository root:
+
+```powershell
+$env:EVAL_PROXY_CASSETTES = "./evaluation-harness/cassettes_local"
+docker compose -f compose.yaml -f evaluation-harness/compose.proxy.yaml up -d --no-deps --wait llm-proxy
+```
+
+and start it again the same way without the variable afterwards.
 
 ## Running the tests
 

@@ -26,6 +26,7 @@ from evalharness.oracles.answer import (
 from evalharness.proxy.keys import repetition_of
 from evalharness.proxy.ledger import LedgerLine
 from evalharness.settings import HarnessSettings
+from evalharness.traces import TraceReader
 from evalharness.transport import REQUEST_ID_HEADER, SutTransport
 
 COURSE = "evalharness_course"
@@ -296,6 +297,7 @@ async def _run(
     *,
     app: _App | None = None,
     repetitions: int = 1,
+    allow_degraded: bool = False,
 ) -> AnswerRunRecord:
     """Run ``qa`` against the fake app (a new one unless ``app`` is given) ``repetitions`` times; the corpus holds
     the gold sections unless ``sections`` says otherwise."""
@@ -317,6 +319,7 @@ async def _run(
             harness_commit="evalharness_commit",
             harness_dirty=False,
             repetitions=repetitions,
+            allow_degraded=allow_degraded,
         )
 
 
@@ -556,6 +559,24 @@ async def test_an_answer_run_on_a_degraded_stack_is_refused_before_the_first_que
     )
 
 
+@pytest.mark.covers("US-019", "AC-9")
+async def test_a_run_read_only_for_its_traces_starts_on_a_degraded_stack() -> None:
+    """What it checks: one question is run against a fake app whose readiness says "degraded", with the run allowed
+    to start on a degraded stack; the question is searched and asked.
+
+    What it tells: a pass means the run made for its traces reaches the asks of a mutant that makes a model server of
+    the search unreachable. A failure means such a mutant has no answer record and no stage named by its traces.
+
+    Why it is worth having: the first attribution run (2026-11-20) recorded "no answer record" for the mutant whose
+    embedding server is unreachable, because the answer run refused the degraded stack the mutant is meant to cause.
+    """
+    app = _App([], ready="degraded")
+
+    await _run(_qa(("QA-1", GOLD)), [], app=app, allow_degraded=True)
+
+    assert app.requests == [("/v1/search", 1), ("/v1/ask", 1)], f"requests sent on a degraded stack: {app.requests}"
+
+
 @pytest.mark.covers("US-019", "AC-5")
 @pytest.mark.parametrize(
     ("rerank", "expected_s"),
@@ -616,3 +637,86 @@ async def test_every_ask_is_sent_with_the_wait_computed_from_the_apps_settings()
     expected = {"/v1/search": settings.request_timeout_s, "/v1/ask": ask_timeout_s(APP_SETTINGS)}
     sent = {path: waits.get(path) for path in expected}
     assert sent == expected, f"requests were sent with the waits {sent}, expected {expected}"
+
+
+# Trace ids the fake app names: the first trace is in the fake store, the second never arrives.
+_STORED_TRACE = "8e472d7435ca66fac8ade84c55cc0b3b"
+_LOST_TRACE = "0f472d7435ca66fac8ade84c55cc0b3c"
+
+
+@pytest.mark.covers("US-019", "AC-9")
+async def test_every_ask_keeps_the_stages_of_its_trace_or_why_they_could_not_be_read() -> None:
+    """What it checks: three questions are asked of a fake app whose responses name a trace the fake store holds, a
+    trace the store never gets, and no trace at all. The record keeps the stages of the first ask, and for the other
+    two no stages and the reason: "trace_not_found" and "no_trace_id".
+
+    What it tells: a pass means the answer records hold what the attribution of the mutants is built from, and an
+    ask whose trace was lost says so. A failure means the stages are not written, or a lost trace looks like an ask
+    whose every stage is absent.
+
+    Why it is worth having: the trace store keeps traces in memory only, so the record is the only place the stages
+    survive; a lost trace read as "every stage absent" would differ from the reference at the first stage and blame
+    the embedding server for a fault of the store.
+    """
+    ledger: list[LedgerLine] = []
+    app = _App(ledger)
+    trace_of = {"Question QA-1?": _STORED_TRACE, "Question QA-2?": _LOST_TRACE}
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        """Answer as the fake app does and name the trace of each ask in the standard response header."""
+        response = app(request)
+        question = json.loads(request.content).get("question") if request.url.path == "/v1/ask" else None
+        if question in trace_of:
+            response.headers["traceresponse"] = f"00-{trace_of[question]}-b1a1658393577b26-01"
+        return response
+
+    def store(request: httpx2.Request) -> httpx2.Response:
+        """Hold one trace of an ask (the request span and a search that found one passage) and nothing else."""
+        if not request.url.path.endswith(_STORED_TRACE):
+            return httpx2.Response(404, json={"error": {"httpCode": 404}})
+        spans = [
+            {"spanId": "r1", "name": "POST /v1/ask", "startTimeUnixNano": "1", "endTimeUnixNano": "2"},
+            {
+                "spanId": "s1",
+                "parentSpanId": "r1",
+                "name": "search",
+                "startTimeUnixNano": "1",
+                "endTimeUnixNano": "2",
+                "attributes": [
+                    {"key": "search.status", "value": {"stringValue": "ok"}},
+                    {"key": "search.hit_ids", "value": {"arrayValue": {"values": [{"stringValue": "evalharness_c1"}]}}},
+                ],
+            },
+        ]
+        return httpx2.Response(200, json={"result": {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}})
+
+    settings = HarnessSettings(sut_base_url=HttpUrl("http://sut.test"))
+    async with (
+        SutTransport(settings, transport=httpx2.MockTransport(answer)) as sut,
+        TraceReader("http://jaeger.invalid", wait_s=0.0, transport=httpx2.MockTransport(store)) as traces,
+    ):
+        record = await run(
+            _qa(("QA-1", GOLD), ("QA-2", GOLD), ("QA-3", GOLD)),
+            sut,
+            _Corpus({GOLD}),
+            lambda: ledger,
+            qa_file="evalharness_qa.toml",
+            qa_bytes=b"evalharness",
+            harness_commit="evalharness_commit",
+            harness_dirty=False,
+            traces=traces,
+        )
+
+    seen = [(case.case_id, case.stages is not None, case.trace_error) for case in record.cases]
+    assert seen == [
+        ("QA-1", True, None),
+        ("QA-2", False, "trace_not_found"),
+        ("QA-3", False, "no_trace_id"),
+    ], f"(question, stages kept, trace error) per ask: {seen}"
+    assert record.cases[0].stages == {
+        "embedding": "absent",
+        "search": "ok hits=evalharness_c1",
+        "rerank": "absent",
+        "provider": "absent",
+        "generate": "absent",
+    }, f"the stages kept for the first ask: {record.cases[0].stages}"

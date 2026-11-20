@@ -3,11 +3,12 @@ stack or files."""
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from evalharness.mutation.catalog import CheckName, Component, Mutant
-from evalharness.mutation.matrix import Matrix, MatrixRefused, Reader, Run, build_matrix
+from evalharness.mutation.matrix import Matrix, MatrixRefused, Reader, Run, build_attribution, build_matrix
 from evalharness.mutation.record import CheckResult, MutantRunRecord, Proof
 from evalharness.mutation.verdicts import Measured
 
@@ -191,3 +192,33 @@ def test_the_summary_counts_expected_kills_false_alarms_and_kills_no_other_check
         1,
         ("one_hit",),
     ), f"paraphrase check: {paraphrase}"
+
+
+@pytest.mark.covers("US-019", "AC-9")
+@pytest.mark.parametrize(
+    ("changed", "field"),
+    [
+        pytest.param({"catalog_sha256": "other"}, "catalog", id="another-catalog-version"),
+        pytest.param({"app_settings": {"git_commit": "other"}}, "app commit", id="another-app-commit"),
+    ],
+)
+def test_the_traces_of_another_catalog_or_app_are_not_put_next_to_the_matrix(
+    changed: dict[str, Any], field: str
+) -> None:
+    """What it checks: the stages named by an attribution experiment are joined to a matrix only when that
+    experiment ran the same catalog version on the same app commit; otherwise the join is refused, naming the field.
+
+    What it tells: a pass means each attribution line belongs to the mutant of its matrix row. A failure means a
+    mutant id could carry the traces of another mutant with the same id.
+
+    Why it is worth having: the attribution runs as its own experiment, joined by mutant id, and the catalog was
+    changed on 2026-11-19 with new mutants and expectations; the same id can name another setting after such a
+    change.
+    """
+    matrix = _matrix([_run(0, "baseline", NO_MUTANT), _run(1, "low", _mutant("search"))], {})
+    attribution_runs = [_run(0, "baseline", NO_MUTANT, **changed), _run(1, "low", _mutant("search"), **changed)]
+
+    with pytest.raises(MatrixRefused) as refused:
+        build_attribution(attribution_runs, matrix)
+
+    assert field in str(refused.value), f"refused for another reason: {refused.value}"

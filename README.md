@@ -71,7 +71,8 @@ What is planned and what is done, in the order of work.
 - [x] Evaluation harness: a catalogue of configuration faults applied to the running app one at a time, with proof that each fault was live and that the app came back as configured
 - [x] Evaluation harness: which check catches which fault — a kill matrix judged by a rule fixed before it, with blind spots and false alarms, over faults of search, embedding and ingestion
 - [x] Evaluation harness: faults of the answer step and of the model provider in the kill matrix, every question asked twice with new answers of the model; the failure labels checked against the planted fault
-- [ ] Evaluation harness: source-code faults; whether the trace names the faulty stage; a report reproducible from run ids
+- [x] Evaluation harness: whether the request traces point to the part each planted fault made faulty, measured per part of the app
+- [ ] Evaluation harness: source-code faults; a report reproducible from run ids
 
 **10. Practice exams and progress**
 - [ ] App: practice sessions, scoring by course rules, progress per learning objective

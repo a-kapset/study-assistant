@@ -49,8 +49,13 @@ from evalharness.proxy.keys import FRESH_SUFFIX, repetition_suffix
 from evalharness.proxy.ledger import LedgerLine
 from evalharness.proxy.ledger import read_ledger as read_ledger_file
 from evalharness.settings import HarnessSettings, StackSettings, load_stack_settings
+from evalharness.stages import StageName, StageShapeError, stage_observations
 from evalharness.stats.intervals import TargetVerdict, share_interval, share_verdict
+from evalharness.traces import TraceNotFoundError, TraceReader, trace_id_from
 from evalharness.transport import SutTransport
+
+# The longest wait for a whole trace: the app sends spans in batches, so the last ones may come a few seconds late.
+TRACE_WAIT_S = 30.0
 
 # Answer records only, apart from the retrieval records, whose folder is counted for held-out uses.
 ANSWERS_DIR = Path("runs/answers")
@@ -169,6 +174,8 @@ async def run(
     repetitions: int = 1,
     fresh: bool = False,
     fault: FaultKind | None = None,
+    traces: TraceReader | None = None,
+    allow_degraded: bool = False,
 ) -> AnswerRunRecord:
     """Check the gold sections, search every question once, ask every question ``repetitions`` times one at a time,
     and return the run's record.
@@ -178,7 +185,9 @@ async def run(
     ``fresh`` marks every ask so that the proxy serves none from its recordings: a run compared with another run of
     the same questions must not get the other run's stored answers. ``fault`` marks every ask so that the proxy
     answers its model calls with that failure. ``read_ledger`` returns the proxy's ledger; it is read once, after the
-    last question.
+    last question. With ``traces`` the trace of every ask is read after the last question, so reading never slows a
+    measured ask, and what each stage of the ask did is kept in its record. ``allow_degraded`` lets the run start on a
+    stack whose search lost a model server: a run read only for its traces must see how the app behaves then.
     """
     if repetitions < 1:
         raise ValueError(f"a run asks every question at least once, got {repetitions}")
@@ -187,7 +196,7 @@ async def run(
     snapshot = corpus.snapshot(qa.course_id)
     app_settings = await read_app_settings(sut)
     ask_timeout = ask_timeout_s(app_settings)
-    await check_ready(sut)
+    await check_ready(sut, allow_degraded=allow_degraded)
     searched = {}
     for case in qa.cases:
         searched[case.id] = await sut.request(
@@ -212,6 +221,13 @@ async def run(
         _case_record(case.id, repetition, case.gold_section, searched[case.id], answered, calls[answered.request_id])
         for repetition, case, answered in asked
     )
+    if traces is not None:
+        cases = tuple(
+            [
+                case.model_copy(update=await read_stages(answered, traces))
+                for case, (_, _, answered) in zip(cases, asked, strict=True)
+            ]
+        )
     # The ledger holds every call made on this machine; only the calls of this run's questions count.
     asked_ids = {answered.request_id for _, _, answered in asked}
     models = {
@@ -239,6 +255,23 @@ async def run(
         summaries=summaries,
         cases=cases,
     )
+
+
+async def read_stages(answered: Observation, traces: TraceReader) -> dict[str, object]:
+    """Read the trace the ask's response names and return the record fields it gives: the trace id, and either what
+    each stage did or why that could not be read. A trace that cannot be read never stops the run: the ask keeps its
+    answer and only has no stages."""
+    trace_id = trace_id_from(answered.headers)
+    if trace_id is None:
+        return {"trace_id": None, "stages": None, "trace_error": "no_trace_id"}
+    stages: dict[StageName, str] | None = None
+    try:
+        stages = stage_observations(await traces.fetch(trace_id))
+    except TraceNotFoundError:
+        return {"trace_id": trace_id, "stages": None, "trace_error": "trace_not_found"}
+    except StageShapeError as error:
+        return {"trace_id": trace_id, "stages": None, "trace_error": f"trace_shape: {error}"}
+    return {"trace_id": trace_id, "stages": stages, "trace_error": None}
 
 
 def ask_suffix(repetition: int, fresh: bool, fault: FaultKind | None) -> str:
@@ -341,7 +374,7 @@ async def _run(
     """Make the run against the stack: requests over HTTP, the corpus through the read-only role, the proxy's
     ledger from this machine."""
     with CorpusReader(settings, stack) as corpus:
-        async with SutTransport(settings) as sut:
+        async with SutTransport(settings) as sut, TraceReader(trace_store(settings, stack), TRACE_WAIT_S) as traces:
             return await run(
                 qa,
                 sut,
@@ -352,7 +385,13 @@ async def _run(
                 harness_commit=commit,
                 harness_dirty=dirty,
                 repetitions=repetitions,
+                traces=traces,
             )
+
+
+def trace_store(settings: HarnessSettings, stack: StackSettings) -> str:
+    """Return the address of the stack's trace store as this machine reaches it."""
+    return f"http://{settings.db_host}:{stack.jaeger_published_port}"
 
 
 def _harness_version() -> tuple[str, bool]:

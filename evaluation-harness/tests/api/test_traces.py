@@ -1,9 +1,12 @@
 """API tests of the app's request traces on the running stack: the trace of an ask, read back from the trace store."""
 
+import re
+
 import pytest
 from pydantic import JsonValue
 
 from evalharness.proxy.faults import fault_suffix
+from evalharness.stages import stage_observations
 from evalharness.traces import Span, Trace, TraceReader, trace_id_from
 from evalharness.transport import SutTransport
 
@@ -102,3 +105,38 @@ async def test_no_span_of_an_ask_holds_the_question(sut: SutTransport, traces: T
         "the ask did not reach the model, so its trace proves little"
     )
     assert QUESTION not in trace.raw, "a span of the ask's trace holds the learner's question"
+
+
+@pytest.mark.covers("US-019", "AC-9")
+@pytest.mark.usefixtures("proxy_in_front")
+@pytest.mark.parametrize(
+    ("suffix", "provider", "generate"),
+    [("", "200", "unset"), (fault_suffix("server_error"), "500 500 500", "error")],
+    ids=["answered", "provider-fails"],
+)
+async def test_the_stages_of_a_real_ask_are_read_from_its_trace(
+    suffix: str, provider: str, generate: str, sut: SutTransport, traces: TraceReader
+) -> None:
+    """What it checks: the harness's description of each stage is read from the real trace of an ask, once answered
+    from a recording and once with the provider failing on every call (planted by the proxy). The embedding call is
+    "200", the search is "ok" with its hits, the reranker is absent (off in this stack), the model calls show their
+    status codes in order (three attempts when they fail), and the answer step its status.
+
+    What it tells: a pass means the attribute names and the nesting of spans the unit tests of the stages write by
+    hand are the ones the app's tracing really produces. A failure shows the stages as read, so a renamed attribute
+    (a newer HTTP instrumentation writes "http.response.status_code") or a call moved to another stage is seen.
+
+    Why it is worth having: the attribution of every mutant compares these descriptions; if the status codes were
+    never found, every provider stage would read "error" in both runs, and a planted provider fault would look like
+    no difference at all. Only a real trace shows what the instrumentation writes.
+    """
+    _, trace = await _ask_and_read_the_trace(sut, traces, suffix)
+
+    stages = stage_observations(trace)
+
+    search = stages.pop("search")
+    expected = {"embedding": "200", "rerank": "absent", "provider": provider}
+    assert re.fullmatch(r"ok hits=\S+", search), f"the search was read as {search!r}"
+    assert {**stages, "generate": stages["generate"].split(" ")[0]} == {**expected, "generate": generate}, (
+        f"the stages were read as {stages}"
+    )

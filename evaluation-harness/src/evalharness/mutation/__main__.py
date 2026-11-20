@@ -2,6 +2,7 @@
 
     poetry run python -m evalharness.mutation mutants/<course>.toml
     poetry run python -m evalharness.mutation mutants/<course>.toml --mutants lowest_score_0_88
+    poetry run python -m evalharness.mutation mutants/<course>.toml --attribution
 
 Run it from evaluation-harness/, like the tests, with the stack running and serving the catalog's course as its local
 course. The catalog's baseline runs first and once more at the end, around the chosen mutants: the first is what every
@@ -11,6 +12,12 @@ passages, and writes a folder under runs/mutants/ with its record and the record
 the experiment id that builds the matrix:
 
     poetry run python -m evalharness.mutation.matrix <experiment id>
+
+With --attribution every run makes only the answer run, with the proxy answering from its recordings where it can;
+its experiment is not judged but read for the stage the request traces name, next to the matrix of a judged
+experiment of the same catalog:
+
+    poetry run python -m evalharness.mutation.matrix <experiment id> --attribution <attribution experiment id>
 
 Exit code 0 when every mutant ran, valid or not; 2 when the command was refused before the app was changed; 1 when
 the app did not come back after a mutant, so the stack needs a look before anything else runs on it.
@@ -46,6 +53,12 @@ def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m evalharness.mutation")
     parser.add_argument("catalog", type=Path, help="the mutant catalog file of a course")
     parser.add_argument("--mutants", nargs="+", help="ids of the mutants to run, in this order (default: all)")
+    parser.add_argument(
+        "--attribution",
+        action="store_true",
+        help="make only the answer run, served from the proxy's recordings where it has them, to read which stage "
+        "the traces name for each mutant (no paid model call when the recordings cover the run without a mutant)",
+    )
     args = parser.parse_args(argv)
 
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))
@@ -72,7 +85,7 @@ def main(argv: Sequence[str]) -> int:
     commit, dirty = _harness_version()
     try:
         # The dataset loaders say what is wrong with a file by a ValueError; only they are read here.
-        checks = build_checks(catalog, settings, stack, commit, dirty)
+        checks = build_checks(catalog, settings, stack, commit, dirty, attribution=args.attribution)
     except (RunRefused, GoldSetError, ValueError, FileNotFoundError) as error:
         print(f"refused: {error}", file=sys.stderr)
         return 2
