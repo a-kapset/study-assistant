@@ -36,7 +36,7 @@ evaluation-harness/
 ├── mutants/                # per course: the catalog of defects planted in the running app, and the checks they go through
 ├── runs/                   # the proxy's ledger and, per kind of run, its records, e.g. runs/retrieval/ (not committed)
 ├── cassettes/              # recorded replies of invented courses (committed)
-├── reports/                # decision notes written from run records: what was measured, how sure, what follows
+├── reports/                # notes and experiment reports from run records: what was measured, how sure, what follows
 ├── Dockerfile              # the image of the LLM proxy
 ├── compose.proxy.yaml      # puts the proxy between the app and its model provider
 ├── src/evalharness/
@@ -48,7 +48,8 @@ evaluation-harness/
 │   ├── evaluation/         # the retrieval, answer, paraphrase and latency runs: checks, requests, run records,
 │   │                       #   commands
 │   ├── relations/          # metamorphic relations: how a pair of inputs or of results is judged
-│   ├── mutation/           # mutant runs: catalog, proofs of apply and restore, checks, records, kill matrix
+│   ├── mutation/           # mutant runs: catalog, proofs of apply and restore, checks, records, kill matrix,
+│   │                       #   the tables of an experiment report
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices, provider failures on request; one module
 │   │                       #   per provider API in surfaces/
@@ -437,6 +438,23 @@ docker compose -f compose.yaml -f evaluation-harness/compose.proxy.yaml up -d --
 ```
 
 and start it again the same way without the variable afterwards.
+
+### Experiment report
+
+The report of an experiment is a Markdown file under `reports/`, e.g.
+[reports/mutant-experiment-2026-11.md](reports/mutant-experiment-2026-11.md). Its question, decision and the causes
+of what the checks missed are written by hand; every table sits between `[[[cog` and `[[[end]]]` comment lines and is
+filled from the records of the experiment's runs, named by their ids, through
+[`mutation/report.py`](src/evalharness/mutation/report.py) and [cog](https://cog.readthedocs.io/): the
+configuration, what each check counts, the kill matrix, the summaries of the checks, what no check noticed grouped
+by check and faulty part, the failure labels of the planted faults with their precision and recall, the stage named
+by the traces, the paid cost, and what the catalog does not plant. The records stay on the machine that made them,
+so only there can a report be rebuilt:
+
+```powershell
+poetry run cog -r -U reports/mutant-experiment-2026-11.md       # fill the tables again from the records
+poetry run cog --check -U reports/mutant-experiment-2026-11.md  # exit 5 when the records give other tables
+```
 
 ## Running the tests
 

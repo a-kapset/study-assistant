@@ -1088,7 +1088,61 @@ where
   [Intervals and target verdicts](#intervals-and-target-verdicts). The unit is the mutant: the asks of one mutant
   share one fault, so counting them would give a far narrower interval than the evidence holds.
 
+### Experiment report
+
+Code: [`src/evalharness/mutation/report.py`](src/evalharness/mutation/report.py). The report of an experiment
+shows the matrix, the summaries and the stage named by the traces as above, and three more numbers.
+
+**Precision of a failure label**, $`P_\ell`$ — the share of the asks labelled $\ell$ that come from a run whose
+mutant plants the fault of $\ell$:
+
+```math
+P_\ell = \frac{t_\ell}{g_\ell}
+```
+
+where:
+
+- $\ell$ — a failure label that at least one mutant of the experiment expects (see [Failure labels](#failure-labels));
+- $`t_\ell`$ — the asks labelled $\ell$ in the runs whose mutant expects $\ell$;
+- $`g_\ell`$ — the asks labelled $\ell$ in every valid run of the experiment, the runs without a mutant and the
+  other mutants' runs included: a label given where its fault was not planted is a false label.
+
+**Recall of a failure label**, $`R_\ell`$ — the share of the asks the fault reached that got its label:
+
+```math
+R_\ell = \frac{t_\ell}{q_\ell}
+```
+
+where:
+
+- $`t_\ell`$ — as above;
+- $`q_\ell`$ — the asks the fault reached in the runs whose mutant expects $\ell$: for a provider fault the asks
+  whose model calls got the planted fault (an ask declined before any model call never meets it), for any other
+  mutant every ask of its run.
+
+Both count asks, and the two asks of one question are not independent, so no interval is given; they say whether
+the labels name the planted faults, not how sure a share is.
+
+**Paid cost of an experiment**, $`C`$ — what the model provider was paid for the answer runs of the experiment, by
+their records:
+
+```math
+C = \sum_{a \in U} c_a
+```
+
+where:
+
+- $a$ — one ask of an answer run of the experiment;
+- $U$ — the asks with at least one model call that went to the provider (source `upstream` in the ledger); an ask
+  answered from a recording, refused as missing from the recordings, or met by a planted fault was not paid for;
+- $`c_a`$ — the cost of ask $a$ in its record: its calls at the listed prices. An ask of $U$ without a price is
+  counted apart as of unknown cost, never as 0. The asks answered from recordings are summed apart too, at the same
+  listed prices: what the run would have cost without them.
+
 ## Changes
+
+- **2026-11-21 — experiment report.** New: precision and recall of a failure label over asks, and the paid cost of an
+  experiment apart from the asks answered from recordings (a record prices a recorded reply at the listed price).
 
 - **2026-11-20 — stage named by the traces.** New: the stages of every ask kept in the answer record, the stage an
   ask names, the attributed stage of a mutant, its verdict, and the attribution accuracy per part.

@@ -111,6 +111,18 @@ files = [
 ]
 
 [[package]]
+name = "cogapp"
+version = "3.6.1"
+description = "Cog: A content generator for executing Python snippets in source files."
+optional = false
+python-versions = ">=3.11"
+groups = ["report"]
+files = [
+    {file = "cogapp-3.6.1-py3-none-any.whl", hash = "sha256:34cf222288b43a1338298a7f5c293c744bf5a1e7ef5f278c0a5ee9bbda6a9b70"},
+    {file = "cogapp-3.6.1.tar.gz", hash = "sha256:e32bc61abe21406bfc1be6559ba97cebcedf99f290742914bd0817b6e3d80bb1"},
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 description = "Cross-platform colored terminal text."
@@ -1323,4 +1335,4 @@ standard = ["httptools (>=0.8.0)", "python-dotenv (>=0.13)", "pyyaml (>=5.1)", "
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.14,<3.15"
-content-hash = "8bb74bcc891ca4b3fc3e7dd2e15c2153aad68d3f8565a3eb1af7e6794bd20b3b"
+content-hash = "1b3db5c54b5371f8cb7788b15b6d44d88b0afb60c4155313b21e3432b42e37c6"

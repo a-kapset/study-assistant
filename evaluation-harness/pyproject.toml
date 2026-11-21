@@ -41,6 +41,9 @@ lint = [
 eval = [
     "scipy (>=1.18.1,<2.0.0)"
 ]
+report = [
+    "cogapp (>=3.6.1,<4.0.0)"
+]
 
 
 [tool.ruff]
