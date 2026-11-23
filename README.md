@@ -76,8 +76,8 @@ What is planned and what is done, in the order of work.
 - [x] Evaluation harness: source-code faults
 
 **10. Practice exams and progress**
-- [ ] App: practice sessions, scoring by course rules, progress per learning objective
-- [ ] Evaluation harness: exact-answer oracle; API contract snapshot; stateful property tests of sessions
+- [x] App: practice sessions, scoring by course rules, progress per learning objective
+- [ ] Evaluation harness: stateful property test of sessions against a model of the expected answers; contract tests generated from the app's API description
 
 **11. Uploads and OCR**
 - [ ] App: OCR service (Tesseract), learner uploads, failed pages reported
