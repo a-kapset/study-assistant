@@ -425,3 +425,37 @@ def test_progress_of_a_course_not_served_answers_404(stack: Stack) -> None:
     response = stack.client.get("/v1/progress?course_id=no_such_course", headers=stack.learner())
 
     assert response.status_code == 404, f"an unknown course must be 404, got {response.status_code}"
+
+
+@pytest.mark.covers("US-020", "AC-12")
+def test_a_removed_learner_key_opens_nothing_and_a_second_removal_is_404(stack: Stack) -> None:
+    """Registers a learner, removes it as an operator and calls an exam endpoint with its key; then removes it
+    again. The key must be refused like one no learner ever had, and the second removal must say the learner is
+    gone. Catches a removal that answers success but leaves the key usable."""
+    registered = stack.client.post("/v1/admin/learners", headers=stack.admin).json()
+    learner = {"Authorization": f"Bearer {registered['api_key']}"}
+    removal_path = f"/v1/admin/learners/{registered['learner_id']}"
+
+    first = stack.client.delete(removal_path, headers=stack.admin)
+    after = stack.client.get("/v1/progress?course_id=demo", headers=learner)
+    second = stack.client.delete(removal_path, headers=stack.admin)
+
+    assert first.status_code == 204, f"removing a learner must be 204, got {first.status_code}: {first.text}"
+    assert after.status_code == 401, f"the removed learner's key must be refused, got {after.status_code}"
+    assert second.status_code == 404, f"removing a learner twice must be 404 the second time, got {second.status_code}"
+
+
+@pytest.mark.covers("US-020", "AC-12")
+def test_removing_a_learner_needs_the_admin_key(stack: Stack) -> None:
+    """A learner tries to remove a learner with its own key and without any. Catches an open removal: anyone
+    could erase a learner's sessions and progress."""
+    registered = stack.client.post("/v1/admin/learners", headers=stack.admin).json()
+    removal_path = f"/v1/admin/learners/{registered['learner_id']}"
+
+    statuses = [
+        stack.client.delete(removal_path, headers=headers).status_code
+        for headers in ({}, {"Authorization": f"Bearer {registered['api_key']}"})
+    ]
+
+    assert statuses == [401, 401], f"a removal without the admin key must be 401, got {statuses}"
+    assert len(stack.learners.by_hash) == 1, "a refused removal must leave the learner stored"

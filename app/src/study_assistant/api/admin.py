@@ -120,6 +120,20 @@ def admin_router(
         log.info("learner_registered", learner_id=str(learner_id))
         return LearnerRegistered(learner_id=learner_id, api_key=key)
 
+    @router.delete(
+        "/learners/{learner_id}",
+        status_code=204,
+        responses={401: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}, 422: {"model": ErrorEnvelope}},
+    )
+    async def remove_learner(learner_id: UUID) -> None:
+        """Delete a learner with every session and answer it has; its key opens nothing afterwards.
+
+        A learner that does not exist is a 404, so removing twice is told apart from removing once.
+        """
+        if not await learners.remove(learner_id):
+            raise HTTPException(status_code=404, detail=f"No learner '{learner_id}'")
+        log.info("learner_removed", learner_id=str(learner_id))
+
     def _failed(request: Request, course_id: str, status: int, code: str, message: str) -> JSONResponse:
         """Log a failed ingestion and answer it in the error envelope with ``status`` and ``code``."""
         log.warning("ingest_failed", course_id=course_id, code=code, error=message)

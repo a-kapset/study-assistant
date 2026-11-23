@@ -410,7 +410,8 @@ $learner = curl.exe -s -X POST -H "X-Admin-Key: $key" http://127.0.0.1:8000/v1/a
 $auth = "Authorization: Bearer $($learner.api_key)"
 ```
 
-Every endpoint below needs that header; without a learner's key the answer is 401.
+Every endpoint below needs that header; without a learner's key the answer is 401. A learner is removed, with
+all its sessions and answers, by `DELETE /v1/admin/learners/{learner_id}` with the admin key.
 
 - **Start.** `POST /v1/exams/sessions` with `course_id`, optionally `objective_id` (only the questions of one
   learning objective) and `size`. Without `size` the session gets the course's `exam.session_size` questions, or
@@ -539,6 +540,7 @@ curl.exe -X POST -H "Content-Type: application/json" --data-binary "@ask.json" h
 | `POST` | `/v1/ask` | An answer to a question about a course: `answer`, `abstain_reason`, `citations` (passage, section, file, pages), `invalid_citations`; grounded on the course's passages or not by `APP_ASK__MODE`; 404 for a course not served, 409 / 502 when the search cannot run, 502 / 503 when the model provider fails (see "Ask") |
 | `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count, and `question_bank_items`, the questions its bank now offers; 422 `question_bank_invalid` for a bank file that cannot be used, with nothing written |
 | `POST` | `/v1/admin/learners` | Register a learner (needs the `X-Admin-Key` header): `learner_id` and the `api_key` its requests carry, shown only here |
+| `DELETE` | `/v1/admin/learners/{learner_id}` | Remove a learner with every session and answer it has (needs the `X-Admin-Key` header): 204; its key opens nothing afterwards; 404 for a learner that does not exist |
 | `POST` | `/v1/exams/sessions` | Start a practice session of the learner (`Authorization: Bearer <key>`, otherwise 401) on a course or one learning objective: 201 with `session_id`, `question_count`; 404 for a course not served, 409 `question_bank_empty`, 422 `unknown_objective` |
 | `GET` | `/v1/exams/sessions/{session_id}/next` | The first question without an answer, without its key, or `finished`; 404 `session_not_found` |
 | `POST` | `/v1/exams/sessions/{session_id}/answers` | Answer one question: `correct` and `keys`; the same answer again changes nothing; 409 `already_answered`, 422 `unknown_option`, 404 `item_not_in_session` / `session_not_found` |
@@ -563,7 +565,8 @@ Every error has the status code that fits it and one body format:
 `code` is stable for programs to read: `not_found`, `method_not_allowed`, `unauthorized`, `ingest_failed`,
 `ingest_conflict`, `embedding_failed`, `embedding_unavailable`,
 `internal_server_error` and so on. A 422 also lists `details` with the location and reason of each invalid field; the values that were
-sent are not echoed. A 503 from `/ready` lists the failed checks the same way, for example
+sent are not echoed. A body that cannot be read as JSON at all (for example bytes in another encoding) is a 400
+with the code `bad_request`, on every endpoint that takes a JSON body. A 503 from `/ready` lists the failed checks the same way, for example
 `{"loc": ["checks", "db"], "msg": "unavailable"}`. A 500 never shows the exception; it is written to the log with the
 traceback and the request id.
 
@@ -622,7 +625,8 @@ same names. `tests/integration/test_search_sql.py` checks the search statements:
 asked course only, with their similarity, and a course's coverage by vectors per space.
 `tests/integration/test_exam_sql.py` runs practice sessions on the real tables: a question that left the bank,
 a session asked for by another learner, two answers to one question (also sent at the same time), progress next
-to other learners' and other courses' answers, and a learner found by its key. The tests start a
+to other learners' and other courses' answers, a learner found by its key, and a removed learner's rows gone
+while another learner's stay. The tests start a
 throwaway container of the stack's database image with Testcontainers, prepare it
 with the app's own migration run and remove it at the end; the stack's database is never touched. They need
 Docker running and nothing else:

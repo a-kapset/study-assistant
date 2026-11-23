@@ -25,6 +25,10 @@ class LearnerStore(Protocol):
         """Return the id of the learner whose key has this hash, or ``None`` when there is none."""
         ...
 
+    async def remove(self, learner_id: UUID) -> bool:
+        """Delete the learner with every session and answer it has; return whether there was such a learner."""
+        ...
+
 
 def key_digest(key: str) -> str:
     """Return the SHA-256 of a key as hex: the only form in which a key is stored or looked up."""
@@ -46,3 +50,8 @@ class Learners:
     async def authenticate(self, key: str) -> UUID | None:
         """Return the learner a key belongs to, or ``None`` for a key no learner has."""
         return await self._store.find(key_digest(key))
+
+    async def remove(self, learner_id: UUID) -> bool:
+        """Delete a learner with its sessions and answers, so its key opens nothing any more; return whether the
+        learner existed."""
+        return await self._store.remove(learner_id)

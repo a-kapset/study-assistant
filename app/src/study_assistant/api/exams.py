@@ -55,6 +55,9 @@ class AnswerRequest(BaseModel):
 
 
 _ERRORS: dict[int | str, dict[str, object]] = {status: {"model": ErrorEnvelope} for status in (401, 404, 409, 422)}
+# Endpoints that read a JSON body also answer 400 when the body cannot be read as JSON at all, e.g. bytes in
+# another encoding.
+_BAD_BODY: dict[int | str, dict[str, object]] = {400: {"model": ErrorEnvelope}}
 
 
 def exams_router(
@@ -64,7 +67,7 @@ def exams_router(
     log: structlog.typing.FilteringBoundLogger = structlog.get_logger(__name__)
     router = APIRouter(responses=_ERRORS)
 
-    @router.post("/v1/exams/sessions", status_code=201, response_model=SessionCreated)
+    @router.post("/v1/exams/sessions", status_code=201, response_model=SessionCreated, responses=_BAD_BODY)
     async def create_session(
         body: SessionRequest, learner_id: Annotated[UUID, Depends(current_learner)], request: Request
     ) -> SessionCreated | JSONResponse:
@@ -102,7 +105,7 @@ def exams_router(
         except SessionNotFoundError as exc:
             return _failed(request, 404, "session_not_found", str(exc))
 
-    @router.post("/v1/exams/sessions/{session_id}/answers", response_model=AnswerResult)
+    @router.post("/v1/exams/sessions/{session_id}/answers", response_model=AnswerResult, responses=_BAD_BODY)
     async def answer(
         session_id: UUID, body: AnswerRequest, learner_id: Annotated[UUID, Depends(current_learner)], request: Request
     ) -> AnswerResult | JSONResponse:

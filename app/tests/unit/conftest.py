@@ -401,6 +401,13 @@ class FakeLearnerStore:
         """Return the learner stored under the key hash, if any."""
         return self.by_hash.get(key_sha256)
 
+    async def remove(self, learner_id: UUID) -> bool:
+        """Forget the learner and tell whether it was stored."""
+        hashes = [key_hash for key_hash, stored in self.by_hash.items() if stored == learner_id]
+        for key_hash in hashes:
+            del self.by_hash[key_hash]
+        return bool(hashes)
+
 
 class FakeExamStore:
     """Keeps banks, sessions and answers in memory with the rules the database tables enforce: a question missing

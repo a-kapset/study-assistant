@@ -33,6 +33,9 @@ class HarnessSettings(BaseSettings):
     # start from the working directory, and the default fits a run from evaluation-harness/.
     proxy_ledger_file: Path = Path("runs/proxy_ledger.jsonl")
 
+    # EVAL_STATEFUL_EXAMPLES: how many sequences of calls the state machine test of practice sessions tries.
+    stateful_examples: int = Field(default=100, ge=1)
+
 
 class ProxySettings(BaseSettings):
     """How the LLM proxy runs: its mode, the real provider behind it and where it keeps what it sees.

@@ -199,3 +199,34 @@ async def test_a_learner_is_found_by_its_key_and_the_key_is_not_in_the_table(
         stored = {row[0] for row in conn.execute("SELECT key_sha256 FROM learners").fetchall()}
     assert found == [first_id, second_id, None], f"keys lead to the wrong learners: {found}"
     assert not {first_key, second_key} & stored, "a learner's key is stored in readable form"
+
+
+@pytest.mark.covers("US-020", "AC-12")
+async def test_removing_a_learner_deletes_its_sessions_and_answers_only(
+    app_database: PostgresDatabase, embedder: FixedLengthEmbedder, postgres: MigratedDatabase
+) -> None:
+    """Two learners, each with a session and an answer; the first is removed. Its learner row, session and answer
+    must be gone, and the second learner's must all be there. Catches a removal that leaves a learner's answers
+    behind (the unit tests' store only forgets the key) and one that deletes more than the learner's own rows."""
+    service = await _exams(app_database, embedder, COURSE)
+    learners = Learners(PostgresLearnerStore(app_database))
+    removed, kept = await _learner(app_database), await _learner(app_database)
+    sessions = {learner: await _session(service, learner) for learner in (removed, kept)}
+    for learner, session_id in sessions.items():
+        await service.answer(learner, session_id, "Q1", ["b"])
+
+    existed = await learners.remove(removed)
+    again = await learners.remove(removed)
+
+    with postgres.owner_connection() as conn:
+        left = {
+            table: [row[0] for row in conn.execute(f"SELECT {column} FROM {table}").fetchall()]  # noqa: S608
+            for table, column in (("learners", "learner_id"), ("exam_sessions", "session_id"))
+        }
+    assert (existed, again) == (True, False), (
+        f"the first removal finds the learner, the second does not: {existed}, {again}"
+    )
+    assert removed not in left["learners"] and kept in left["learners"], f"wrong learners left: {left['learners']}"
+    assert left["exam_sessions"] == [sessions[kept]], f"only the kept learner's session may remain: {left}"
+    assert _answer_rows(postgres, sessions[removed]) == [], "the removed learner's answers are still stored"
+    assert len(_answer_rows(postgres, sessions[kept])) == 1, "the kept learner's answer was deleted too"

@@ -41,6 +41,8 @@ def search_router(courses: Mapping[str, CourseManifest], search: CourseSearch, s
         "/v1/search",
         response_model=SearchResult,
         responses={
+            # A body that cannot be read as JSON at all, e.g. bytes in another encoding.
+            400: {"model": ErrorEnvelope},
             404: {"model": ErrorEnvelope},
             409: {"model": ErrorEnvelope},
             422: {"model": ErrorEnvelope},

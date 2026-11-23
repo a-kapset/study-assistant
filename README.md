@@ -77,7 +77,7 @@ What is planned and what is done, in the order of work.
 
 **10. Practice exams and progress**
 - [x] App: practice sessions, scoring by course rules, progress per learning objective
-- [ ] Evaluation harness: stateful property test of sessions against a model of the expected answers; contract tests generated from the app's API description
+- [x] Evaluation harness: stateful property test of sessions against a model of the expected answers; contract tests generated from the app's API description
 
 **11. Uploads and OCR**
 - [ ] App: OCR service (Tesseract), learner uploads, failed pages reported

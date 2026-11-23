@@ -33,3 +33,9 @@ class PostgresLearnerStore:
             return None
         learner_id: UUID = row[0]
         return learner_id
+
+    async def remove(self, learner_id: UUID) -> bool:
+        """Delete the learner's row; its sessions and their answers go with it through the foreign keys."""
+        async with self._database.connection() as conn:
+            cursor = await conn.execute("DELETE FROM learners WHERE learner_id = %s", (learner_id,))
+            return cursor.rowcount == 1

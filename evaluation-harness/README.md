@@ -45,7 +45,8 @@ evaluation-harness/
 │   ├── corpus_db.py        # direct reads of the app's stored corpus, as the read-only database role
 │   ├── datasets/           # the retrieval gold set (built from a local question bank), the Q&A set and paraphrase
 │   │                       #   pair files and their checks
-│   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run
+│   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run;
+│   │                       #   the result and progress practice sessions must report, from the answers sent
 │   ├── evaluation/         # the retrieval, answer, paraphrase and latency runs: checks, requests, run records,
 │   │                       #   commands
 │   ├── relations/          # metamorphic relations: how a pair of inputs or of results is judged
@@ -62,6 +63,7 @@ evaluation-harness/
 │   │   ├── __init__.py     # the name prefix every piece of test data carries
 │   │   ├── cleanup.py      # removes all test data from every store and lists what is left (no kind of data yet)
 │   │   └── __main__.py     # the clean / check command
+│   ├── exam_client.py      # a plain client of the practice exam endpoints; registers and removes its learners
 │   ├── traces.py           # reads the whole trace of a request from the stack's trace store (Jaeger) by its id
 │   ├── transport.py        # SutTransport: async HTTP client that never raises on HTTP or network errors
 │   └── observation.py      # Observation: one request/response record, or the transport error instead
@@ -90,6 +92,7 @@ Settings are read from environment variables when a run starts.
 | `EVAL_STACK_ENV_FILE` | `../.env` | The `.env` file the stack under test runs with |
 | `EVAL_DB_HOST` | `127.0.0.1` | Host on which the stack publishes its database port |
 | `EVAL_PROXY_LEDGER_FILE` | `runs/proxy_ledger.jsonl` | The ledger of the LLM proxy on this machine, read by the api tests |
+| `EVAL_STATEFUL_EXAMPLES` | `100` | How many sequences of calls the state machine test of practice sessions tries |
 
 Values the harness shares with the stack are read from the stack's own `.env` (the repository root's, see
 [`.env.example`](../.env.example)), so they are set in one place: `DB_NAME`, `DB_PUBLISHED_PORT`, the read-only
@@ -492,6 +495,25 @@ The tests of `tests/api/test_search_relations.py` send 25 drawn examples each (t
 and read the local course's passages from the database. They take a few seconds on the default search and several
 minutes with the reranker on. Hypothesis keeps the examples that failed in `.hypothesis/` (not committed) and
 tries them first on the next run.
+
+`tests/api/test_exam_sessions.py` checks practice exams as a state machine. Hypothesis draws sequences of up to
+15 steps for two learners on the stack's local course: start a session, answer the next question right or
+wrong in any written form, repeat an answer, try to replace one, name an option that does not exist, ask for
+the other learner's session. The test keeps its own model of the answers it sent; the answer key comes from
+the course's bank file and the pass mark from its manifest, both read on this machine. After every step each
+session's result and each learner's progress must equal the model, and every response must fit the app's API
+description. 100 sequences take under a minute; `$env:EVAL_STATEFUL_EXAMPLES = "200"` tries more. The app
+picks a session's questions at random, so the drawn values are only numbers that the step turns into an
+answer to whatever question is shown. On a failure Hypothesis prints the shortest sequence of steps it found.
+
+`tests/api/test_contract.py` makes one test per operation of the app's `/openapi.json` with Schemathesis:
+generated requests, valid and deliberately invalid, each answer checked against the declared statuses and
+body shapes, and never a server error. It leaves out `POST /v1/ask` (calls the answer model), the ingestion
+endpoint (rewrites a stored corpus) and `POST /v1/admin/learners` (leaves a learner behind), and fails at once
+if one of them is generated anyway. It takes about 20 seconds.
+
+Both tests register their learners through the admin endpoint and remove them at the end
+(`DELETE /v1/admin/learners/{id}`), so no learner, session or answer of a test stays in the stack's database.
 
 Every request carries the harness's own `X-Request-ID`, and the app echoes it and writes it into its
 log lines, so a failing observation can be found in the app's logs by its `request_id`.
