@@ -35,3 +35,9 @@ sources:
   - file: lumen_moths_bank.jsonl
     role: question_bank
     authority: primary
+
+# Practice exams: a session asks 20 of the bank's questions unless the learner asks for another number, and is
+# passed with 70 percent of them correct (14 of 20).
+exam:
+  pass_mark_percent: 70
+  session_size: 20

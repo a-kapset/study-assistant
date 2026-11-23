@@ -74,15 +74,23 @@ app/
 │   │   ├── models.py       # the answer: text, declined or not, citations with section, file and pages, invalid citations count
 │   │   ├── prompts.py      # instructions of both modes and the numbered, escaped passages block
 │   │   └── service.py      # answers in the configured mode: search, decline without a model call, structured reply, citations
-│   ├── exams/              # a course's question bank
-│   │   └── bank.py         # the common bank format (one question per JSON line) and its reader; a bad line names its number and a reason code
+│   ├── learners/           # who sessions, answers and progress belong to
+│   │   ├── service.py      # registers a learner with a random key shown once; finds the learner of a key by the key's SHA-256
+│   │   └── repository.py   # the learners table
+│   ├── exams/              # a course's question bank and practice exams
+│   │   ├── bank.py         # the common bank format (one question per JSON line) and its reader; a bad line names its number and a reason code
+│   │   ├── loader.py       # every bank file a manifest lists, as one checked list of questions
+│   │   ├── service.py      # sessions: which questions, checking an answer once, the result by the course's pass mark, progress per objective
+│   │   └── repository.py   # the SQL behind banks, sessions and the answer log
 │   └── api/                # HTTP layer: one router factory per group of endpoints, plus middleware
 │       ├── middleware.py   # request id on every request; unhandled exceptions become a 500 envelope
 │       ├── health.py
 │       ├── courses.py
 │       ├── search.py       # POST /v1/search
 │       ├── ask.py          # POST /v1/ask
-│       ├── admin.py        # endpoints behind the admin key: course ingestion
+│       ├── auth.py         # the learner behind a request, from its "Authorization: Bearer" key
+│       ├── exams.py        # practice sessions and progress, for the learner whose key the request carries
+│       ├── admin.py        # endpoints behind the admin key: course ingestion (corpus and question bank), registering a learner
 │       └── config.py
 ├── tools/
 │   └── make_embedder_reference.py  # makes the reference vectors, in a throwaway container (see "Reference vectors")
@@ -277,6 +285,12 @@ role, so it cannot create, alter or drop anything; only the migration run uses t
 Every row carries its course id; a document's sections, objectives and chunks are deleted with it, and a chunk's
 vectors with the chunk.
 
+Practice exams have their own tables (not in the diagram): `learners` (an id and the SHA-256 of the learner's
+key), `bank_items` (a course's questions; one that left the bank is marked `retired`, never deleted, so sessions
+that hold it stay readable), `exam_sessions` and `exam_session_items` (a learner's session and its questions in
+order) and `exam_answers`, the answer log: one row per answered question of a session, with whether it was correct
+and the objective it tested, fixed when the answer is given. Progress is a sum over that log.
+
 ```mermaid
 erDiagram
     courses ||--o{ documents : "has source files"
@@ -383,6 +397,44 @@ after the other. Chunk length and overlap are settings (`APP_INGEST__CHUNK_SIZE`
 changing them rebuilds every document on the next ingestion. Only PDF sources are ingested so far; question
 banks are not chunked.
 
+## Practice exams
+
+A learner practises on a course's question bank. Nothing here calls a model: an answer is correct when the
+selected options equal the question's key.
+
+An operator registers a learner once; the key in the answer is shown only there (the database keeps its SHA-256):
+
+```powershell
+$key = (Select-String -Path .env -Pattern '^ADMIN_API_KEY=(.+)$').Matches[0].Groups[1].Value
+$learner = curl.exe -s -X POST -H "X-Admin-Key: $key" http://127.0.0.1:8000/v1/admin/learners | ConvertFrom-Json
+$auth = "Authorization: Bearer $($learner.api_key)"
+```
+
+Every endpoint below needs that header; without a learner's key the answer is 401.
+
+- **Start.** `POST /v1/exams/sessions` with `course_id`, optionally `objective_id` (only the questions of one
+  learning objective) and `size`. Without `size` the session gets the course's `exam.session_size` questions, or
+  every question in scope; fewer than there are means a random pick. The course's bank is loaded by ingestion.
+- **Ask.** `GET /v1/exams/sessions/{id}/next` gives the first question without an answer (`item_id`, `stem`,
+  `options`, and `select`, the number of options to choose), never its key, or `{"status": "finished"}`.
+- **Answer.** `POST /v1/exams/sessions/{id}/answers` with `item_id` and `selected` (option ids) replies with
+  `correct` and the `keys`. Spaces around an id and its letter case are ignored (`" B "` is `b`); an id the
+  question does not have is a 422 (`unknown_option`), never a guess. A question is answered once: the same answer
+  again gets the same reply and stores nothing, a different one is a 409 (`already_answered`).
+- **Result.** `GET /v1/exams/sessions/{id}/result`: `question_count`, `answered`, `correct`, the course's
+  `pass_mark_percent` and `passed`, which is set only when every question is answered.
+- **Progress.** `GET /v1/progress?course_id=...`: per learning objective, how many answers the learner gave over
+  all sessions and how many were correct. An objective without answers is absent, not zero.
+
+A session belongs to its learner: with another learner's key it answers 404 (`session_not_found`), like a session
+that does not exist.
+
+```powershell
+'{"course_id": "lumen_moths", "size": 5}' | Set-Content session.json
+$session = curl.exe -s -X POST -H $auth -H "Content-Type: application/json" --data-binary "@session.json" http://127.0.0.1:8000/v1/exams/sessions | ConvertFrom-Json
+curl.exe -s -H $auth "http://127.0.0.1:8000/v1/exams/sessions/$($session.session_id)/next"
+```
+
 ## Search
 
 `POST /v1/search` with `course_id` and `query` returns the course's best passages for the question, best first,
@@ -485,7 +537,13 @@ curl.exe -X POST -H "Content-Type: application/json" --data-binary "@ask.json" h
 | `GET` | `/v1/courses/{course_id}` | One course, its stored `corpus` counts (documents, sections, learning objectives, chunks), the configured `embedding_space` and the number of the course's `vectors` in it (0 after a change of model until the next ingestion); 404 for a course not served |
 | `POST` | `/v1/search` | The passages of a course closest to a question: `status` (`ok` / `empty` / `degraded`) and `degraded_reason`, `hits` with score and rank, the `strategy`, `reranked`, `k`, `min_score` and `embedding_space` used; 404 for a course not served, 409 for a course not fully embedded, 502 when the embedding or rerank server answers with an error (see "Search") |
 | `POST` | `/v1/ask` | An answer to a question about a course: `answer`, `abstain_reason`, `citations` (passage, section, file, pages), `invalid_citations`; grounded on the course's passages or not by `APP_ASK__MODE`; 404 for a course not served, 409 / 502 when the search cannot run, 502 / 503 when the model provider fails (see "Ask") |
-| `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count |
+| `POST` | `/v1/admin/courses/{course_id}/ingest` | Ingest a course (needs the `X-Admin-Key` header, otherwise 401): per-file outcome, removed files, stored counts, embedding space and vector count, and `question_bank_items`, the questions its bank now offers; 422 `question_bank_invalid` for a bank file that cannot be used, with nothing written |
+| `POST` | `/v1/admin/learners` | Register a learner (needs the `X-Admin-Key` header): `learner_id` and the `api_key` its requests carry, shown only here |
+| `POST` | `/v1/exams/sessions` | Start a practice session of the learner (`Authorization: Bearer <key>`, otherwise 401) on a course or one learning objective: 201 with `session_id`, `question_count`; 404 for a course not served, 409 `question_bank_empty`, 422 `unknown_objective` |
+| `GET` | `/v1/exams/sessions/{session_id}/next` | The first question without an answer, without its key, or `finished`; 404 `session_not_found` |
+| `POST` | `/v1/exams/sessions/{session_id}/answers` | Answer one question: `correct` and `keys`; the same answer again changes nothing; 409 `already_answered`, 422 `unknown_option`, 404 `item_not_in_session` / `session_not_found` |
+| `GET` | `/v1/exams/sessions/{session_id}/result` | Answered and correct counts, the course's pass mark and, once all is answered, `passed`; 404 `session_not_found` |
+| `GET` | `/v1/progress?course_id=...` | The learner's answers per learning objective over all sessions (see "Practice exams"); 404 for a course not served |
 
 
 ## Errors and request ids
@@ -561,7 +619,10 @@ prepares the new space, and the next ingestion adds a vector for every stored ch
 keeps its own. `tests/integration/test_ingest_sql.py` changes a course the way an author does (a source dropped
 from the manifest, a PDF saved again) and checks what ingestion deletes, also next to a course with files of the
 same names. `tests/integration/test_search_sql.py` checks the search statements: the closest passages of the
-asked course only, with their similarity, and a course's coverage by vectors per space. The tests start a
+asked course only, with their similarity, and a course's coverage by vectors per space.
+`tests/integration/test_exam_sql.py` runs practice sessions on the real tables: a question that left the bank,
+a session asked for by another learner, two answers to one question (also sent at the same time), progress next
+to other learners' and other courses' answers, and a learner found by its key. The tests start a
 throwaway container of the stack's database image with Testcontainers, prepare it
 with the app's own migration run and remove it at the end; the stack's database is never touched. They need
 Docker running and nothing else:
@@ -571,7 +632,8 @@ poetry run pytest -m database
 ```
 
 A plain `pytest` leaves them out (marker `database`); without Docker they fail, never skip. Run them after any
-change of the SQL in `ingest/repository.py` or `retrieval/repository.py`, of `migrate.py` or of a migration file.
+change of the SQL in `ingest/repository.py`, `retrieval/repository.py`, `exams/repository.py` or
+`learners/repository.py`, of `migrate.py` or of a migration file.
 
 ### Reference vectors
 

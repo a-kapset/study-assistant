@@ -99,6 +99,16 @@ class CourseSource(ManifestModel):
         return self
 
 
+class ExamSettings(ManifestModel):
+    """How practice exams of a course are run and judged; every course sets its own values."""
+
+    # The share of a session's questions that must be answered correctly to pass, in whole percent. A whole number
+    # keeps the comparison exact: 26 of 40 at 65 percent passes without any rounding question.
+    pass_mark_percent: int = Field(ge=1, le=100)
+    # How many questions a session gets when the learner does not say; without it, every question in scope.
+    session_size: int | None = Field(default=None, ge=1)
+
+
 class CourseManifest(ManifestModel):
     """One course: what it is called, how its sources are structured, and which files they are."""
 
@@ -109,3 +119,13 @@ class CourseManifest(ManifestModel):
     language: str = Field(pattern=COURSE_LANGUAGE_PATTERN)
     structure: StructureRules
     sources: tuple[CourseSource, ...] = Field(min_length=1)
+    # Needed by a course with a question bank; a course without one has no practice exams.
+    exam: ExamSettings | None = None
+
+    @model_validator(mode="after")
+    def _check_exam(self) -> Self:
+        """Reject a course that has a question bank but no pass mark: its sessions could never be judged."""
+        has_bank = any(source.role == "question_bank" for source in self.sources)
+        if has_bank and self.exam is None:
+            raise ValueError("a course with a question_bank source needs an exam block with pass_mark_percent")
+        return self

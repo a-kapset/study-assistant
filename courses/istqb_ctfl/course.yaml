@@ -63,3 +63,8 @@ sources:
   - file: sample_exams_bank.jsonl
     role: question_bank
     authority: primary
+
+# Practice exams follow the real exam: 40 questions, passed with 65 percent correct (26 of 40).
+exam:
+  pass_mark_percent: 65
+  session_size: 40

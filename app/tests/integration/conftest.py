@@ -170,6 +170,18 @@ async def store(postgres: MigratedDatabase) -> AsyncIterator[PostgresCorpusStore
 
 
 @pytest.fixture
+async def app_database(postgres: MigratedDatabase) -> AsyncIterator[PostgresDatabase]:
+    """The app's connection pool as the app's role, on a database without courses, question banks or sessions."""
+    postgres.empty_corpus()
+    database = PostgresDatabase(postgres.settings(APP_ROLE, APP_ROLE_PASSWORD), NoOpTracerProvider())
+    await database.open()
+    try:
+        yield database
+    finally:
+        await database.close()
+
+
+@pytest.fixture
 def embedder() -> FixedLengthEmbedder:
     """An embedder of the space the migration run prepared first."""
     return FixedLengthEmbedder(EMBEDDING)

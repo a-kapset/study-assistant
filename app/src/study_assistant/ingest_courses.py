@@ -57,6 +57,7 @@ def ingest_course(client: httpx2.Client, course_id: str, log: structlog.typing.F
         documents={document["source_file"]: document["outcome"] for document in report["documents"]},
         removed=report["removed"],
         vectors=report["vectors"],
+        question_bank_items=report["question_bank_items"],
     )
     return True
 

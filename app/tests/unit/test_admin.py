@@ -11,7 +11,7 @@ from study_assistant.ingest.service import CourseIngestor, IngestConflictError, 
 from study_assistant.settings import CoursesSettings, Settings
 
 if TYPE_CHECKING:
-    from .conftest import FakeCorpusStore, FakeDatabase, FakeEmbedder
+    from .conftest import FakeCorpusStore, FakeDatabase, FakeEmbedder, FakeExamStore
 
 # The repository's own course folder: app/tests/unit/<this file> -> repository root.
 REPO_COURSES = Path(__file__).resolve().parents[3] / "courses"
@@ -24,10 +24,14 @@ def _client(
     store: FakeCorpusStore,
     embedder: FakeEmbedder,
     source_dir: Path = REPO_COURSES,
+    exam_store: FakeExamStore | None = None,
 ) -> TestClient:
-    """A client for an app serving the demo course, with sources read from ``source_dir``."""
+    """A client for an app serving the demo course, with sources read from ``source_dir``; question banks go to
+    ``exam_store``, which only a test of a successful ingestion needs."""
     courses = CoursesSettings(manifest_dir=REPO_COURSES, source_dir=source_dir, enabled=("demo",))
-    return TestClient(build_app(settings.model_copy(update={"courses": courses}), db, store, embedder))
+    return TestClient(
+        build_app(settings.model_copy(update={"courses": courses}), db, store, embedder, exam_store=exam_store)
+    )
 
 
 def _key(settings: Settings) -> dict[str, str]:
@@ -78,10 +82,15 @@ def test_ingest_of_a_course_not_served_answers_404(
 
 @pytest.mark.covers("US-004", "AC-2")
 def test_ingest_answers_with_the_report(
-    settings: Settings, fake_db: FakeDatabase, fake_store: FakeCorpusStore, fake_embedder: FakeEmbedder
+    settings: Settings,
+    fake_db: FakeDatabase,
+    fake_store: FakeCorpusStore,
+    fake_embedder: FakeEmbedder,
+    fake_exam_store: FakeExamStore,
 ) -> None:
-    """Guards the contract: per-file outcomes, removed files, the stored counts and vectors, nothing else."""
-    with _client(settings, fake_db, fake_store, fake_embedder) as client:
+    """Guards the contract: per-file outcomes, removed files, the stored counts and vectors, and the size of the
+    question bank (none for the demo course), nothing else."""
+    with _client(settings, fake_db, fake_store, fake_embedder, exam_store=fake_exam_store) as client:
         response = client.post(INGEST_DEMO, headers=_key(settings))
 
     assert response.status_code == 200
@@ -92,6 +101,7 @@ def test_ingest_answers_with_the_report(
         "corpus": {"documents": 1, "sections": 4, "learning_objectives": 11, "chunks": 12},
         "embedding_space": fake_embedder.space.id,
         "vectors": 12,
+        "question_bank_items": 0,
     }
 
 

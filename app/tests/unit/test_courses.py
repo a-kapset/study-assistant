@@ -236,6 +236,22 @@ def test_bad_manifest_error_names_the_course_the_file_and_the_reason(
     assert reason in message
 
 
+@pytest.mark.covers("US-020", "AC-11")
+def test_course_with_a_question_bank_but_no_pass_mark_is_refused(tmp_path: Path) -> None:
+    """A manifest lists a question bank and has no exam block. Loading must fail and say what is missing.
+    Catches a course whose sessions could be run but never judged, found only when a learner finishes one."""
+    sources = [
+        {"file": "text.md", "role": "material", "authority": "primary"},
+        {"file": "bank.jsonl", "role": "question_bank", "authority": "primary"},
+    ]
+    _write(tmp_path, "alpha", yaml.safe_dump(_manifest("alpha", sources=sources)))
+
+    with pytest.raises(CourseConfigError) as caught:
+        load_course(tmp_path, "alpha")
+
+    assert "pass_mark_percent" in str(caught.value), f"the error must name the missing pass mark: {caught.value}"
+
+
 def test_committed_course_manifests_are_valid() -> None:
     """Guards the repository's own manifests: an edit that breaks one must fail here, not at someone's startup."""
     course_ids = sorted(path.parent.name for path in REPO_COURSES.glob("*/course.yaml"))

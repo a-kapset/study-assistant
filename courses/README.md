@@ -30,6 +30,7 @@ materials themselves (syllabi, books, exams) never are and stay on the local mac
 | `sources[].pages` | Optional list of inclusive `[first, last]` page ranges, ascending and not overlapping: only these pages of the file are read, e.g. a textbook's teaching chapters without its practice exams and their answers. Page numbers stay those of the file, so citations name the real page. Without it every page is read. |
 | `sources[].section_heading` | Optional heading pattern for this file only, with the same named groups as `structure.section_heading`, for a book whose headings are written differently from the course's main material. |
 | `sources[].noise_lines` | Regular expressions for the lines a file's layout repeats on every page (running header, footer, page number). A line is dropped from the extracted text only when a pattern matches all of it, so a sentence that merely starts like a header stays. Each file has its own list, because each has its own layout. |
+| `exam` | Needed by a course with a `question_bank` source: `pass_mark_percent` (1 to 100, the share of a practice session's questions that must be correct to pass, in whole percent) and, optionally, `session_size` (the questions a session gets when the learner names no number; without it, every question in scope). |
 
 Unknown keys, invalid regular expressions and missing fields are errors: the app refuses to start and
 names the course, the file and the problem.
@@ -83,7 +84,9 @@ tests no longer match and must be made again.
 ## Question banks
 
 A course's exam questions are one more source in its manifest, with the role `question_bank`. Ingestion does not
-cut a bank into chunks. Every course writes its bank in the same format: JSON Lines, one question per line.
+cut a bank into chunks: it stores the questions for practice exams, updates the ones whose id is already stored
+and retires the ones that left the file. A course with a bank also needs the `exam` block of its manifest.
+Every course writes its bank in the same format: JSON Lines, one question per line.
 
 | Field | Meaning |
 |---|---|

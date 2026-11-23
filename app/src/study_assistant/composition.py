@@ -17,8 +17,10 @@ from opentelemetry.sdk.trace import TracerProvider
 from study_assistant.answer.service import Answerer
 from study_assistant.api.admin import admin_router
 from study_assistant.api.ask import ask_router
+from study_assistant.api.auth import learner_dependency
 from study_assistant.api.config import config_router
 from study_assistant.api.courses import courses_router
+from study_assistant.api.exams import exams_router
 from study_assistant.api.health import health_router
 from study_assistant.api.middleware import REQUEST_ID_HEADER, RequestIdMiddleware, add_request_id
 from study_assistant.api.search import search_router
@@ -27,9 +29,13 @@ from study_assistant.db import Database, PostgresDatabase
 from study_assistant.embed.base import Embedder
 from study_assistant.embed.remote import RemoteEmbedder
 from study_assistant.errors import install_error_handlers
+from study_assistant.exams.repository import PostgresExamStore
+from study_assistant.exams.service import ExamService, ExamStore
 from study_assistant.ingest.chunker import ChunkSize
 from study_assistant.ingest.repository import PostgresCorpusStore
 from study_assistant.ingest.service import CorpusStore, CourseIngestor
+from study_assistant.learners.repository import PostgresLearnerStore
+from study_assistant.learners.service import Learners, LearnerStore
 from study_assistant.llm.providers import build_chat_model
 from study_assistant.logging_setup import configure_logging
 from study_assistant.retrieval.repository import PostgresSearchStore, SearchStore
@@ -50,6 +56,8 @@ def build_app(
     chat_model: BaseChatModel | None = None,
     reranker: Reranker | None = None,
     tracer_provider: TracerProvider | None = None,
+    exam_store: ExamStore | None = None,
+    learner_store: LearnerStore | None = None,
 ) -> FastAPI:
     """Build the app from ``settings``: logging first, then the courses, the database, the models and the routes.
 
@@ -57,8 +65,9 @@ def build_app(
     overlap that is not below the chunk size and a model provider the app does not know. Nothing reads the
     environment or connects anywhere: the database opens when the server starts, the embedding server is first
     called by an ingestion or a readiness check, and the model provider by the first question. Tests pass their own
-    ``database``, corpus ``store``, ``embedder``, ``search_store``, ``chat_model`` and ``reranker``; otherwise the app
-    uses PostgreSQL, the embedding server, the model provider and the rerank server as configured in ``settings``.
+    ``database``, corpus ``store``, ``embedder``, ``search_store``, ``chat_model``, ``reranker``, ``exam_store`` and
+    ``learner_store``; otherwise the app uses PostgreSQL, the embedding server, the model provider and the rerank
+    server as configured in ``settings``.
     The reranker is used only when the settings turn reranking on; otherwise none is made and a given one is unused.
 
     Every request is traced into ``tracer_provider``: the request itself, each database query, each call to the
@@ -99,6 +108,8 @@ def build_app(
     # The grounded mode searches with the same search that serves /v1/search, so its passages are those the search
     # quality is measured on.
     answerer = Answerer(chat_model, search, settings.ask, settings.search, tracer)
+    learners = Learners(learner_store if learner_store is not None else PostgresLearnerStore(db))
+    exams = ExamService(exam_store if exam_store is not None else PostgresExamStore(db))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
@@ -132,7 +143,10 @@ def build_app(
     app.include_router(courses_router(courses, corpus, embedder.space))
     app.include_router(search_router(courses, search, settings.search))
     app.include_router(ask_router(courses, answerer))
-    app.include_router(admin_router(courses, ingestor, settings.admin.api_key))
+    app.include_router(exams_router(courses, exams, learner_dependency(learners)))
+    app.include_router(
+        admin_router(courses, ingestor, exams, learners, settings.courses.source_dir, settings.admin.api_key)
+    )
     app.include_router(config_router(settings=settings, app_version=app_version))
 
     structlog.get_logger().info(

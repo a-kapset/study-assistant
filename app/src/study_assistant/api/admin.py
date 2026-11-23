@@ -1,24 +1,54 @@
 """Admin endpoints: operations that change what the app serves, open only to callers with the admin key."""
 
+import asyncio
 import secrets
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Annotated
+from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import SecretStr
+from pydantic import BaseModel, ConfigDict, SecretStr
 
 from study_assistant.courses.models import CourseManifest
 from study_assistant.embed.remote import EmbeddingServiceRequestError, EmbeddingServiceUnavailableError
 from study_assistant.errors import ErrorBody, ErrorEnvelope, error_response
+from study_assistant.exams.loader import QuestionBankError, read_course_bank
+from study_assistant.exams.service import ExamService
 from study_assistant.ingest.service import CourseIngestor, IngestConflictError, IngestError, IngestReport
+from study_assistant.learners.service import Learners
 
 ADMIN_KEY_HEADER = "X-Admin-Key"
 
 
-def admin_router(courses: Mapping[str, CourseManifest], ingestor: CourseIngestor, api_key: SecretStr) -> APIRouter:
-    """Build the router for the admin endpoints; every one of them needs the admin key."""
+class CourseIngestReport(IngestReport):
+    """The result of ingesting one course: its corpus, and how many questions its bank now offers to sessions."""
+
+    question_bank_items: int
+
+
+class LearnerRegistered(BaseModel):
+    """A new learner. The key is shown here once and stored nowhere in readable form: a lost key is not recoverable."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    learner_id: UUID
+    api_key: str
+
+
+def admin_router(
+    courses: Mapping[str, CourseManifest],
+    ingestor: CourseIngestor,
+    exams: ExamService,
+    learners: Learners,
+    source_dir: Path,
+    api_key: SecretStr,
+) -> APIRouter:
+    """Build the router for the admin endpoints; every one of them needs the admin key.
+
+    Question banks are read from the course folders under ``source_dir``, like the other course sources.
+    """
     expected = api_key.get_secret_value().encode("utf-8")
     log: structlog.typing.FilteringBoundLogger = structlog.get_logger(__name__)
 
@@ -32,7 +62,7 @@ def admin_router(courses: Mapping[str, CourseManifest], ingestor: CourseIngestor
 
     @router.post(
         "/courses/{course_id}/ingest",
-        response_model=IngestReport,
+        response_model=CourseIngestReport,
         responses={
             401: {"model": ErrorEnvelope},
             404: {"model": ErrorEnvelope},
@@ -42,16 +72,21 @@ def admin_router(courses: Mapping[str, CourseManifest], ingestor: CourseIngestor
             503: {"model": ErrorEnvelope},
         },
     )
-    async def ingest_course(course_id: str, request: Request) -> IngestReport | JSONResponse:
-        """Bring the stored corpus of a course in line with its source files; repeating it changes nothing.
+    async def ingest_course(course_id: str, request: Request) -> CourseIngestReport | JSONResponse:
+        """Bring the stored corpus and question bank of a course in line with its source files; repeating it
+        changes nothing.
 
-        Every failure leaves the stored corpus as it was: a source that cannot be read is a 422, another ingestion
-        of the course that changed it meanwhile a 409, an embedding server that answers with an error a 502, and one
-        that cannot be reached a 503.
+        Every failure leaves the stored data as it was: a source or a bank file that cannot be read is a 422,
+        another ingestion of the course that changed it meanwhile a 409, an embedding server that answers with an
+        error a 502, and one that cannot be reached a 503. The bank is read and checked before anything is written.
         """
         manifest = courses.get(course_id)
         if manifest is None:
             raise HTTPException(status_code=404, detail=f"No course '{course_id}' is served by this app")
+        try:
+            bank = await asyncio.to_thread(read_course_bank, manifest, source_dir / manifest.id)
+        except QuestionBankError as exc:
+            return _failed(request, course_id, 422, "question_bank_invalid", str(exc))
         try:
             report = await ingestor.ingest(manifest)
         except IngestError as exc:
@@ -63,6 +98,8 @@ def admin_router(courses: Mapping[str, CourseManifest], ingestor: CourseIngestor
         except EmbeddingServiceUnavailableError as exc:
             message = f"the embedding server could not be reached ({exc})"
             return _failed(request, course_id, 503, "embedding_unavailable", message)
+        # After the corpus: the course's row, which the bank's rows point at, exists from the first ingestion on.
+        question_bank_items = await exams.load_bank(course_id, bank)
         log.info(
             "ingest_done",
             course_id=course_id,
@@ -71,8 +108,17 @@ def admin_router(courses: Mapping[str, CourseManifest], ingestor: CourseIngestor
             corpus=report.corpus.model_dump(),
             embedding_space=report.embedding_space,
             vectors=report.vectors,
+            question_bank_items=question_bank_items,
         )
-        return report
+        return CourseIngestReport(**report.model_dump(), question_bank_items=question_bank_items)
+
+    @router.post("/learners", status_code=201, responses={401: {"model": ErrorEnvelope}})
+    async def register_learner() -> LearnerRegistered:
+        """Register a learner and return its id with the key its requests must carry; the key is shown only here."""
+        learner_id, key = await learners.register()
+        # The key itself is never logged.
+        log.info("learner_registered", learner_id=str(learner_id))
+        return LearnerRegistered(learner_id=learner_id, api_key=key)
 
     def _failed(request: Request, course_id: str, status: int, code: str, message: str) -> JSONResponse:
         """Log a failed ingestion and answer it in the error envelope with ``status`` and ``code``."""

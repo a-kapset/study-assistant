@@ -5,9 +5,10 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
+from study_assistant.api.admin import CourseIngestReport
 from study_assistant.api.courses import CoursesResponse, CourseSummary
 from study_assistant.errors import ErrorBody, ErrorEnvelope
-from study_assistant.ingest.service import CorpusCounts, DocumentReport, IngestReport
+from study_assistant.ingest.service import CorpusCounts, DocumentReport
 from study_assistant.ingest_courses import ingest_all
 
 # Nothing listens there: every request goes to the fake app server below.
@@ -26,13 +27,14 @@ def _listing(course_ids: Sequence[str]) -> dict[str, object]:
 
 def _report(course_id: str) -> dict[str, object]:
     """Build the body of a successful ingestion with the app's own report model."""
-    return IngestReport(
+    return CourseIngestReport(
         course_id=course_id,
         documents=[DocumentReport(source_file="rules.pdf", outcome="unchanged")],
         removed=[],
         corpus=CorpusCounts(documents=1, sections=3, learning_objectives=2, chunks=12),
         embedding_space="test_space",
         vectors=12,
+        question_bank_items=0,
     ).model_dump(mode="json")
 
 

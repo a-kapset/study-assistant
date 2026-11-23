@@ -5,6 +5,7 @@ import zlib
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import replace
+from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.callbacks import CallbackManagerForLLMRun
@@ -17,6 +18,8 @@ from pydantic import BaseModel, Field, HttpUrl, SecretStr
 from study_assistant.db import Connection, DatabaseUnavailableError
 from study_assistant.embed.base import EmbeddingSpace
 from study_assistant.embed.remote import EmbeddingServiceUnavailableError
+from study_assistant.exams.bank import BankItem
+from study_assistant.exams.service import ObjectiveCount, SessionState, StoredAnswer, StoredItem, StoredOption
 from study_assistant.ingest.service import CorpusCounts, PreparedDocument, StoredCourse
 from study_assistant.retrieval.repository import Coverage, Fused, HybridQuery, Passage
 from study_assistant.retrieval.rerank import RerankServiceUnavailableError
@@ -381,6 +384,99 @@ class FakeCorpusStore:
         return len(self.vectors.get(course_id, {}))
 
 
+class FakeLearnerStore:
+    """Keeps learners in memory by the hash of their key, as the learners table does."""
+
+    def __init__(self) -> None:
+        """Start without learners."""
+        self.by_hash: dict[str, UUID] = {}
+
+    async def add(self, key_sha256: str) -> UUID:
+        """Store a learner under the key hash and return a new id."""
+        learner_id = uuid4()
+        self.by_hash[key_sha256] = learner_id
+        return learner_id
+
+    async def find(self, key_sha256: str) -> UUID | None:
+        """Return the learner stored under the key hash, if any."""
+        return self.by_hash.get(key_sha256)
+
+
+class FakeExamStore:
+    """Keeps banks, sessions and answers in memory with the rules the database tables enforce: a question missing
+    from a new bank is retired and stays readable, a session is found only for its own learner, and a question of
+    a session holds at most one answer (a second one is not stored)."""
+
+    def __init__(self) -> None:
+        """Start empty."""
+        self.items: dict[str, dict[str, StoredItem]] = {}
+        self.retired: dict[str, set[str]] = {}
+        # Session id -> (learner, course, question ids in order).
+        self.sessions: dict[UUID, tuple[UUID, str, tuple[str, ...]]] = {}
+        # (session id, question id) -> (answer, objective), in the order the answers were stored.
+        self.answers: dict[tuple[UUID, str], tuple[StoredAnswer, str]] = {}
+
+    async def replace_bank(self, course_id: str, items: Sequence[BankItem]) -> int:
+        """Store the questions in order, retire the stored ones not among them, and count the offered ones."""
+        stored = self.items.setdefault(course_id, {})
+        new_ids = [item.id for item in items]
+        self.retired[course_id] = set(stored) - set(new_ids)
+        kept = {item_id: stored[item_id] for item_id in self.retired[course_id]}
+        fresh = {
+            item.id: StoredItem(
+                item_id=item.id,
+                stem=item.stem,
+                options=tuple(StoredOption(id=option.id, text=option.text) for option in item.options),
+                keys=frozenset(item.keys),
+                objective_id=item.objective_id,
+            )
+            for item in items
+        }
+        self.items[course_id] = {**fresh, **kept}
+        return len(fresh)
+
+    async def active_items(self, course_id: str) -> list[StoredItem]:
+        """Return the questions of the course that are not retired, in bank order."""
+        retired = self.retired.get(course_id, set())
+        return [item for item_id, item in self.items.get(course_id, {}).items() if item_id not in retired]
+
+    async def create_session(self, learner_id: UUID, course_id: str, item_ids: Sequence[str]) -> UUID:
+        """Store a session of the learner and return a new id."""
+        session_id = uuid4()
+        self.sessions[session_id] = (learner_id, course_id, tuple(item_ids))
+        return session_id
+
+    async def session(self, learner_id: UUID, session_id: UUID) -> SessionState | None:
+        """Return the session only to the learner it belongs to."""
+        found = self.sessions.get(session_id)
+        if found is None or found[0] != learner_id:
+            return None
+        _, course_id, item_ids = found
+        return SessionState(
+            course_id=course_id,
+            items=tuple(self.items[course_id][item_id] for item_id in item_ids),
+            answers={item_id: answer for (owner, item_id), (answer, _) in self.answers.items() if owner == session_id},
+        )
+
+    async def save_answer(
+        self, session_id: UUID, item_id: str, answer: StoredAnswer, objective_id: str
+    ) -> StoredAnswer:
+        """Keep the first answer of a question and return the one the session holds."""
+        stored, _ = self.answers.setdefault((session_id, item_id), (answer, objective_id))
+        return stored
+
+    async def progress(self, learner_id: UUID, course_id: str) -> list[ObjectiveCount]:
+        """Sum the learner's answers in the course per objective, ordered by objective id."""
+        counts: dict[str, list[int]] = {}
+        for (session_id, _), (answer, objective_id) in self.answers.items():
+            owner, course, _ = self.sessions[session_id]
+            if owner == learner_id and course == course_id:
+                count = counts.setdefault(objective_id, [0, 0])
+                count[0] += 1
+                count[1] += int(answer.correct)
+        return [ObjectiveCount(objective_id, *counts[objective_id]) for objective_id in sorted(counts)]
+
+
 @pytest.fixture
 def settings() -> Settings:
     """Valid settings with a placeholder password; explicit values win over any APP_* variables in the shell."""
@@ -429,3 +525,15 @@ def fake_store() -> FakeCorpusStore:
 def anyio_backend() -> str:
     """Run tests marked ``anyio`` on asyncio, the loop the app server uses; anyio comes with the web framework."""
     return "asyncio"
+
+
+@pytest.fixture
+def fake_exam_store() -> FakeExamStore:
+    """A fresh, empty store of banks, sessions and answers for one test."""
+    return FakeExamStore()
+
+
+@pytest.fixture
+def fake_learner_store() -> FakeLearnerStore:
+    """A fresh store without learners for one test."""
+    return FakeLearnerStore()
