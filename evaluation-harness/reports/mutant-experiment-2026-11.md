@@ -268,6 +268,29 @@ the database, the by-words arm of the hybrid search, the mapping of citations to
 planted: a slow or timed-out provider or embedding server, a provider spend limit, a cut-off reply, defects in the
 app's source code (the next experiment).
 
+## Defects in the app's code
+
+A second experiment, `63f17978` (2026-11-23, app `48066f3`, catalog `mutants/istqb_ctfl_source.toml`, USD 0),
+planted two defects written into the app's code and ran them through the three checks without model calls. Every
+run was valid: the patched file was in the app's container under the mutant, the original after the restore, and the
+working tree was unchanged.
+
+- **The course filter dropped from the search by meaning** survived every check, as written before the run: the 146
+  gold questions found the same sections (134 of 146) and the 393 distinct passages they got were all of the asked
+  course. The defect is live: asked of the first course, a question about the ferry course got that course's passage
+  (similarity 0.872) and a question about the moth course five of its passages (0.855-0.863), where the configured
+  app finds nothing. Questions about the course's own content cannot show a missing course filter; only questions
+  aimed at another course's content can. The app's integration test of the search statement on a real PostgreSQL
+  (`test_nearest_returns_the_k_closest_passages_of_the_requested_course_with_their_similarity`) fails on the same
+  patch: it stores a second course with the same texts and expects the asked course's chunks only.
+- **The range check of cited passage numbers removed** survived every check, as written before the run. No check
+  here asks the model, and in the 5,212 answer cases of earlier records the model never cited a number outside the
+  passages, so an answer run would not see it either. The app's unit test of the citations is the check for it.
+
+Decision: both defects are caught below the harness, by the app's own tests of the code they change (the citation
+mapping by a unit test, the course filter by an integration test), and the harness checks of quality are not the
+place for them.
+
 ## Every killed or underpowered cell
 
 The change each cell measured against the run without a mutant, with the run's id, so that every verdict can be

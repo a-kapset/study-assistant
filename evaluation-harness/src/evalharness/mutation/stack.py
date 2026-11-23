@@ -25,9 +25,14 @@ class StackError(RuntimeError):
 class Stack(Protocol):
     """The running stack, as far as a mutant run changes it."""
 
-    def recreate_app(self, settings: Mapping[str, str]) -> None:
+    def recreate_app(self, settings: Mapping[str, str], override: Path | None = None) -> None:
         """Start a new container of the app with these settings on top of the stack's own, and wait until it is
-        healthy; an empty mapping gives the app as the stack configures it."""
+        healthy; an empty mapping gives the app as the stack configures it. ``override`` is one more compose file,
+        e.g. one that mounts changed files of the app's code."""
+        ...
+
+    def file_sha256(self, container_path: str) -> str:
+        """Return the SHA-256 of a file inside the running app's container."""
         ...
 
 
@@ -56,13 +61,24 @@ class ComposeStack:
                 return cls(str(project["Name"]), files, folder, git_commit)
         raise StackError(f"no running Compose project was started from {folder}; start the stack first")
 
-    def recreate_app(self, settings: Mapping[str, str]) -> None:
+    def recreate_app(self, settings: Mapping[str, str], override: Path | None = None) -> None:
         """Create the app's container again with ``settings`` in the environment of Docker Compose, which wins over
-        the .env file, and wait until it is healthy. Only the app changes; the other services keep running."""
-        files = [arg for path in self.files for arg in ("-f", str(path))]
-        command = ["docker", "compose", "-p", self.project, *files, "up", "-d", "--no-deps", "--force-recreate"]
+        the .env file, and wait until it is healthy. Only the app changes; the other services keep running. Without
+        ``override`` the app gets only the stack's own compose files, so a mount added before is gone."""
+        command = [*self._compose(override), "up", "-d", "--no-deps", "--force-recreate"]
         command += ["--wait", "--wait-timeout", str(_WAIT_S), _APP_SERVICE]
         _docker(command, self.folder, {**os.environ, "GIT_COMMIT": self.git_commit, **settings})
+
+    def file_sha256(self, container_path: str) -> str:
+        """Hash the file inside the app's container with the container's own sha256sum; empty when nothing printed."""
+        command = [*self._compose(None), "exec", "-T", _APP_SERVICE, "sha256sum", container_path]
+        printed = _docker(command, self.folder, {**os.environ, "GIT_COMMIT": self.git_commit})
+        return printed.split()[0] if printed.strip() else ""
+
+    def _compose(self, override: Path | None) -> list[str]:
+        """Return the start of a Docker Compose command on this project, with its files and ``override`` last."""
+        files = [*self.files, *([override] if override is not None else [])]
+        return ["docker", "compose", "-p", self.project, *(arg for path in files for arg in ("-f", str(path)))]
 
 
 def unique_files(paths: Sequence[str]) -> list[Path]:

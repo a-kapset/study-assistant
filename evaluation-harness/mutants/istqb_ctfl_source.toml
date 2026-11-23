@@ -1,0 +1,36 @@
+# Source mutants of the first course: defects planted in the app's code, one at a time (python -m evalharness.mutation).
+# A patch is applied on a throwaway worktree of the commit the app's image was built from and the changed file is
+# mounted over the image; the repository's working tree is never changed. Every expectation below was written before
+# the first run. Only the checks without model calls are made: neither patch changes what the model is sent unless
+# the search results change, and those checks show that.
+
+course_id = "istqb_ctfl"
+
+# The checks every mutant run makes. Paths are relative to evaluation-harness/.
+[checks]
+retrieval_gold = "datasets/istqb_ctfl/retrieval_gold_v0.toml"
+paraphrase = "datasets/istqb_ctfl/paraphrase_v0.toml"
+search_relations = true
+
+# The app as configured, through the same restart and the same checks: a check that fails here raises false alarms.
+[mutants.baseline]
+kind = "baseline"
+expected_symptom = "Nothing differs from a run on the app as configured."
+
+[mutants.course_filter_dropped]
+kind = "source"
+component = "search"
+patch = "mutants/patches/course_filter_dropped.patch"
+expected_symptom = "The search by meaning reads the vectors of every course in the embedding space, not only the asked one. The stack holds 128 passages of three other courses (a board game, moths, a ferry) next to 782 of the first course; they are far from its questions in meaning, so they are expected to reach the first five places rarely or never. No check here looks at which course a hit belongs to, so none is expected to notice: a blind spot, written down before the run."
+expected_killers = []
+origin = "observed"
+reference = "a recommender that accepted a requested filter and did not apply it (course notebook reviewed 2026-10-05)"
+
+[mutants.citation_range_check_removed]
+kind = "source"
+component = "answer"
+patch = "mutants/patches/citation_range_check_removed.patch"
+expected_symptom = "Passage numbers the model cites outside the passages given are no longer left out and counted: 0 cites the last passage, a number past the end fails the request. In the 5,212 answer cases with a citation count in the earlier run records (2026-11-23) the model never cited such a number (the 9 seen came from a planted fault), and no check here asks the model, so nothing is expected to change. The app's unit test of the citations is the check that sees it."
+expected_killers = []
+origin = "observed"
+reference = "a recommender whose model output was not checked against the closed set it had to come from (course notebook reviewed 2026-10-05)"

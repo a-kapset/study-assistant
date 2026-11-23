@@ -7,7 +7,7 @@ database, because a command that was accepted shows only what was asked for, not
 
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,6 +19,7 @@ from evalharness.mutation.course import IngestFailed, StoredCourse
 from evalharness.mutation.oracles import Check
 from evalharness.mutation.proof import apply_problem, changes, restore_problem
 from evalharness.mutation.record import CheckResult, MutantRunRecord, Proof, run_folder, write_record
+from evalharness.mutation.source import PreparedPatch
 from evalharness.mutation.stack import Stack, StackError
 from evalharness.transport import SutTransport
 
@@ -42,6 +43,8 @@ class Experiment:
     harness_commit: str
     harness_dirty: bool
     runs_dir: Path
+    # The prepared patch of every source mutant of the command, by mutant id.
+    patches: Mapping[str, PreparedPatch] = field(default_factory=dict)
 
 
 async def run_mutants(
@@ -83,8 +86,9 @@ async def run_mutant(
     folder.mkdir(parents=True)
     applied = Proof(changed={}, problem="the run stopped before the mutant was applied")
     results: dict[CheckName, CheckResult] = {}
+    patch = experiment.patches.get(mutant_id)
     try:
-        applied = await _apply(stack, course, sut, mutant, experiment)
+        applied = await _apply(stack, course, sut, mutant, experiment, patch)
         if applied.problem is None:
             for name, check in checks.items():
                 try:
@@ -92,7 +96,7 @@ async def run_mutant(
                 except RunRefused as refusal:
                     results[name] = CheckResult(status="refused", refusal=str(refusal))
     finally:
-        restored = await _restore(stack, course, sut, mutant, experiment)
+        restored = await _restore(stack, course, sut, mutant, experiment, patch)
         record = MutantRunRecord(
             run_id=run_id,
             experiment_id=experiment.experiment_id,
@@ -116,17 +120,27 @@ async def run_mutant(
 
 
 async def _apply(
-    stack: Stack, course: StoredCourse, sut: SutTransport, mutant: Mutant, experiment: Experiment
+    stack: Stack,
+    course: StoredCourse,
+    sut: SutTransport,
+    mutant: Mutant,
+    experiment: Experiment,
+    patch: PreparedPatch | None,
 ) -> Proof:
-    """Start the app again with the mutant's settings, ingest the course again when the mutant asks for it, and
-    compare what the app reports and what is stored with the first readings."""
+    """Start the app again with the mutant's settings or its changed code files, ingest the course again when the
+    mutant asks for it, and compare what the app reports, what its container holds and what is stored with the first
+    readings."""
+    if mutant.kind == "source" and patch is None:
+        return Proof(changed={}, problem="the patch of the source mutant was not prepared")
     try:
-        stack.recreate_app(mutant.settings)
+        stack.recreate_app(mutant.settings, patch.override if patch is not None else None)
         now = await read_app_settings(sut)
     except (StackError, RunRefused) as error:
         return Proof(changed={}, problem=f"the app did not start with the mutant: {error}")
     changed = changes(experiment.first_settings, now)
     problem = apply_problem(mutant.settings, changed)
+    if problem is None and patch is not None:
+        problem = _files_problem(stack, patch, patched=True)
     if problem is None and mutant.reingest:
         try:
             await course.ingest()
@@ -138,10 +152,16 @@ async def _apply(
 
 
 async def _restore(
-    stack: Stack, course: StoredCourse, sut: SutTransport, mutant: Mutant, experiment: Experiment
+    stack: Stack,
+    course: StoredCourse,
+    sut: SutTransport,
+    mutant: Mutant,
+    experiment: Experiment,
+    patch: PreparedPatch | None,
 ) -> Proof:
     """Start the app again as the stack configures it, ingest the course again when the mutant changed it, and check
-    that the settings and the stored passages equal the first readings and that everything the app uses answers."""
+    that the settings, the code files a patch changed and the stored passages equal the first readings and that
+    everything the app uses answers."""
     try:
         stack.recreate_app({})
         now = await read_app_settings(sut)
@@ -149,6 +169,8 @@ async def _restore(
         return Proof(changed={}, problem=f"the app did not start as configured: {error}")
     changed = changes(experiment.first_settings, now)
     problem = restore_problem(changed)
+    if problem is None and patch is not None:
+        problem = _files_problem(stack, patch, patched=False)
     if problem is None and mutant.reingest:
         try:
             await course.ingest()
@@ -162,3 +184,21 @@ async def _restore(
         except RunRefused as refusal:
             problem = str(refusal)
     return Proof(changed=changed, problem=problem)
+
+
+def _files_problem(stack: Stack, patch: PreparedPatch, *, patched: bool) -> str | None:
+    """Say which code files in the app's container are not the version expected now: the patched one while the
+    mutant is applied, the image's own after the restore; None when every file is. The hash is read inside the
+    container, because a mount that was asked for shows only the command, not the file the app runs."""
+    wrong = []
+    for file in patch.files:
+        expected = file.patched_sha256 if patched else file.original_sha256
+        try:
+            actual = stack.file_sha256(file.container_path)
+        except StackError as error:
+            return f"the code files in the app's container could not be read: {error}"
+        if actual != expected:
+            wrong.append(file.container_path)
+    if not wrong:
+        return None
+    return f"the app's container does not run the {'patched' if patched else 'original'} version of {wrong}"

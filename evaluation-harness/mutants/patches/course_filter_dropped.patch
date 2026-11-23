@@ -1,0 +1,10 @@
+--- a/app/src/study_assistant/retrieval/repository.py
++++ b/app/src/study_assistant/retrieval/repository.py
+@@ -98,7 +98,6 @@ _NEAREST = """
+ SELECT c.chunk_id, c.section_id, c.source_file, c.page_start, c.page_end, c.text,
+        1 - (v.embedding <=> %(vector)s::vector) AS score
+ FROM {table} v JOIN chunks c ON c.chunk_id = v.chunk_id
+-WHERE v.course_id = %(course)s
+ ORDER BY v.embedding <=> %(vector)s::vector
+ LIMIT %(k)s
+ """

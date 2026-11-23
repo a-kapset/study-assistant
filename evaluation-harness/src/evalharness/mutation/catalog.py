@@ -46,8 +46,9 @@ class Mutant(_Strict):
 
     # "baseline": the app as it is configured, sent through the same steps and checks as a mutant;
     # "configuration": the app started again with some of its settings changed; "provider_fault": the app as
-    # configured, while its model provider answers every call of the answer run with one failure.
-    kind: Literal["baseline", "configuration", "provider_fault"]
+    # configured, while its model provider answers every call of the answer run with one failure; "source": the app
+    # started again with files of its code changed by a patch.
+    kind: Literal["baseline", "configuration", "provider_fault", "source"]
     # The part of the app the mutant makes faulty; none for the baseline.
     component: Component | None = None
     # The app settings the mutant changes, as the stack passes them in (e.g. APP_SEARCH__MIN_SCORE = "0.88").
@@ -60,6 +61,9 @@ class Mutant(_Strict):
     expected_symptom: str
     # The failure the provider answers with, for a provider fault only.
     fault: FaultKind | None = None
+    # The patch of the app's code, for a source mutant only: a git diff made from the repository root, its path
+    # relative to the harness folder.
+    patch: Path | None = None
     # The checks expected to notice the mutant, written before the first run; none for the baseline.
     expected_killers: tuple[CheckName, ...] = ()
     # The failure label the failed asks are expected to get, written before the first run; the matrix says whether
@@ -82,16 +86,25 @@ class Mutant(_Strict):
                 or self.origin
                 or self.fault
                 or self.expected_label
+                or self.patch
             ):
                 raise ValueError(
-                    "a baseline changes no setting, ingests nothing, and names no component, fault, killer, label "
-                    "or origin"
+                    "a baseline changes no setting, ingests nothing, and names no component, fault, killer, label, "
+                    "origin or patch"
                 )
             return self
         if self.component is None or self.origin is None:
             raise ValueError("a mutant names the component it makes faulty and its origin")
         if self.expected_label is not None and "failure_labels" not in self.expected_killers:
             raise ValueError("a mutant that names an expected label expects the failure labels to notice it")
+        if self.kind == "source":
+            if self.patch is None or self.settings or self.reingest or self.fault is not None:
+                raise ValueError(
+                    "a source mutant names its patch and changes no setting, ingests nothing, plants no fault"
+                )
+            return self
+        if self.patch is not None:
+            raise ValueError("only a source mutant names a patch")
         if self.kind == "provider_fault":
             if self.fault is None or self.settings or self.reingest or self.component != "provider":
                 raise ValueError("a provider fault names its fault, changes no setting and makes the provider faulty")

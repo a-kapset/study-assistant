@@ -1,0 +1,12 @@
+--- a/app/src/study_assistant/answer/service.py
++++ b/app/src/study_assistant/answer/service.py
+@@ -154,8 +154,6 @@ def _cite(numbers: Sequence[int], hits: Sequence[SearchHit]) -> tuple[list[Citation], int]:
+     cited: list[int] = []
+     invalid = 0
+     for number in numbers:
+-        if not 1 <= number <= len(hits):
+-            invalid += 1
+-        elif number not in cited:
++        if number not in cited:
+             cited.append(number)
+     return [_citation(hits[number - 1]) for number in cited], invalid

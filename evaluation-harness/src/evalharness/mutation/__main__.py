@@ -28,6 +28,7 @@ import asyncio
 import logging
 import subprocess
 import sys
+import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -41,6 +42,7 @@ from evalharness.mutation.course import AdminIngestedCourse, StoredCourse
 from evalharness.mutation.oracles import Check, build_checks
 from evalharness.mutation.record import MutantRunRecord
 from evalharness.mutation.runner import Experiment, RestoreFailed, run_mutants
+from evalharness.mutation.source import PatchError, PreparedPatch, prepare_patch
 from evalharness.mutation.stack import ComposeStack, StackError
 from evalharness.settings import HarnessSettings, load_stack_settings
 from evalharness.transport import SutTransport
@@ -92,7 +94,7 @@ def main(argv: Sequence[str]) -> int:
     course = AdminIngestedCourse(settings, stack, catalog.course_id, stack.admin_api_key)
     try:
         return asyncio.run(_run(args.catalog, ids, checks, settings, course, commit, dirty, loaded))
-    except (RunRefused, StackError) as error:
+    except (RunRefused, StackError, PatchError) as error:
         print(f"refused: {error}", file=sys.stderr)
         return 2
 
@@ -112,18 +114,31 @@ async def _run(
     async with SutTransport(settings) as sut:
         first = await read_app_settings(sut)
         await check_ready(sut)
-        git_commit = first.get("git_commit")
-        stack = ComposeStack.discover(settings.stack_env_file, git_commit if isinstance(git_commit, str) else "")
-        experiment_id = uuid.uuid4().hex
-        experiment = Experiment(
-            experiment_id, loaded, catalog_file.as_posix(), first, course.snapshot(), commit, dirty, RUNS_DIR
-        )
-        print(f"experiment {experiment_id}: {len(ids)} run(s); each starts the app twice", flush=True)
-        try:
-            await run_mutants(ids, experiment, stack, course, sut, checks, _print_run)
-        except RestoreFailed as error:
-            print(f"stopped: {error}", file=sys.stderr)
-            return 1
+        reported = first.get("git_commit")
+        git_commit = reported if isinstance(reported, str) else ""
+        stack = ComposeStack.discover(settings.stack_env_file, git_commit)
+        # The changed code files stay on disk until the last mutant run is restored; the folder is outside the
+        # repository, so a run leaves its working tree as it was.
+        with tempfile.TemporaryDirectory(prefix="evalharness_patches_") as scratch:
+            patches = _prepare_patches(loaded, ids, git_commit, Path(scratch))
+            experiment_id = uuid.uuid4().hex
+            experiment = Experiment(
+                experiment_id,
+                loaded,
+                catalog_file.as_posix(),
+                first,
+                course.snapshot(),
+                commit,
+                dirty,
+                RUNS_DIR,
+                patches,
+            )
+            print(f"experiment {experiment_id}: {len(ids)} run(s); each starts the app twice", flush=True)
+            try:
+                await run_mutants(ids, experiment, stack, course, sut, checks, _print_run)
+            except RestoreFailed as error:
+                print(f"stopped: {error}", file=sys.stderr)
+                return 1
     print(f"matrix: python -m evalharness.mutation.matrix {experiment_id}")
     return 0
 
@@ -140,6 +155,19 @@ def _print_run(record: MutantRunRecord) -> None:
         else:
             outcome = f"ran, {result.result_file}"
         print(f"  {name}: {outcome}")
+
+
+def _prepare_patches(loaded: LoadedCatalog, ids: Sequence[str], commit: str, scratch: Path) -> dict[str, PreparedPatch]:
+    """Prepare the patch of every chosen source mutant against the commit the app reports, each in its own folder;
+    raises PatchError before the app is changed when one cannot be prepared."""
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True)
+    repo = Path(top.stdout.strip())
+    patches = {}
+    for mutant_id in dict.fromkeys(ids):
+        patch = loaded.catalog.mutants[mutant_id].patch
+        if patch is not None:
+            patches[mutant_id] = prepare_patch(patch, commit, repo, scratch / mutant_id)
+    return patches
 
 
 def _harness_version() -> tuple[str, bool]:

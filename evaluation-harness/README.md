@@ -33,7 +33,8 @@ evaluation-harness/
 ├── METRICS.md              # the formula and meaning of every metric the harness reports
 ├── RELATIONS.md            # the metamorphic relations: transformation, relation type, results
 ├── datasets/               # per course: retrieval gold set declarations (questions stay local), Q&A sets, paraphrase pairs
-├── mutants/                # per course: the catalog of defects planted in the running app, and the checks they go through
+├── mutants/                # per course: the catalogs of defects planted in the running app, the checks they go through,
+│                           # and patches/ for the defects planted in its code
 ├── runs/                   # the proxy's ledger and, per kind of run, its records, e.g. runs/retrieval/ (not committed)
 ├── cassettes/              # recorded replies of invented courses (committed)
 ├── reports/                # notes and experiment reports from run records: what was measured, how sure, what follows
@@ -48,8 +49,8 @@ evaluation-harness/
 │   ├── evaluation/         # the retrieval, answer, paraphrase and latency runs: checks, requests, run records,
 │   │                       #   commands
 │   ├── relations/          # metamorphic relations: how a pair of inputs or of results is judged
-│   ├── mutation/           # mutant runs: catalog, proofs of apply and restore, checks, records, kill matrix,
-│   │                       #   the tables of an experiment report
+│   ├── mutation/           # mutant runs: catalog, patches of the app's code, proofs of apply and restore, checks,
+│   │                       #   records, kill matrix, the tables of an experiment report
 │   ├── stats/              # confidence intervals, target verdicts, and the change between two runs
 │   ├── proxy/              # the LLM proxy: ledger, recordings, prices, provider failures on request; one module
 │   │                       #   per provider API in surfaces/
@@ -368,6 +369,7 @@ poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml --mutants lowe
 poetry run python -m evalharness.mutation.matrix <experiment id>
 poetry run python -m evalharness.mutation mutants/istqb_ctfl.toml --attribution
 poetry run python -m evalharness.mutation.matrix <experiment id> --attribution <attribution experiment id>
+poetry run python -m evalharness.mutation mutants/istqb_ctfl_source.toml
 ```
 
 The catalog's `baseline` runs first and once more at the end of every command, around the chosen mutants; all runs
@@ -384,6 +386,14 @@ catalog's `baseline` entry goes the same way without changing anything. A mutant
 the course is cut into passages: the command ingests the course through the admin endpoint after starting the app
 with the mutant and again after starting it as configured, and the run counts only when the stored passages changed
 and afterwards equal those from before the first mutant (read from the database as a hash of the passage ids).
+
+A mutant of kind `source` changes the app's code instead (catalog `mutants/istqb_ctfl_source.toml`, patches in
+`mutants/patches/`, git diffs made from the repository root). Before the first run the command applies each patch on
+a throwaway `git worktree` of the commit the app reports (`git_commit` at `/v1/config`; an image of an uncommitted
+or unknown commit is refused), copies the changed files to a temporary folder outside the repository, removes the
+worktree and writes a compose file that mounts them read-only over the image. The run counts only when the file
+inside the app's container has the patched hash while the mutant is applied and the original hash after the
+restore; the repository's working tree is never changed.
 
 Each mutant run writes a folder under `runs/mutants/` with `mutant_run.json` (the mutant, both proofs, the outcome
 of each check) and the records of its checks, so runs made on a mutant never mix with ordinary runs. A check that

@@ -4,6 +4,7 @@ checks; never the real stack."""
 import copy
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 import httpx2
 import pytest
@@ -14,6 +15,7 @@ from evalharness.mutation.catalog import Catalog, CheckName, Checks, LoadedCatal
 from evalharness.mutation.oracles import Check
 from evalharness.mutation.record import RECORD_FILE, CheckResult, MutantRunRecord
 from evalharness.mutation.runner import Experiment, RestoreFailed, run_mutant, run_mutants
+from evalharness.mutation.source import PatchedFile, PreparedPatch
 from evalharness.settings import HarnessSettings
 from evalharness.transport import SutTransport
 
@@ -47,6 +49,19 @@ SHORT_PASSAGES = Mutant(
 )
 NO_MUTANT = Mutant(kind="baseline", expected_symptom="evalharness")
 FIRST_CORPUS = "evalharness_corpus_first"
+CODE_PATCH = Mutant(
+    kind="source",
+    component="search",
+    patch=Path("evalharness.patch"),
+    expected_symptom="evalharness",
+    origin="observed",
+)
+ORIGINAL_HASH = "evalharness_original"
+PATCHED_HASH = "evalharness_patched"
+PREPARED = PreparedPatch(
+    files=(PatchedFile("/app/src/evalharness.py", Path("evalharness.py"), PATCHED_HASH, ORIGINAL_HASH),),
+    override=Path("compose.evalharness.json"),
+)
 
 
 class FakeStack:
@@ -56,15 +71,26 @@ class FakeStack:
     again without the stack's own configuration would.
     """
 
-    def __init__(self, keeps_values: bool = False) -> None:
-        """Start with the first settings and no restart seen."""
+    def __init__(self, keeps_values: bool = False, mount: Literal["works", "ignored", "kept"] = "works") -> None:
+        """Start with the first settings, the image's own code file and no restart seen.
+
+        ``mount`` says what a compose file that mounts a changed code file does: "works" mounts it for one start
+        only, "ignored" leaves the image's file, "kept" leaves the changed file in place after a start without it.
+        """
         self.keeps_values = keeps_values
+        self.mount = mount
         self.settings: dict[str, JsonValue] = copy.deepcopy(FIRST)
         self.restarts: list[dict[str, str]] = []
+        self.code_hash = ORIGINAL_HASH
 
-    def recreate_app(self, settings: Mapping[str, str]) -> None:
-        """Remember the restart and set the reported settings from the first ones and the given values."""
+    def recreate_app(self, settings: Mapping[str, str], override: Path | None = None) -> None:
+        """Remember the restart, set the reported settings from the first ones and the given values, and put the
+        code file the mount behaviour gives in the container."""
         self.restarts.append(dict(settings))
+        if override is not None and self.mount != "ignored":
+            self.code_hash = PATCHED_HASH
+        elif override is None and self.mount != "kept":
+            self.code_hash = ORIGINAL_HASH
         if not settings and self.keeps_values:
             return
         self.settings = copy.deepcopy(FIRST)
@@ -73,6 +99,10 @@ class FakeStack:
             section = self.settings[group]
             assert isinstance(section, dict)
             section[key] = float(value) if "." in value else int(value)
+
+    def file_sha256(self, container_path: str) -> str:
+        """Return the hash of the code file the container holds now."""
+        return self.code_hash
 
     def serve(self, request: httpx2.Request) -> httpx2.Response:
         """Answer the app's settings request and its readiness request."""
@@ -110,10 +140,26 @@ def _experiment(runs_dir: Path) -> Experiment:
     catalog = Catalog(
         course_id="evalharness_course",
         checks=Checks(retrieval_gold=Path("gold.toml"), paraphrase=Path("pairs.toml")),
-        mutants={"baseline": NO_MUTANT, "low_score": LOW_SCORE, "one_hit": ONE_HIT, "short": SHORT_PASSAGES},
+        mutants={
+            "baseline": NO_MUTANT,
+            "low_score": LOW_SCORE,
+            "one_hit": ONE_HIT,
+            "short": SHORT_PASSAGES,
+            "code_patch": CODE_PATCH,
+        },
     )
     loaded = LoadedCatalog(catalog, "evalharness_sha")
-    return Experiment("evalharness_experiment", loaded, "catalog.toml", FIRST, FIRST_CORPUS, "commit", False, runs_dir)
+    return Experiment(
+        "evalharness_experiment",
+        loaded,
+        "catalog.toml",
+        FIRST,
+        FIRST_CORPUS,
+        "commit",
+        False,
+        runs_dir,
+        {"code_patch": PREPARED},
+    )
 
 
 def _ran(name: str, made: list[str]) -> Check:
@@ -243,3 +289,37 @@ async def test_a_reingesting_mutant_is_valid_only_when_the_stored_passages_chang
 
     assert course.ingestions == [200, 1000], f"ingested with chunk sizes {course.ingestions}"
     assert (record.problem() is None) == valid, f"valid should be {valid}, problem: {record.problem()}"
+
+
+@pytest.mark.covers("US-019", "AC-11")
+@pytest.mark.parametrize(
+    ("mount", "applied", "restored"),
+    [
+        pytest.param("works", True, True, id="mounted for the mutant only"),
+        pytest.param("ignored", False, True, id="mount never reached the container"),
+        pytest.param("kept", True, False, id="mount still there after the restore"),
+    ],
+)
+async def test_a_source_mutant_counts_only_while_the_container_runs_the_patched_file_and_then_the_original(
+    tmp_path: Path, mount: Literal["works", "ignored", "kept"], applied: bool, restored: bool
+) -> None:
+    """A patch of one code file runs against a fake stack whose container holds the image's file or the patched
+    one, by what the mount did. The run must be valid only when the container held the patched file under the
+    mutant and the image's own file after the restore; a file left patched must stop the command.
+
+    A pass says that a source mutant is judged by the file the app really runs, read inside the container, and not
+    by the compose command that was sent. A failure points to the hash checks in runner.py. Without them a mount
+    that missed (a wrong path, a drive Docker does not share) would read as a code defect no check sees, and a mount
+    left behind would make every later run measure the mutant under another name.
+    """
+    stack = FakeStack(mount=mount)
+
+    if restored:
+        record = await _run(stack, {}, tmp_path, mutant_id="code_patch")
+    else:
+        with pytest.raises(RestoreFailed, match="original"):
+            await _run(stack, {}, tmp_path, mutant_id="code_patch")
+        record = _written(tmp_path)
+
+    assert (record.applied.problem is None) == applied, f"applied should be {applied}: {record.applied.problem}"
+    assert (record.restored.problem is None) == restored, f"restored should be {restored}: {record.restored.problem}"
