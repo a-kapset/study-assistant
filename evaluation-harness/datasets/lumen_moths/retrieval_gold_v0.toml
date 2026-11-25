@@ -8,7 +8,7 @@ course_id = "lumen_moths"
 # The question bank in the course's folder. A run with a bank of another hash is refused: its numbers would not be
 # comparable with earlier runs.
 bank_file = "lumen_moths_bank.jsonl"
-bank_sha256 = "318a1091f4e5fd01fcf9d8d1b01745fe20d7437bc3f2ec596eb2906fd93782c9"
+bank_sha256 = "0e3ce96d71142ccec74b229beb946d6a9faf4e861f6ef98a457d501c8a46fb50"
 
 # Same rule as the course manifest's objective_id: "LO-1.2.3" -> section "1.2" in chapter "1".
 objective_section = 'LO-(?P<section>(?P<chapter>\d+)\.\d+)\.\d+'
@@ -21,7 +21,9 @@ held_out_sets = []
 metric = "recall"
 k = 5 # APP_SEARCH__DEFAULT_K=5 in .env.example
 sets = ["Q"]
-# CI fails below this value. The first run gave 0.980 (100 of 102; the two others are cut by the lowest score). The
+# CI fails below this value. The first run gave 0.980 (100 of 102; the two others are cut by the lowest score). Four
+# questions with two keys were added to the bank on 2026-11-25 (Q-103 to Q-106, so that practice sessions in CI
+# meet answers where a part of the key is not enough); the run after it gave 0.981 (104 of 106, two cut by the lowest score). The
 # search is exact, so a run repeats itself, but another machine may round scores a little differently and move a
 # question across the lowest score; 0.90 leaves room for eight such questions and still fails on a broken setting,
 # e.g. a lowest score of 0.88 instead of 0.83.

@@ -279,8 +279,9 @@ working tree was unchanged.
   gold questions found the same sections (134 of 146) and the 393 distinct passages they got were all of the asked
   course. The defect is live: asked of the first course, a question about the ferry course got that course's passage
   (similarity 0.872) and a question about the moth course five of its passages (0.855-0.863), where the configured
-  app finds nothing. Questions about the course's own content cannot show a missing course filter; only questions
-  aimed at another course's content can. The app's integration test of the search statement on a real PostgreSQL
+  app finds nothing (a one-time hand probe on the stack under the mutant, not kept as a check: the app's
+  integration test below is the check). Questions about the course's own content cannot show a missing course
+  filter; only questions aimed at another course's content can. The app's integration test of the search statement on a real PostgreSQL
   (`test_nearest_returns_the_k_closest_passages_of_the_requested_course_with_their_similarity`) fails on the same
   patch: it stores a second course with the same texts and expects the asked course's chunks only.
 - **The range check of cited passage numbers removed** survived every check, as written before the run. No check

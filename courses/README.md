@@ -10,7 +10,7 @@ materials themselves (syllabi, books, exams) never are and stay on the local mac
 | Course | What it is |
 |---|---|
 | [`demo`](demo/course.yaml) | Synthetic course: the rules of an invented board game. Used by tests and local runs. |
-| [`lumen_moths`](lumen_moths/course.yaml) | Synthetic course: an invented handbook with the shape of an exam syllabus and a bank of 102 questions. Used to measure search where the real courses are not available, such as CI. |
+| [`lumen_moths`](lumen_moths/course.yaml) | Synthetic course: an invented handbook with the shape of an exam syllabus and a bank of 106 questions. Used to measure search where the real courses are not available, such as CI. |
 | [`brimlake_ferry`](brimlake_ferry/course.yaml) | Synthetic course: an invented ferry guide with three sections, one of which carries an instruction aimed at the answer model. Used to check that the app treats course text as data, not as instructions. |
 | [`istqb_ctfl`](istqb_ctfl/course.yaml) | ISTQB Certified Tester Foundation Level, syllabus v4.0.1, with a question bank from the four sample exam sets. |
 
@@ -62,7 +62,7 @@ with a drawing and no text. Only ASCII text, because the PDF uses a built-in fon
 | File | Role |
 |---|---|
 | `lumen_moths/lumen_moths.pdf` | The handbook: 6 chapters, 30 sections, 12 of them split into subsections, 90 learning objectives with knowledge levels listed at the start of each chapter. |
-| `lumen_moths/lumen_moths_bank.jsonl` | 102 multiple-choice questions in the common bank format; each names its learning objective, and so its answer section. |
+| `lumen_moths/lumen_moths_bank.jsonl` | 106 multiple-choice questions in the common bank format (four of them with two keys); each names its learning objective, and so its answer section. |
 
 The text and the questions were written once by a language model and are kept as they are; they are not
 rebuilt. The questions paraphrase the text instead of copying it, so a search cannot find a passage just by
