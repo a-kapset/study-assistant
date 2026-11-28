@@ -10,13 +10,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from study_assistant.courses.models import COURSE_ID_PATTERN, CourseManifest, ExamSettings
+from study_assistant.embed.remote import EmbeddingServiceRequestError
 from study_assistant.errors import ErrorBody, ErrorEnvelope, error_response
 from study_assistant.exams.service import (
     AlreadyAnsweredError,
+    AnsweredCorrectlyError,
     AnswerResult,
     ExamService,
     ItemNotInSessionError,
     NextQuestion,
+    NotAnsweredError,
     Progress,
     QuestionBankEmptyError,
     SessionCreated,
@@ -25,6 +28,10 @@ from study_assistant.exams.service import (
     UnknownObjectiveError,
     UnknownOptionError,
 )
+from study_assistant.explain.service import Explainer, Explanation
+from study_assistant.llm.providers import LlmError, LlmUnavailableError
+from study_assistant.retrieval.rerank import RerankServiceRequestError
+from study_assistant.retrieval.service import CourseNotSearchableError
 
 # Ids come from course files; these limits only stop a request from carrying text that is no id.
 _MAX_ID_LENGTH = 200
@@ -54,6 +61,13 @@ class AnswerRequest(BaseModel):
     )
 
 
+class ExplanationRequest(BaseModel):
+    """Which question of a session to explain; the answer explained is the one the session holds."""
+
+    model_config = ConfigDict(extra="forbid")
+    item_id: Identifier
+
+
 _ERRORS: dict[int | str, dict[str, object]] = {status: {"model": ErrorEnvelope} for status in (401, 404, 409, 422)}
 # Endpoints that read a JSON body also answer 400 when the body cannot be read as JSON at all, e.g. bytes in
 # another encoding.
@@ -61,9 +75,12 @@ _BAD_BODY: dict[int | str, dict[str, object]] = {400: {"model": ErrorEnvelope}}
 
 
 def exams_router(
-    courses: Mapping[str, CourseManifest], exams: ExamService, current_learner: Callable[..., Awaitable[UUID]]
+    courses: Mapping[str, CourseManifest],
+    exams: ExamService,
+    explainer: Explainer,
+    current_learner: Callable[..., Awaitable[UUID]],
 ) -> APIRouter:
-    """Build the router for practice sessions and progress; every endpoint needs a learner's key."""
+    """Build the router for practice sessions, explanations and progress; every endpoint needs a learner's key."""
     log: structlog.typing.FilteringBoundLogger = structlog.get_logger(__name__)
     router = APIRouter(responses=_ERRORS)
 
@@ -126,6 +143,64 @@ def exams_router(
         except AlreadyAnsweredError as exc:
             return _failed(request, 409, "already_answered", str(exc))
         return result
+
+    @router.post(
+        "/v1/exams/sessions/{session_id}/explanations",
+        response_model=Explanation,
+        responses={**_BAD_BODY, 502: {"model": ErrorEnvelope}, 503: {"model": ErrorEnvelope}},
+    )
+    async def explain(
+        session_id: UUID,
+        body: ExplanationRequest,
+        learner_id: Annotated[UUID, Depends(current_learner)],
+        request: Request,
+    ) -> Explanation | JSONResponse:
+        """Explain a question of the session that the learner answered wrongly, from the course's passages.
+
+        The request names the question only: the answer explained is the one the session holds. A question the
+        session does not hold is a 404; one without an answer, or with a correct one, is a 409 and the model is
+        not called. When no passage is close enough, or the embedding server cannot be reached, the explanation
+        is declined without calling the model. A search that cannot run and a model provider that fails are
+        answered as ``/v1/ask`` answers them: 409 for a course not fully embedded, 502 for an embedding or rerank
+        server that answers with an error and for a provider that answers with an error, a refusal or an unusable
+        reply, 503 for a provider that cannot be reached.
+        """
+        try:
+            wrong = await exams.wrong_answer(learner_id, session_id, body.item_id)
+        except SessionNotFoundError as exc:
+            return _failed(request, 404, "session_not_found", str(exc))
+        except ItemNotInSessionError as exc:
+            return _failed(request, 404, "item_not_in_session", str(exc))
+        except NotAnsweredError as exc:
+            return _failed(request, 409, "not_answered", str(exc))
+        except AnsweredCorrectlyError as exc:
+            return _failed(request, 409, "answered_correctly", str(exc))
+        course = courses.get(wrong.course_id)
+        if course is None:
+            # The session outlived its course: an operator took the course off the list of served courses.
+            raise HTTPException(status_code=404, detail=f"No course '{wrong.course_id}' is served by this app")
+        try:
+            explanation = await explainer.explain(course, wrong.item, wrong.selected)
+        except CourseNotSearchableError as exc:
+            return _failed(request, 409, "course_not_searchable", str(exc))
+        except EmbeddingServiceRequestError as exc:
+            return _failed(request, 502, "embedding_failed", str(exc))
+        except RerankServiceRequestError as exc:
+            return _failed(request, 502, "rerank_failed", str(exc))
+        except LlmUnavailableError as exc:
+            return _failed(request, 503, "llm_unavailable", f"the model provider could not be reached ({exc})")
+        except LlmError as exc:
+            return _failed(request, 502, "llm_failed", str(exc))
+        # The explanation itself is not logged: it is written for the learner.
+        log.info(
+            "explanation_done",
+            course_id=wrong.course_id,
+            session_id=str(session_id),
+            abstain_reason=explanation.abstain_reason,
+            passages=len(explanation.passages),
+            invalid_citations=explanation.invalid_citations,
+        )
+        return explanation
 
     @router.get("/v1/exams/sessions/{session_id}/result", response_model=SessionResult)
     async def result(

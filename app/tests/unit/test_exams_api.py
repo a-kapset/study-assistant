@@ -135,12 +135,14 @@ LEARNER_CALLS = [
     ("post", SESSIONS, {"course_id": "demo"}),
     ("get", f"{SESSIONS}/{SOME_SESSION}/next", None),
     ("post", f"{SESSIONS}/{SOME_SESSION}/answers", {"item_id": "Q1", "selected": ["b"]}),
+    ("post", f"{SESSIONS}/{SOME_SESSION}/explanations", {"item_id": "Q1"}),
     ("get", f"{SESSIONS}/{SOME_SESSION}/result", None),
     ("get", "/v1/progress?course_id=demo", None),
 ]
 
 
 @pytest.mark.covers("US-020", "AC-1")
+@pytest.mark.covers("US-021", "AC-1")
 @pytest.mark.parametrize(("method", "path", "body"), LEARNER_CALLS)
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer not-a-learner-key"}, {"Authorization": "Basic abc"}])
 def test_exam_endpoints_refuse_a_caller_without_a_learner_key(
@@ -328,6 +330,35 @@ def test_a_refused_answer_names_the_reason(
     response = stack.client.post(
         f"{SESSIONS}/{session_id}/answers", json={"item_id": item_id, "selected": selected}, headers=learner
     )
+
+    assert (response.status_code, _error_code(response.json())) == (status, code), f"got {response.text}"
+
+
+@pytest.mark.covers("US-021", "AC-1", "AC-2")
+@pytest.mark.parametrize(
+    ("item_id", "own_session", "status", "code"),
+    [
+        ("Q1", True, 409, "answered_correctly"),
+        ("Q2", True, 409, "not_answered"),
+        ("Q9", True, 404, "item_not_in_session"),
+        ("Q3", False, 404, "session_not_found"),
+    ],
+)
+def test_a_refused_explanation_names_the_reason(
+    stack: Stack, item_id: str, own_session: bool, status: int, code: str
+) -> None:
+    """After Q1 was answered correctly and Q3 wrongly: asks to explain Q1, the unanswered Q2, a question the
+    session does not hold, and Q3 with another learner's key. Expects each refusal's own status and code. The app
+    here has no search store and no model provider, so a request that got past the refusal would end as a 500.
+    Catches a refusal under a code a client cannot act on, and another learner's mistake explained to a stranger."""
+    stack.ingest()
+    learner = stack.learner()
+    session_id = stack.session(learner)
+    stack.answer(learner, session_id, "Q1", ["b"])
+    stack.answer(learner, session_id, "Q3", ["c"])
+    caller = learner if own_session else stack.learner()
+
+    response = stack.client.post(f"{SESSIONS}/{session_id}/explanations", json={"item_id": item_id}, headers=caller)
 
     assert (response.status_code, _error_code(response.json())) == (status, code), f"got {response.text}"
 

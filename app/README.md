@@ -74,6 +74,9 @@ app/
 │   │   ├── models.py       # the answer: text, declined or not, citations with section, file and pages, invalid citations count
 │   │   ├── prompts.py      # instructions of both modes and the numbered, escaped passages block
 │   │   └── service.py      # answers in the configured mode: search, decline without a model call, structured reply, citations
+│   ├── explain/            # explanations of wrongly answered practice questions
+│   │   ├── prompts.py      # the instructions, the escaped question block (stem, options, key, selection) and the search query
+│   │   └── service.py      # searches the course for the question, declines without a model call, structured reply, the passages shown
 │   ├── learners/           # who sessions, answers and progress belong to
 │   │   ├── service.py      # registers a learner with a random key shown once; finds the learner of a key by the key's SHA-256
 │   │   └── repository.py   # the learners table
@@ -422,6 +425,15 @@ all its sessions and answers, by `DELETE /v1/admin/learners/{learner_id}` with t
   `correct` and the `keys`. Spaces around an id and its letter case are ignored (`" B "` is `b`); an id the
   question does not have is a 422 (`unknown_option`), never a guess. A question is answered once: the same answer
   again gets the same reply and stores nothing, a different one is a 409 (`already_answered`).
+- **Explain.** `POST /v1/exams/sessions/{id}/explanations` with `item_id` explains a question the session holds a
+  wrong answer for. The request names the question only: the answer explained is the stored one. The answer model
+  writes the `explanation` from the course passages a search finds for the question's stem and the texts of its
+  key; `passages` lists every passage the model was shown (text, section, file, pages) with `cited` telling
+  whether the explanation uses it, and `invalid_citations` counts citations of passages that were not shown.
+  `abstain_reason` is set when it declines, as for an answer (see "Ask"): `no_passages` and `search_degraded`
+  without a model call, `model_declined` when the passages do not explain the key. A question answered correctly
+  is a 409 (`answered_correctly`), one without an answer a 409 (`not_answered`); the model is not called for
+  either. Search and model failures answer as `/v1/ask` does.
 - **Result.** `GET /v1/exams/sessions/{id}/result`: `question_count`, `answered`, `correct`, the course's
   `pass_mark_percent` and `passed`, which is set only when every question is answered.
 - **Progress.** `GET /v1/progress?course_id=...`: per learning objective, how many answers the learner gave over
@@ -544,6 +556,7 @@ curl.exe -X POST -H "Content-Type: application/json" --data-binary "@ask.json" h
 | `POST` | `/v1/exams/sessions` | Start a practice session of the learner (`Authorization: Bearer <key>`, otherwise 401) on a course or one learning objective: 201 with `session_id`, `question_count`; 404 for a course not served, 409 `question_bank_empty`, 422 `unknown_objective` |
 | `GET` | `/v1/exams/sessions/{session_id}/next` | The first question without an answer, without its key, or `finished`; 404 `session_not_found` |
 | `POST` | `/v1/exams/sessions/{session_id}/answers` | Answer one question: `correct` and `keys`; the same answer again changes nothing; 409 `already_answered`, 422 `unknown_option`, 404 `item_not_in_session` / `session_not_found` |
+| `POST` | `/v1/exams/sessions/{session_id}/explanations` | Explain a wrongly answered question from the course's passages: `explanation`, `abstain_reason`, `passages` (each with `cited`), `invalid_citations`; 409 `answered_correctly` / `not_answered`, 404 `item_not_in_session` / `session_not_found`; search and model failures as `/v1/ask` |
 | `GET` | `/v1/exams/sessions/{session_id}/result` | Answered and correct counts, the course's pass mark and, once all is answered, `passed`; 404 `session_not_found` |
 | `GET` | `/v1/progress?course_id=...` | The learner's answers per learning objective over all sessions (see "Practice exams"); 404 for a course not served |
 

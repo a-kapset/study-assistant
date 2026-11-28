@@ -45,6 +45,14 @@ class AlreadyAnsweredError(Exception):
     """The question already has a different answer in this session."""
 
 
+class NotAnsweredError(Exception):
+    """The question has no answer in this session yet, so there is nothing to explain."""
+
+
+class AnsweredCorrectlyError(Exception):
+    """The question was answered correctly in this session, so there is no mistake to explain."""
+
+
 @dataclass(frozen=True)
 class StoredOption:
     """One answer option of a stored question."""
@@ -79,6 +87,15 @@ class SessionState:
     course_id: str
     items: tuple[StoredItem, ...]
     answers: dict[str, StoredAnswer]
+
+
+@dataclass(frozen=True)
+class WrongAnswer:
+    """A question of a session with the wrong answer the session holds for it, as an explanation needs them."""
+
+    course_id: str
+    item: StoredItem
+    selected: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -311,6 +328,23 @@ class ExamService:
         if stored.selected != chosen:
             raise AlreadyAnsweredError(f"the question {item_id} already has a different answer in this session")
         return AnswerResult(item_id=item_id, correct=stored.correct, keys=sorted(item.keys))
+
+    async def wrong_answer(self, learner_id: UUID, session_id: UUID, item_id: str) -> WrongAnswer:
+        """Return a question of the learner's session together with the wrong answer stored for it.
+
+        The answer is the one the session holds, never one the caller names. A question without an answer raises
+        ``NotAnsweredError`` and a correctly answered one ``AnsweredCorrectlyError``: neither has a mistake.
+        """
+        state = await self.state(learner_id, session_id)
+        item = next((candidate for candidate in state.items if candidate.item_id == item_id), None)
+        if item is None:
+            raise ItemNotInSessionError(f"the session {session_id} has no question {item_id}")
+        stored = state.answers.get(item_id)
+        if stored is None:
+            raise NotAnsweredError(f"the question {item_id} has no answer in this session yet")
+        if stored.correct:
+            raise AnsweredCorrectlyError(f"the question {item_id} was answered correctly in this session")
+        return WrongAnswer(course_id=state.course_id, item=item, selected=stored.selected)
 
     async def result(
         self, learner_id: UUID, session_id: UUID, settings_of: Callable[[str], ExamSettings | None]

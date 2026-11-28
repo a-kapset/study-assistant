@@ -145,19 +145,26 @@ class Answerer:
         return Answer(answer=text, abstain_reason=reason, citations=citations, invalid_citations=invalid)
 
 
-def _cite(numbers: Sequence[int], hits: Sequence[SearchHit]) -> tuple[list[Citation], int]:
-    """Turn the passage numbers the model cited into citations and count the numbers that name no passage.
+def valid_citations(numbers: Sequence[int], shown: int) -> tuple[list[int], int]:
+    """Split the passage numbers a model cited into those that name one of the ``shown`` passages and a count of
+    the others.
 
-    Each passage is cited once, in the order the model first cited it; every number outside 1..len(hits) is left
-    out and counted, repeats included.
+    Each passage number is kept once, in the order the model first cited it; every number outside 1..shown is
+    left out and counted, repeats included.
     """
     cited: list[int] = []
     invalid = 0
     for number in numbers:
-        if not 1 <= number <= len(hits):
+        if not 1 <= number <= shown:
             invalid += 1
         elif number not in cited:
             cited.append(number)
+    return cited, invalid
+
+
+def _cite(numbers: Sequence[int], hits: Sequence[SearchHit]) -> tuple[list[Citation], int]:
+    """Turn the passage numbers the model cited into citations and count the numbers that name no passage."""
+    cited, invalid = valid_citations(numbers, len(hits))
     return [_citation(hits[number - 1]) for number in cited], invalid
 
 

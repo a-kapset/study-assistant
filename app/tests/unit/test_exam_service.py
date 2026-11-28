@@ -15,8 +15,10 @@ from study_assistant.courses.models import ExamSettings
 from study_assistant.exams.bank import BankItem, BankOption, BankSource
 from study_assistant.exams.service import (
     AlreadyAnsweredError,
+    AnsweredCorrectlyError,
     ExamService,
     ItemNotInSessionError,
+    NotAnsweredError,
     QuestionBankEmptyError,
     SessionNotFoundError,
     UnknownObjectiveError,
@@ -315,6 +317,55 @@ async def test_another_learner_cannot_read_or_answer_a_session(fake_exam_store: 
     with pytest.raises(SessionNotFoundError):
         await service.result(OTHER_LEARNER, session_id, lambda _course: SETTINGS)
     assert not fake_exam_store.answers, "the other learner's answer must not be stored"
+
+
+@pytest.mark.covers("US-021", "AC-2")
+async def test_a_wrong_answer_is_returned_with_the_selection_the_session_holds(fake_exam_store: FakeExamStore) -> None:
+    """Answers the two-key question Q4 with "a" alone, then asks for its wrong answer. Expects Q4 of the session's
+    course with exactly the stored selection. Catches the key, or all options, handed over as what the learner
+    selected: the explanation would then speak about an answer the learner never gave."""
+    service = await _service(fake_exam_store)
+    session_id = await _session(service)
+    await service.answer(LEARNER, session_id, "Q4", [" A "])
+
+    wrong = await service.wrong_answer(LEARNER, session_id, "Q4")
+
+    seen = (wrong.course_id, wrong.item.item_id, wrong.item.keys, wrong.selected)
+    expected = (COURSE, "Q4", frozenset({"a", "c"}), frozenset({"a"}))
+    assert seen == expected, f"expected Q4 with the stored selection 'a', got {seen}"
+
+
+@pytest.mark.covers("US-021", "AC-1", "AC-2")
+@pytest.mark.parametrize(
+    ("item_id", "error"),
+    [("Q1", AnsweredCorrectlyError), ("Q2", NotAnsweredError), ("Q9", ItemNotInSessionError)],
+    ids=["answered correctly", "not answered", "not in the session"],
+)
+async def test_a_question_without_a_mistake_has_no_wrong_answer(
+    fake_exam_store: FakeExamStore, item_id: str, error: type[Exception]
+) -> None:
+    """After Q1 was answered correctly and Q3 wrongly: asks for the wrong answer of Q1, of the unanswered Q2 and
+    of a question the session does not hold, and expects each one's own error. Catches a correct or missing
+    answer passed on as a mistake: the model would be called, and paid, to explain a mistake that was not made."""
+    service = await _service(fake_exam_store)
+    session_id = await _session(service)
+    await service.answer(LEARNER, session_id, "Q1", ["b"])
+    await service.answer(LEARNER, session_id, "Q3", ["a"])
+
+    with pytest.raises(error):
+        await service.wrong_answer(LEARNER, session_id, item_id)
+
+
+@pytest.mark.covers("US-021", "AC-1")
+async def test_another_learner_gets_no_wrong_answer_of_a_session(fake_exam_store: FakeExamStore) -> None:
+    """The first learner answers Q1 wrongly; a second learner asks for that wrong answer with the session's id.
+    Catches the session looked up by its id alone: anyone holding an id could read what another learner chose."""
+    service = await _service(fake_exam_store)
+    session_id = await _session(service)
+    await service.answer(LEARNER, session_id, "Q1", ["d"])
+
+    with pytest.raises(SessionNotFoundError):
+        await service.wrong_answer(OTHER_LEARNER, session_id, "Q1")
 
 
 @pytest.mark.covers("US-020", "AC-8")

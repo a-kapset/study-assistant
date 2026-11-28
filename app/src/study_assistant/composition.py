@@ -31,6 +31,7 @@ from study_assistant.embed.remote import RemoteEmbedder
 from study_assistant.errors import install_error_handlers
 from study_assistant.exams.repository import PostgresExamStore
 from study_assistant.exams.service import ExamService, ExamStore
+from study_assistant.explain.service import Explainer
 from study_assistant.ingest.chunker import ChunkSize
 from study_assistant.ingest.repository import PostgresCorpusStore
 from study_assistant.ingest.service import CorpusStore, CourseIngestor
@@ -108,6 +109,8 @@ def build_app(
     # The grounded mode searches with the same search that serves /v1/search, so its passages are those the search
     # quality is measured on.
     answerer = Answerer(chat_model, search, settings.ask, settings.search, tracer)
+    # An explanation of a wrong practice answer is written by the same model, from passages of the same search.
+    explainer = Explainer(chat_model, search, settings.search, tracer)
     learners = Learners(learner_store if learner_store is not None else PostgresLearnerStore(db))
     exams = ExamService(exam_store if exam_store is not None else PostgresExamStore(db))
 
@@ -143,7 +146,7 @@ def build_app(
     app.include_router(courses_router(courses, corpus, embedder.space))
     app.include_router(search_router(courses, search, settings.search))
     app.include_router(ask_router(courses, answerer))
-    app.include_router(exams_router(courses, exams, learner_dependency(learners)))
+    app.include_router(exams_router(courses, exams, explainer, learner_dependency(learners)))
     app.include_router(
         admin_router(courses, ingestor, exams, learners, settings.courses.source_dir, settings.admin.api_key)
     )

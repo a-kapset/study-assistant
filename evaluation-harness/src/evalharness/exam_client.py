@@ -80,6 +80,14 @@ class ExamClient:
         body: dict[str, JsonValue] = {"item_id": item_id, "selected": list(selected)}
         return self._client.post(f"{SESSIONS_PATH}/{session_id}/answers", json=body, headers=learner.headers)
 
+    def explain(self, learner: Learner, session_id: str, item_id: str, timeout_s: float) -> httpx2.Response:
+        """Ask for the explanation of one question of the session; the app calls its model, so the caller says
+        how long to wait."""
+        body: dict[str, JsonValue] = {"item_id": item_id}
+        return self._client.post(
+            f"{SESSIONS_PATH}/{session_id}/explanations", json=body, headers=learner.headers, timeout=timeout_s
+        )
+
     def result(self, learner: Learner, session_id: str) -> httpx2.Response:
         """Ask where the session stands."""
         return self._client.get(f"{SESSIONS_PATH}/{session_id}/result", headers=learner.headers)

@@ -46,7 +46,8 @@ evaluation-harness/
 │   ├── datasets/           # the retrieval gold set (built from a local question bank), the Q&A set and paraphrase
 │   │                       #   pair files and their checks
 │   ├── oracles/            # scores one search or one answer against the gold section, and sums up a run;
-│   │                       #   the result and progress practice sessions must report, from the answers sent
+│   │                       #   the result and progress practice sessions must report, from the answers sent;
+│   │                       #   which options an explanation names
 │   ├── evaluation/         # the retrieval, answer, paraphrase and latency runs: checks, requests, run records,
 │   │                       #   commands
 │   ├── relations/          # metamorphic relations: how a pair of inputs or of results is judged
@@ -512,7 +513,15 @@ body shapes, and never a server error. It leaves out `POST /v1/ask` (calls the a
 endpoint (rewrites a stored corpus) and `POST /v1/admin/learners` (leaves a learner behind), and fails at once
 if one of them is generated anyway. It takes about 20 seconds.
 
-Both tests register their learners through the admin endpoint and remove them at the end
+`tests/api/test_explanations.py` answers two questions of the invented `lumen_moths` course wrongly (the first of
+its bank with one correct option and the first with several, with a wrong answer fixed by the bank) and asks for
+their explanations. The proxy answers from recordings of the real model in `cassettes/`, so the tests cost
+nothing; they check that the app reads the reply into an explanation with its passages and that the text names
+every correct option as "option" and its id. The stack must serve `lumen_moths` (`APP_COURSES__ENABLED`), as
+`.env.example` does. After a change of the prompt, the passages or the model the tests fail with a miss in the
+ledger: record once with `EVAL_PROXY_MODE=record` (two paid calls, well under one cent).
+
+These tests register their learners through the admin endpoint and remove them at the end
 (`DELETE /v1/admin/learners/{id}`), so no learner, session or answer of a test stays in the stack's database.
 
 Every request carries the harness's own `X-Request-ID`, and the app echoes it and writes it into its
